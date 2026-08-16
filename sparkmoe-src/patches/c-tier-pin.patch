@@ -1,0 +1,122 @@
+diff -ruN a/moe-paging/moe-paging.cpp b/moe-paging/moe-paging.cpp
+--- a/moe-paging/moe-paging.cpp	2026-08-15 15:01:26.414664282 +0800
++++ b/moe-paging/moe-paging.cpp	2026-08-15 15:01:26.418664282 +0800
+@@ -7,9 +7,13 @@
+ 
+ #include <algorithm>
+ #include <cstdio>
++#include <cstring>
+ #include <exception>
++#include <fstream>
+ #include <limits>
++#include <sstream>
+ #include <stdexcept>
++#include <string>
+ 
+ namespace llama_moe {
+ 
+@@ -69,6 +73,10 @@
+ 
+ layer_cache & paging_manager::get_or_create_layer(int32_t layer) {
+     std::lock_guard<std::mutex> lock(mutex);
++    if (!pins_loaded) {
++        load_pins();
++        pins_loaded = true;
++    }
+     auto & cache = layers[layer];
+     if (!cache) {
+         cache = std::make_unique<layer_cache>(
+@@ -80,10 +88,60 @@
+             index,
+             backend);
+         LLAMA_LOG_INFO("MoE paging: layer %d uses %lld expert slots\n", layer, static_cast<long long>(cache->slots()));
++        const auto it = pins.find(layer);
++        if (it != pins.end() && !it->second.empty()) {
++            for (const int32_t expert : it->second) {
++                cache->set_pinned(expert, true);
++            }
++            LLAMA_LOG_INFO("MoE paging: layer %d pinned %zu experts\n", layer, it->second.size());
++        }
+     }
+     return *cache;
+ }
+ 
++void paging_manager::load_pins() {
++    const std::string & path = params.pin_file;
++    if (path.empty()) {
++        return;
++    }
++    std::ifstream file(path);
++    if (!file.is_open()) {
++        throw std::runtime_error(std::string("cannot open MoE pin file: ") + path);
++    }
++    int32_t applied = 0;
++    int32_t skipped = 0;
++    std::string line;
++    while (std::getline(file, line)) {
++        if (line.empty() || line[0] == '#') {
++            continue;
++        }
++        int32_t layer = -1;
++        const char * sep = std::strchr(line.c_str(), ':');
++        if (!sep || std::sscanf(line.c_str(), "%d", &layer) != 1) {
++            continue;
++        }
++        if (!index.has_layer(layer)) {
++            ++skipped;
++            continue;
++        }
++        std::string experts_str(sep + 1);
++        std::replace(experts_str.begin(), experts_str.end(), ',', ' ');
++        std::istringstream experts(experts_str);
++        int32_t expert = 0;
++        auto & layer_pins = pins[layer];
++        while (experts >> expert) {
++            if (expert < 0 || expert >= index.expert_count(layer)) {
++                ++skipped;
++                continue;
++            }
++            layer_pins.push_back(expert);
++            ++applied;
++        }
++    }
++    LLAMA_LOG_INFO("MoE paging: loaded %d pinned experts from %s (%d skipped)\n",
++                   applied, path.c_str(), skipped);
++}
++
+ ggml_tensor * paging_manager::bind_pool(int32_t layer, const ggml_tensor * original) {
+     if (!original) {
+         return nullptr;
+diff -ruN a/moe-paging/moe-paging.h b/moe-paging/moe-paging.h
+--- a/moe-paging/moe-paging.h	2026-08-15 15:01:26.410664282 +0800
++++ b/moe-paging/moe-paging.h	2026-08-15 15:01:26.418664282 +0800
+@@ -13,7 +13,9 @@
+ #include <cstdint>
+ #include <memory>
+ #include <mutex>
++#include <string>
+ #include <unordered_map>
++#include <vector>
+ 
+ namespace llama_moe {
+ 
+@@ -45,6 +47,10 @@
+         int thread_count,
+         void * user_data);
+ 
++    // C 档（静态热表）接线：懒加载 hot_list.txt 格式的 pin 清单，
++    // 只在对应层缓存首次创建时应用该层 pinned 专家（避免急建全部 io 线程池）。
++    void load_pins();
++
+     ggml_backend_t backend;
+     llama_moe_paging_params params;
+     const model_index & index;
+@@ -52,6 +58,8 @@
+ 
+     mutable std::mutex mutex;
+     std::unordered_map<int32_t, std::unique_ptr<layer_cache>> layers;
++    bool pins_loaded = false;
++    std::unordered_map<int32_t, std::vector<int32_t>> pins;
+ };
+ 
+ bool mode_uses_explicit_paging(enum llama_moe_paging_mode mode);
