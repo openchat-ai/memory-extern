@@ -144,13 +144,14 @@ def main():
         print(f"  {K:>6} {gb_res:>8.1f} {frac * 100:>8.1f}% {nv_token:>14.2f} {nv_token * 10:>18.1f}")
 
     print(f"\n=== 关键判决 ===")
-    print(f"  1. 专家侧：历史信号能就地消化 ~88-92%，但专家只是小头")
-    print(f"  2. 大头是 trunk {TRUNK_GB:.0f} GB/token（always-active，不可缓存）——")
-    print(f"     内存计算的真正价值段落是消掉 trunk 的搬运，不是专家")
-    print(f"  3. 完美运行（10 tok/s）需 ~1.17 TB/s 有效带宽 + 常驻 139GB 以上 ——")
-    print(f"     服务器 8通道 DDR5 / HBM 量级，商品 PC/手机内存远不够")
-    print(f"  4. 有限专家缓存：K/层=64（96GB 常驻）命中 79.8%；K/层=96（144GB）93.6%")
-    print(f"     —— 只影响 25.83GB 专家段，对 trunk 113.5GB 无济于事")
+    print(f"  1. 专家侧：历史信号能就地消化 ~88-92%，但专家只占全量的 18.5%")
+    print(f"     （25.83 / 139.3 GB）——专家缓存最多只能救这 18.5% 的搬运")
+    print(f"  2. 为什么流式数字≈无缓存数字：trunk {TRUNK_GB:.0f} GB/token 是")
+    print(f"     always-active、每 token 100% 必读，任何缓存都不能跳过（无稀疏性）")
+    print(f"  3. 瓶颈定位：流式加载没有失灵，只是瞄错了目标——真正挡 10 tok/s 的")
+    print(f"     是 trunk 的 113.5 GB/token（上游实测 trunk 占 I/O 的 81%）")
+    print(f"  4. 唯一的出路：trunk 近存（near-memory，权重住在算力旁）或压缩/结构化")
+    print(f"     （如 KDA 复用）让 trunk 变小——没有第三条路")
 
 
 if __name__ == "__main__":
