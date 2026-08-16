@@ -94,8 +94,27 @@ AVX2 指令本身过不去（PIM/CIM 不跑 x86），但三样东西是内存计
 而它**现在的 trace 测不了**（缺概率）。margin 若薄（Quantile Balancing 下很可能），
 整个分级预取就靠"同层上一轮集合"这一根柱子。
 
+### 关键交叉核对：case-k25（demo）与真实 K3 的路线分叉
+仓库里 `case-k25/report.md`（demo 模型，60 层，每层 999 调用/357 unique，
+60 行统计逐位相同 → 退化/玩具 trace）结论**相反**：
+- 预算 4.51GiB：静态热表+LRU hit=0.4719，纯 LRU hit=0.1387 → **C/B=3.40x**，
+  热表"值得做"。demo 路由高度偏斜（top20% 覆盖 0.86）。
+- 真实 K3（`expert_trace.bin`，fixture README 明示 "a real model run"，
+  92 层×896 专家，per-layer usage 近均匀）：同一方法只有 ~34%@48GB。
+
+**这正是点2 的 skew/margin 轴在实证上的分叉**：
+- demo 偏斜 → margin 厚 → 热表/分级预取有效（3.4x）
+- 真实 K3 被 Quantile Balancing 拍平 → margin 薄 → 热表失效
+
+**教训**：case-k25 的热表收益是"demo 偏斜路由"的产物，不能外推到真实 K3；
+以它为据会给硬件立项。真实 trace 切片的价值 = 在立项前把这个外推证伪了。
+反过来说，只要未来某次真实 run 的 margin 厚，Tier-2 立刻复活——目前只有
+"带 softmax 概率的真实 trace"能判这条命案。
+
 ## 待办
 - [x] 用现有 trace 跑"每层历史热表"的衰减预取模拟（`tools/predict_hotset.py`）
+- [x] 交叉核对 case-k25（demo 偏斜）vs 真实 K3（均匀）→ skew/margin 轴分叉
 - [ ] 文献核证点2现状（MoE expert prefetch / confidence-graded speculation）
 - [ ] 收集带 softmax 概率的 trace → 测 margin 结构（Tier-2 的唯一实证路径）
+- [ ] 检查 case-k25 各层统计逐位相同是否生成器 bug（影响 demo 结论可信度）
 - [ ] RTL 第 4 课：内存侧 MXFP4 去量化 + 三级置信度预取队列（设计）
