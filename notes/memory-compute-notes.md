@@ -193,6 +193,119 @@ AVX2 指令本身过不去（PIM/CIM 不跑 x86），但三样东西是内存计
 6. **trace 局限**：prev-run 88.3% 命中来自**同一 workload 8 轮重放**；真实
    多用户不同 prompt 跨 workload 命中无此保证（predict_hotset.py 已注明未验证）。
 
+### 上游实测内存阶梯（docs/PERFORMANCE.md）——"内存没到 256" 是伪命题
+
+同机同 prompt 只加内存（cgroup 硬顶），输出 byte-identical：
+
+| RAM | s/token | vs 8GB | GB read/token |
+|---:|---:|---:|---:|
+| 8 | 32.69 | 1.00× | 25.83 |
+| 96 | 24.40 | 1.34× | 18.11 |
+| 192 | 21.32 | 1.53× | 16.65 |
+| 224 | 19.21 | 1.70× | 14.53 |
+
+三件事：
+
+1. **容量封顶 = 1.70×，且上游本就 228GB**。8→224GB 只换 1.7 倍；224GB 档
+   实测 19.21 s/token = 0.052 tok/s，离 10 tok/s 还差 ~190×。"加内存"这条路
+   上游已经走到头，不是缺的那条腿。
+2. **224GB 档是算力墙，不是带宽墙**：该档每 token 只读 14.53GB，即使按
+   ~200 GB/s（EPYC 7763 理论带宽，Milan 8 通道 DDR4）也只占 ~0.07s，而墙钟
+   19.21s → **compute ≥ 99% of wall**。上游 C 引擎的 CPU 侧才是当前最硬闸。
+3. **三层墙串联，10 tok/s 要三道闸同时过**：容量（≥139GB 常驻，加钱可解）
+   → 带宽（~1.17 TB/s，HBM 可解）→ 算力（~2.6 TFLOP/s，AVX2 服务器 CPU
+   不够，要多核 SIMD/GPU/加速器）。sim_stream.py 只量化了前两道（带宽），
+   算力闸单靠内存数据推不出来，靠上游实测反推（阶梯 224GB 档 compute 99%、
+   5b 的 I/O share 42% → compute 58%）。
+
+**修正此前的错误结论**：上一轮我说"换 256GB 机器立刻 2-4 tok/s"是错的——
+(a) 上游已有 228GB，容量线早已触顶 1.7×；(b) 2-4 tok/s 来自带宽假设，但
+上游满内存实测被 compute 压在 0.052 tok/s。**带宽账本本身没错**（trunk
+108.81 GB/token 实测确凿），错的是"带宽放开=速度上去"——还有算力这道闸。
+
+### 路径排序：软件优先，CIM 收尾（2026-08-16）
+
+**关键核算（同一台 EPYC 7763 上）**：
+- 10 tok/s 需求 ~1.39 TFLOP/s = trunk 113.5 + 专家 25.8 GFLOP/token
+- EPYC 7763 理论 fp32 峰值 ~1.3-2.5 TFLOP/s —— 够得着 10 tok/s 需求（边缘）
+- 上游实测 19.21 s/token 只跑出 ~7.2 GFLOP/s ≈ 理论峰值 **0.3%**，也离本机
+  GEMV 的 DDR4 带宽天花板（~1.4 tok/s）差 ~30×
+- **"算力墙"的 99% 是 C 引擎自身低效**（分配开销/无预取/串行/fp32 重算），
+  不是芯片算不动
+
+**由此修正对"内存计算"的定位**：
+1. **CIM 同时消两道闸**（修正我此前"只省能耗"的错误）：trunk 113.5GB/token
+   搬运（带宽）+ ~113 GFLOP/token matmul（算力）都在阵列内就地完成。
+2. 但 CIM 是**最终归宿，不是 10 tok/s 的前提**。前提是先让现有引擎跑到
+   硬件天花板：0.05 → ~1.4 tok/s（DDR4 带宽顶）→ ~3 tok/s（8 通道 DDR5）→
+   ~8-10 tok/s（HBM，此时卡算力）。CIM 在算力/能耗上都优于 HBM+CPU 方案，
+   但对"先跑起来"来说成本高（113.5GB 阵列 + 精度契约 4e-3 vs 1e-3 +
+   器件噪声未建模）。
+3. **分层路径**：① 引擎重写（SIMD/多线程/预取/批处理）→ ② 大内存/HBM →
+   ③ CIM 收尾。每级都在上一级到顶后才轮到。
+
+### CIM 系统级量级估算（2026-08-16）
+
+**换算基准**：10 tok/s = 1.39 TOPS（trunk 113.5 + 专家 25.8 GFLOP/token），
+线性放大：100 tok/s ≈ 14 TOPS。
+
+**算力不是 CIM 的墙，容量才是**：
+- 模拟 SRAM CIM（按 DAC10/ADC12 精度契约打折）：5-50 TOPS → ~30-300 tok/s
+- 数字 CIM（位串行/多周期）：100-1000 TOPS → ~700 到数千 tok/s
+- 但 113.5GB 权重须全部常驻阵列：
+  - SRAM CIM：单 die 阵列最多几十 MB 级 → 113.5GB 需天文数字芯片数/成本，
+    现实不可行
+  - DRAM 基近存/CIM：容量够（HBM 级），吞吐比 SRAM CIM 低 1-2 个数量级
+    → 回到 ~10-50 tok/s 档
+  - Flash/3D NAND 模拟 CIM：容量巨大、成本低，但读带宽和耐久性是硬约束
+- **每 token 仍要电学读一遍 113.5GB**（CIM 只是"读出即算"）：100 tok/s →
+  阵列读出率 ~11.4 TB/s，ADC 总吞吐/功耗爆炸。
+
+**诚实结论**：10 tok/s 对 CIM 是低目标（算力上 30-300 tok/s 可达），但
+介质成本 + DAC/ADC 精度/功耗把工程现实压回**几十~上百 tok/s**；再往上
+host 侧（注意力 QK/PV、路由、softmax——CIM 不碰的部分）成新墙。量级是
+"一个数量级左右"，不是两三个数量级。
+
+### 流片导向模拟（2026-08-16）：器件噪声 + die 级吞吐
+
+**① 器件噪声（`pim/sim_cim.c` 扩展）：加 cell 变异/列热噪声/IR drop 三样**
+max|err|/RMS（DAC10/ADC12，3 种子最差，对照 double 精准参考）：
+
+| 场景 | max|err|/RMS |
+|---|---:|
+| 理想（无噪声，原版复现） | 4.04e-3 |
+| cell 变异 0.5% | 1.22e-2 |
+| cell 变异 1% | 2.56e-2 |
+| cell 变异 1% + 列噪声 0.1%FS | 3.49e-2 |
+| cell 变异 2% + 列噪声 0.1%FS | 5.50e-2 |
+| cell 变异 2% + 列噪声 0.3%FS | 9.09e-2 |
+
+- **位数加不回去**：cell 变异 1% 时 DAC12/ADC12 也到不了 2.5e-2 以下——
+  器件噪声主导，提高 DAC/ADC 位数无效。理想档逐位复现（4.04e-3）证明
+  噪声注入本身没污染理想路径。
+- 流片含义：保住 ~1e-3 契约需 cell 变异 <0.1%，对模拟 cell（NAND 常见
+  >0.5%）极苛刻 → **只有 SRAM/DRAM 数字 cell 能满足精度契约**。
+
+**② die 级吞吐（`tools/sim_cim_throughput.py`）：三道闸串联**
+- 账本：trunk 56.7B 参 = bf16 105.6GB / MXFP4 28.0GB；每 token 1.95G 次
+  ADC 转换（trunk 1.77G + 专家 miss 0.18G，group=32）
+- 容量闸（需 die 数 = (trunk+96GB 缓存)/介质密度）：SRAM 模拟cell 0.2GB/die
+  → bf16 806 颗 / MXFP4 496 颗（荒谬）；DRAM 近存 16GB/die → 13/8 颗；
+  NAND 模拟 128GB/die → 2/1 颗
+- ADC 吞吐闸（SAR 转换≈bits×1ns，1024 列/die）：8bit 128 Gconv/s、10bit
+  102 Gconv/s、12bit 85 Gconv/s → 单 die 44-66 tok/s
+- host 闸：非 matmul 40 GFLOP/token @10tok/s = 0.4 TFLOP/s（CPU 给得起）
+
+**判决**：
+1. **ADC 吞吐不是闸**——1 颗 die 就锁 40-50 tok/s，容量才是第一墙。
+2. **SRAM 模拟 cell 装不下 trunk**（~800/500 颗），只配专家侧/小模型。
+3. **NAND 模拟 1-2 颗 die 容量够、吞吐够，但精度过不了关**（cell 变异
+   >0.5% → 1.2e-2 起，与"10bit 吞吐优势"正好抵消）。
+4. **唯一的自洽路线 = DRAM 近存 + 数字 cell + MXFP4 trunk**：8 颗 die
+   容量够、数字 cell 精度可保 ~1e-3、~50 tok/s 吞吐。这正是"trunk 近存"
+   结论在流片约束下的具体化。
+5. 未建模（只低不高）：模拟累加 settle 时间、DAC 驱动、跨 die 部分和聚合。
+
 ## 待办
 - [x] 用现有 trace 跑"每层历史热表"的衰减预取模拟（`tools/predict_hotset.py`）
 - [x] 分层流式带宽需求（`tools/sim_stream.py`）：DRAM 热/NVMe 冷，96GB 常驻→93.6% 就地消化
@@ -202,3 +315,10 @@ AVX2 指令本身过不去（PIM/CIM 不跑 x86），但三样东西是内存计
 - [ ] 文献核证点2现状（MoE expert prefetch / confidence-graded speculation）
 - [ ] 收集带 softmax 概率的 trace → 测 margin 结构（Tier-2 的唯一实证路径）
 - [ ] 检查 case-k25 各层统计逐位相同是否生成器 bug（影响 demo 结论可信度）
+- [x] 读取上游 docs/PERFORMANCE.md 实测内存阶梯 → 证伪"内存没到256"假说；
+      补齐三层墙（容量/带宽/算力），带宽账本保留但标注"只量化带宽闸"
+- [x] 路径排序落地：软件优先（0.05→~1.4 tok/s，CPU 峰值够 10 tok/s 的边缘）、
+      大内存/HBM、CIM 收尾；CIM 同时消带宽+算力两闸但非前提
+- [x] 流片导向模拟：`pim/sim_cim.c` 加器件噪声（cell变异/热噪声/IR drop）
+      → 位数加不回去，<0.1% cell 变异才保 1e-3；`tools/sim_cim_throughput.py`
+      die 级三道闸 → ADC 非墙，唯一自洽路线 = DRAM近存+数字cell+MXFP4 trunk
