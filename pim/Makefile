@@ -12,9 +12,9 @@ verify: verify.c mxfp4_gemv.c mxfp4_gemv.h fixture
 	$(CC) $(CFLAGS) -o verify verify.c mxfp4_gemv.c -lm
 	./verify
 
-measure: sim_device.c mxfp4_gemv.c mxfp4_gemv.h fixture
-	$(CC) $(CFLAGS) -o sim_device sim_device.c mxfp4_gemv.c -lm
-	./sim_device
+measure: sim_c500.c mxfp4_gemv.c mxfp4_gemv.h fixture
+	$(CC) $(CFLAGS) -o sim_c500 sim_c500.c mxfp4_gemv.c -lm
+	./sim_c500
 
 clean:
-	rm -f verify sim_device fixture_mxfp4.bin
+	rm -f verify sim_c500 fixture_mxfp4.bin

@@ -1,13 +1,21 @@
-/* sim_device.c — 用 CPU 模拟"设备侧算法"的精度，对照 double 精准参考。
+/* sim_c500.c — C500 硬件行为模拟器：真设备算法，对照 double 精准参考。
  *
- * 没有硬件，但可以回答："如果设备用 fp32 累加 / bf16 激活、按参考的求和顺序，
- * 相对精准值（double 累加）的真实误差是多少？" 用真实 checkpoint 字节测量，
- * 报告 maxrel 与 99.9 分位。这决定了设备侧路径的精度预算——参考是 CPU 精准值。
+ * 按 c500-kernel.md §目标MMA 的规格重建（mma_sim.c 从未入库，需重建）：
  *
- * 变体：
- *   dev-fp32    fp32 激活 + fp32 累加（fmaf）
- *   dev-bf16    bf16 激活（RNE）+ fp32 累加（fmaf）
- * 对照：ref      fp32 激活 + double 累加（逐位精准，k3_matmul_mxfp4）
+ *   MMA: C[16][16] += A[16][16]·B[16][16]，A/B 为 bf16，C 为 fp32。
+ *   B fragment 融合去量化：每个 16 宽 k-tile 恰被一个 E8M0 scale 管辖
+ *   （ktile 偶数=group 低半，奇数=高半），scale 在加载时乘入权重：
+ *       w[i] = bf16(E2M1[nib] · 2^(sb-127))   —— 无损（E2M1 值域 ≤1 尾数位）
+ *   A 侧激活 bf16（RNE 舍入）。C 在 ktile 循环内顺序 fp32 累加。
+ *
+ * 与 CPU 参考（k3_matmul_mxfp4）的三处结构性差异 —— 这就是"模拟污染"的根源：
+ *   1. 累加：硬件 = 整条 in 维顺序 fp32（每 MMA k=0..15，跨 ktile 携带 C）；
+ *      CPU  = 8 累加器残差分区 + 树状归约 + double。
+ *   2. scale 位置：硬件 = 加载时先乘（每 16 宽 tile）；CPU = group 点积后再乘
+ *      （每 32 宽 group）。
+ *   3. 精度：硬件全程 fp32/bf16，无 double。
+ * 精确算术下 1、2 等价；fp32 舍入下完全不同 → 必须按硬件结构模拟，不能拿
+ * "CPU 算法 + float 累加"冒充设备路径。
  */
 #include "mxfp4_gemv.h"
 
@@ -79,7 +87,8 @@ static void ref_k3_matmul_mxfp4(float *y, const float *x, const unsigned char *p
     }
 }
 
-/* ---- 设备侧变体：fp32 累加，可选 bf16 激活，求和顺序同参考 ---- */
+/* ---- C500 设备路径：B fragment 加载时乘 scale（每 16 宽 k-tile），bf16 激活，
+ * 整条 in 维顺序 fp32 累加。 ---- */
 static float bf16_round(float x)
 {
     uint32_t u, rounded;
@@ -91,49 +100,29 @@ static float bf16_round(float x)
     return y;
 }
 
-static void dev_gemv(float *y, const float *x, const unsigned char *packed,
-                     const unsigned char *scales, int in, int rows, int group,
-                     int bf16_act)
+static void dev_c500_gemv(float *y, const float *x, const unsigned char *packed,
+                          const unsigned char *scales, int in, int rows, int group)
 {
     const int pcols = in / 2;
-    const int ngrp  = (in + group - 1) / group;
-    const int gbyte = group / 2;
     if (!REF_READY) ref_init();
 
     for (int r = 0; r < rows; r++) {
         const unsigned char *pr = packed + (size_t)r * pcols;
-        const unsigned char *sr = scales + (size_t)r * ngrp;
-        float acc = 0.0f;
-        for (int g = 0; g < ngrp; g++) {
-            const unsigned char sb = sr[g];
-            if (sb == 255) continue;
-            const unsigned char *pb = pr + (size_t)g * gbyte;
-            const float *xg = x + (size_t)g * group;
-            int n = in - g * group;
-            if (n > group) n = group;
-            float wf[64];
-            const int half = n >> 1;
-            for (int j = 0; j < half; j++) {
-                const float *pv = REF_E2M1_PAIR[pb[j]];
-                wf[2 * j]     = pv[0];
-                wf[2 * j + 1] = pv[1];
+        float acc = 0.0f;                        /* C fragment：跨 ktile 顺序 fp32 */
+        for (int kt = 0; kt * 16 < in; kt++) {   /* ktile = 16 宽 */
+            const int g = kt / 2;                /* 偶数=group 低半，奇数=高半 */
+            const unsigned char sb = scales[(size_t)r * ((in + group - 1) / group) + g];
+            const float mult = (sb == 255) ? 0.0f : ldexpf(1.0f, (int)sb - 127);
+            for (int k = 0; k < 16; k++) {
+                const int i = kt * 16 + k;
+                if (i >= in) break;
+                /* B fragment 加载：w = bf16(E2M1[nib]·mult)，无损 */
+                const unsigned char byte = pr[i >> 1];
+                const unsigned char nib = (i & 1) ? (byte >> 4) : (byte & 0x0F);
+                const float w = REF_E2M1[nib] * mult;
+                /* A fragment：bf16 激活；MMA 内 fp32 FMA */
+                acc = fmaf(w, bf16_round(x[i]), acc);
             }
-            if (n & 1) wf[n - 1] = REF_E2M1_PAIR[pb[half]][0];
-            float s[8] = {0};
-            int i = 0;
-            for (; i + 7 < n; i += 8)
-                for (int l = 0; l < 8; l++) {
-                    float a = bf16_act ? bf16_round(xg[i + l]) : xg[i + l];
-                    s[l] = fmaf(wf[i + l], a, s[l]);
-                }
-            float b0 = s[0] + s[4], b1 = s[1] + s[5];
-            float b2 = s[2] + s[6], b3 = s[3] + s[7];
-            float sub = (b0 + b1) + (b2 + b3);
-            for (; i < n; i++) {
-                float a = bf16_act ? bf16_round(xg[i]) : xg[i];
-                sub = fmaf(wf[i], a, sub);
-            }
-            acc += sub * REF_E8M0[sb];
         }
         y[r] = acc;
     }
@@ -215,41 +204,34 @@ int main(void)
 
     float *x = malloc((size_t)width * 4);
     float *refy = malloc((size_t)rows * 4);
-    float *d32 = malloc((size_t)rows * 4);
     float *d16 = malloc((size_t)rows * 4);
 
-    double maxrel_fp32 = 0, maxrel_bf16 = 0;
-    double p999_fp32 = 0, p999_bf16 = 0;
-    double nrms_fp32 = 0, nrms_bf16 = 0;
+    double maxrel_bf16 = 0, p999_bf16 = 0, nrms_bf16 = 0;
 
     const int SEEDS = 3;                       /* 3 个固定种子，取最差 */
     for (int s = 0; s < SEEDS; s++) {
         rng = 0x1000 + s;
         for (int i = 0; i < width; i++) x[i] = next_rand() * 1.5f;  /* ~N(0,1) 风格 */
         ref_k3_matmul_mxfp4(refy, x, packed, scales, width, rows, group);
-        dev_gemv(d32, x, packed, scales, width, rows, group, 0);
-        dev_gemv(d16, x, packed, scales, width, rows, group, 1);
-        Stats a, b;
-        stats(d32, refy, rows, &a);
+        dev_c500_gemv(d16, x, packed, scales, width, rows, group);
+        Stats b;
         stats(d16, refy, rows, &b);
-        if (a.maxrel > maxrel_fp32) { maxrel_fp32 = a.maxrel; p999_fp32 = a.p999; }
         if (b.maxrel > maxrel_bf16) { maxrel_bf16 = b.maxrel; p999_bf16 = b.p999; }
-        if (a.normrms > nrms_fp32) nrms_fp32 = a.normrms;
         if (b.normrms > nrms_bf16) nrms_bf16 = b.normrms;
     }
 
-    printf("\n设备侧路径精度（CPU 模拟，真实 checkpoint 字节，最差 over 3 种子）:\n");
-    printf("  dev-fp32  fp32激活+fp32累加 : maxrel=%.3e  p99.9=%.3e  max|err|/RMS=%+.2e\n",
-           maxrel_fp32, p999_fp32, nrms_fp32);
-    printf("  dev-bf16  bf16激活+fp32累加 : maxrel=%.3e  p99.9=%.3e  max|err|/RMS=%+.2e\n",
+    printf("\nC500 硬件路径精度（忠实行为模拟，真实 checkpoint 字节，最差 over 3 种子）:\n");
+    printf("  scale@load + bf16激活 + fp32顺序累加:\n");
+    printf("    maxrel=%.3e  p99.9=%.3e  max|err|/RMS=%+.2e\n",
            maxrel_bf16, p999_bf16, nrms_bf16);
-    printf("\n契约参考（c500-kernel.md）: fp32累加 1.16e-6 / bf16激活 1.82e-3\n");
+    printf("\n旧的污染模拟（CPU 算法+float）当时给出: maxrel=1.4e-1 p99.9=2.0e-2 "
+           "max|err|/RMS=4.1e-3 —— 结构不同数字不同，见证污染\n");
+    printf("c500-kernel.md 声称: bf16激活 1.82e-3（mma_sim.c 未入库，无法复现，待重建核对）\n");
 
     printf("\n解读:\n");
-    printf("  1. fp32 累加 ~5e-6（maxrel）与声称同量级；契约成立（误差预算 ~1e-6）\n");
-    printf("  2. bf16 激活 maxrel 被\"近零点积\"放大（分母→0）：本测量 ~1e-1，\n");
-    printf("     声称的 1.8e-3 未在相同口径下复现 → 该数字需标注测量条件（见 notes）\n");
-    printf("  3. 信号归一口径 max|err|/RMS 是下游真实代价：fp32 ~1e-6，bf16 ~1e-2..1e-3\n");
-    printf("  4. 全为算法层预算：设备真按此算术执行才成立（需硬件/cycle 仿真证）\n");
+    printf("  1. 硬件路径的误差 = 顺序 fp32 累加 + bf16 激活舍入，信号归一口径 ~1e-3 量级\n");
+    printf("  2. maxrel 仍被近零点积放大（分母→0），看 p99.9 / max|err|/RMS\n");
+    printf("  3. 全为算法层预算：设备真按此算术执行才成立（需硬件/cycle 仿真证）\n");
+    printf("  4. 与 CPU 参考不同步：硬件不逐位对齐 CPU，契约 = 误差落在容忍内\n");
     return 0;
 }
