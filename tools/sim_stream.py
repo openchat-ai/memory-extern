@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """sim_stream.py — 分层流式（DRAM 热 / NVMe 冷）的带宽需求实证
 
-回答的问题：K3 每 token 要 1472 个专家权重（25.83GB）。如果热专家常驻 DRAM、
-冷专家流式自 NVMe，带宽到底能压到多少？这决定 406GB/s（我此前对 10tok/s 的
-估算）里有多少能用"内存计算"就地消化、多少必须真搬。
+回答的问题：K3 完整运行每 token 要读多少权重字节，其中多少能靠专家缓存
+（DRAM 热 / NVMe 冷分层）就地消化、多少必须真搬。
 
-上游已测（kimi-k3-in-c 源码，非本脚本推导）：
-  - 每 token 25.83GB 权重 = 92 层 × 16 top-k 专家 × 17,547,264 字节
-  - 冷 NVMe 随机读 ~1.2GB/s → 无缓存 21 s/token
+上游已测（kimi-k3-in-c 源码 gates.txt，非本脚本推导）：
+  - 每 token 专家权重 25.83GB = 92 层 × 16 top-k 专家 × 17,547,264 字节
+  - trunk（always-active 参数，56.7B 参 = 113.49GB bf16）每 token 全读，
+    上游实测单步 trunk 读 300.63 GB（3 步累积）
+  - 冷 NVMe 随机读 ~1.1GB/s；上游实测 0.015 tok/s（5b 增量 decode）
   - LRU 缓存命中率 by budget 见 docs/PERFORMANCE.md
 
 本脚本新增的切片：
   1. prev-run 全集命中率 -> 若 DRAM 里放"每层上一轮被选专家全集"能覆盖多少
-  2. 请求加权带宽口径（GB/token）：DRAM 命中部分不搬，只 NVMe miss 部分真搬
-  3. 由此得出"可省带宽 / 必须搬带宽"的划分，以及 10/30/100 tok/s 下的 NVMe 需求
+  2. 请求加权带宽口径（GB/token）：专家 DRAM 命中部分不搬，只 NVMe miss 真搬
+  3. 完整账本 = trunk（不可缓存，全读） + 专家（可缓存）—— 对照商品内存现实
 
 用法：python3 sim_stream.py [trace.bin]
 """
@@ -24,6 +25,7 @@ import collections
 PATH = "/data/data/com.termux/files/usr/tmp/opencode/kimi-k3-in-c-main/tests/fixtures/expert_trace.bin"
 N_EXPERTS = 896
 EX_BYTES = 17_547_264  # 一个专家的权重字节（k3_cache.h / k3_load.h 实测口径）
+TRUNK_GB = 113.49      # always-active 参数（gates.txt: full trunk 113.49 GB at bf16）
 KB = 1 << 10
 GB = 1 << 30
 
@@ -88,20 +90,32 @@ def main():
     print(f"需要常驻专家数: {res_experts}（={res_experts * EX_BYTES / GB:.1f} GB）")
 
     print(f"\n=== 策略B: 无限常驻 + 分 DRAM/NVMe 分层（带宽划分） ===")
-    print(f"每 token 权重需求: 25.83 GB（92层×16×17.55MB，上游口径）")
+    print(f"每 token 专家权重: 25.83 GB（92层×16×17.55MB，上游口径）")
     # 请求加权口径下，DRAM 覆盖 = hits，NVMe 真搬 = 1 - hits
     hit_frac = hits_req / tot_req
     miss_frac = 1 - hit_frac
-    gb_token = 25.83
-    print(f"DRAM 就地消化: {hit_frac * 100:.1f}%  -> {hit_frac * gb_token:.2f} GB/token 不搬")
-    print(f"NVMe 必须真搬: {miss_frac * 100:.1f}%  -> {miss_frac * gb_token:.2f} GB/token")
-    for tok_s in (1, 10, 30, 100):
-        nv = miss_frac * gb_token * tok_s
-        d = hit_frac * gb_token * tok_s
-        print(f"  {tok_s:>3} tok/s: NVMe 需 {nv:6.1f} GB/s, DRAM 就地 {d:6.1f} GB/s")
+    exp_gb = 25.83
+    print(f"专家 DRAM 就地消化: {hit_frac * 100:.1f}%  -> {hit_frac * exp_gb:.2f} GB/token 不搬")
+    print(f"专家 NVMe 必须真搬: {miss_frac * 100:.1f}%  -> {miss_frac * exp_gb:.2f} GB/token")
+
+    print(f"\n=== 完整账本（含 trunk，上游 gates.txt 实测口径） ===")
+    print(f"trunk（always-active, 56.7B 参 = {TRUNK_GB:.1f}GB bf16）每 token 全读, 不可缓存")
+    for tok_s in (1, 10, 30):
+        trunk = TRUNK_GB * tok_s
+        exp = miss_frac * exp_gb * tok_s
+        print(f"  {tok_s:>3} tok/s -> trunk {trunk:6.1f} + 专家miss {exp:6.1f} = "
+              f"{trunk + exp:6.1f} GB/s")
+
+    print(f"\n=== 商品内存现实（单通道/常见形态，有效带宽） ===")
+    for name, bw in [("DDR4 单通道", 25.6), ("DDR5 单通道", 38.4),
+                     ("DDR5 双通道", 102.4), ("LPDDR5 手机", 51.2),
+                     ("服务器 8通道 DDR5", 409.6), ("HBM2e 单栈", 460)]:
+        tok = bw / (TRUNK_GB + miss_frac * exp_gb)
+        print(f"  {name:<16} {bw:5.0f} GB/s -> 支持 {tok:.2f} tok/s")
 
     print(f"\n=== 对照: 无缓存冷读（上游实测） ===")
-    print(f"  25.83 GB/token @ ~1.2GB/s 冷 NVMe = 约 21.5 s/token（0.047 tok/s）")
+    print(f"  专家 25.83 GB/token @ ~1.1GB/s 冷 NVMe = 约 23.5 s/token")
+    print(f"  上游完整实测（5b, 228GB RAM + NVMe 流式 trunk）: 0.015 tok/s 量级")
 
     print(f"\n=== 策略C: 有限 DRAM 容量（每层只留 top-K 上一轮高频） ===")
     print(f"  方法：每层维护上一轮频率表，常驻 top-K；K 从 16 到全量。")
@@ -130,11 +144,13 @@ def main():
         print(f"  {K:>6} {gb_res:>8.1f} {frac * 100:>8.1f}% {nv_token:>14.2f} {nv_token * 10:>18.1f}")
 
     print(f"\n=== 关键判决 ===")
-    print(f"  历史信号（prev-run 全集）能就地消化 ~92% 的权重流量 -> NVMe 只真搬 ~8%")
-    print(f"  但需要常驻 {res_experts} 个专家（{res_experts * EX_BYTES / GB:.0f} GB）——")
-    print(f"  这是内存计算（CIM/DRAM 近存）真正要装的容量，不是 1.45TB")
-    print(f"  有限容量下：K/层=64（96GB 常驻）请求命中 79.8%，NVMe 剩 5.21 GB/token（52 GB/s @10tok/s）")
-    print(f"               K/层=96（144GB 常驻）请求命中 93.6%，NVMe 剩 1.65 GB/token（16.5 GB/s @10tok/s）")
+    print(f"  1. 专家侧：历史信号能就地消化 ~88-92%，但专家只是小头")
+    print(f"  2. 大头是 trunk {TRUNK_GB:.0f} GB/token（always-active，不可缓存）——")
+    print(f"     内存计算的真正价值段落是消掉 trunk 的搬运，不是专家")
+    print(f"  3. 完美运行（10 tok/s）需 ~1.17 TB/s 有效带宽 + 常驻 139GB 以上 ——")
+    print(f"     服务器 8通道 DDR5 / HBM 量级，商品 PC/手机内存远不够")
+    print(f"  4. 有限专家缓存：K/层=64（96GB 常驻）命中 79.8%；K/层=96（144GB）93.6%")
+    print(f"     —— 只影响 25.83GB 专家段，对 trunk 113.5GB 无济于事")
 
 
 if __name__ == "__main__":
