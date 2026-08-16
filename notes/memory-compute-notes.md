@@ -35,6 +35,16 @@ AVX2 指令本身过不去（PIM/CIM 不跑 x86），但三样东西是内存计
   ① dequant == fixture expected ② GEMV == 参考核（zeros/ones/alt/rand/small/
   special 含 NaN/inf）③ nibble 交换对抗（顺序是载重语义）。
 - `make verify` 一键：转换 fixture → 编译 → 断言。
+- `make measure`（`pim/sim_device.c`）：**用 CPU 模拟设备侧算法**，对照 double
+  精准参考测真实误差（真实字节，3 种子取最差）：
+  - dev-fp32（fp32激活+fp32累加）：maxrel=5.7e-6，**max|err|/RMS=7.7e-7** → 契约成立
+  - dev-bf16（bf16激活+fp32累加）：maxrel=1.4e-1（近零点积放大，分母→0 假象），
+    **max|err|/RMS=4.1e-3** → 真实代价 ~4e-3，与 MXFP4 权重噪声同量级
+- **测量口径修正**：c500-kernel.md 声称的 bf16 1.82e-3 未在 maxrel 口径复现
+  （本测量 maxrel=1.4e-1），但信号归一口径（max|err|/RMS）≈4e-3 同量级。
+  → 该数字需标注测量条件；后续引用一律用信号归一口径 + 近零点积警告。
+- 结论：设备侧路径的精度预算 = 权重量化噪声量级（~1e-3），不是二阶退化；
+  但这是**算法层**预算，设备真按此算术执行才成立（需硬件/cycle 仿真证）。
 - 状态：硬件未到，黄金参考就位。C500 张量核 / RTL 第 4 课以它为准逐位对齐。
 
 ## 点2：算得快的同时，输出多级数据用于预取/预测 —— 现状与可行性
