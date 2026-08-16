@@ -25,6 +25,18 @@ AVX2 指令本身过不去（PIM/CIM 不跑 x86），但三样东西是内存计
 **PIM 只算专家 matmul；gate/注意力/残差/尺度应用/部分和累加全在 CPU 侧**
 → 内核今天就可用在"PIM 旁边"，不必等硬件。
 
+### 点1 已落地：`pim/` 参考内核模块
+- `pim/README.md` —— 边界规格：PIM 只算 `y[out]=Σ dequant(W)·x`（专家权重
+  GEMV），host 保留路由/注意力/残差/GLU/部分和；跨设备只走 k 个 fp32 向量。
+- `pim/mxfp4_gemv.{h,c}` —— 独立内核，无 k3.h 依赖，自带 E2M1/E8M0 表；
+  求和顺序逐字复刻 `k3_matmul_mxfp4`（按 group 展开 → 8 累加器
+  ((s0+s4)+(s1+s5))+((s2+s6)+(s3+s7)) → 尾 fma → group 尾乘 scale → double acc）。
+- `pim/verify.c` + `make_fixture.py` —— 真实 checkpoint 字节逐位验证，**全 PASS**：
+  ① dequant == fixture expected ② GEMV == 参考核（zeros/ones/alt/rand/small/
+  special 含 NaN/inf）③ nibble 交换对抗（顺序是载重语义）。
+- `make verify` 一键：转换 fixture → 编译 → 断言。
+- 状态：硬件未到，黄金参考就位。C500 张量核 / RTL 第 4 课以它为准逐位对齐。
+
 ## 点2：算得快的同时，输出多级数据用于预取/预测 —— 现状与可行性
 
 ### 现状（"有没有人做过"）
@@ -114,7 +126,8 @@ AVX2 指令本身过不去（PIM/CIM 不跑 x86），但三样东西是内存计
 ## 待办
 - [x] 用现有 trace 跑"每层历史热表"的衰减预取模拟（`tools/predict_hotset.py`）
 - [x] 交叉核对 case-k25（demo 偏斜）vs 真实 K3（均匀）→ skew/margin 轴分叉
+- [x] **PIM 参考内核模块**（`pim/`）：边界规格 + 独立内核 + 逐位验证全 PASS
+- [ ] RTL 第 4 课：内存侧 MXFP4 去量化（以 `pim/` 为黄金参考逐位对齐）
 - [ ] 文献核证点2现状（MoE expert prefetch / confidence-graded speculation）
 - [ ] 收集带 softmax 概率的 trace → 测 margin 结构（Tier-2 的唯一实证路径）
 - [ ] 检查 case-k25 各层统计逐位相同是否生成器 bug（影响 demo 结论可信度）
-- [ ] RTL 第 4 课：内存侧 MXFP4 去量化 + 三级置信度预取队列（设计）
