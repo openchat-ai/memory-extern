@@ -8,8 +8,11 @@
   - 每 token 专家权重 25.83GB = 92 层 × 16 top-k 专家 × 17,547,264 字节
   - trunk（always-active 参数，56.7B 参 = 113.49GB bf16）每 token 全读，
     上游实测单步 trunk 读 300.63 GB（3 步累积）
-  - 冷 NVMe 随机读 ~1.1GB/s；上游实测 0.015 tok/s（5b 增量 decode）
-  - LRU 缓存命中率 by budget 见 docs/PERFORMANCE.md
+   - 冷 NVMe 随机读 ~1.1GB/s；上游实测 0.015 tok/s（5b 增量 decode）
+   - LRU 缓存命中率 by budget 见 docs/PERFORMANCE.md
+   - **内存阶梯实测（docs/PERFORMANCE.md）：8→224GB 只换 1.70×（32.69→19.21
+     s/token）；224GB 档每 token 只读 14.53GB → 满内存下是算力墙，不是带宽墙。
+     本脚本只量化带宽闸；算力闸见 notes/memory-compute-notes.md。**
 
 本脚本新增的切片：
   1. prev-run 全集命中率 -> 若 DRAM 里放"每层上一轮被选专家全集"能覆盖多少
@@ -152,6 +155,11 @@ def main():
     print(f"     是 trunk 的 113.5 GB/token（上游实测 trunk 占 I/O 的 81%）")
     print(f"  4. 唯一的出路：trunk 近存（near-memory，权重住在算力旁）或压缩/结构化")
     print(f"     （如 KDA 复用）让 trunk 变小——没有第三条路")
+    print(f"  5. 但带宽账本只是三道闸之一（容量/带宽/算力），不是全图。")
+    print(f"     上游实测内存阶梯（docs/PERFORMANCE.md）：8→224GB 只换 1.70×，")
+    print(f"     且 224GB 档仍 19.21 s/token（0.052 tok/s）——该档每 token 只读")
+    print(f"     14.53GB，I/O 占墙钟 <1%，即满内存下被 CPU 算力压在 0.05 tok/s。")
+    print(f"     上游本就 228GB，容量线早已触顶；'内存没到 256' 是伪命题。")
 
 
 if __name__ == "__main__":

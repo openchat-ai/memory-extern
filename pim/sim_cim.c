@@ -36,6 +36,8 @@
 
 typedef struct { int dac; int adc; } Cfg;
 
+static float next_rand(void);   /* 定义在下方（fixture 之后） */
+
 /* ---- 参考核（CPU 参考：double 累加，逐位精准） ---- */
 static float REF_E2M1[16] = {
     0.0f, 0.5f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f, 6.0f,
@@ -98,6 +100,38 @@ static void ref_k3_matmul_mxfp4(float *y, const float *x, const unsigned char *p
     }
 }
 
+/* ---- 器件噪声模型（流片规格必需：理想模拟只是下界，真实器件只会更差） ----
+ *   cell_var : 电导存储误差，乘性，相对标准差 σ（每个权重单元独立采样）
+ *   noise_fs : 列/热噪声，加性，标准差 = noise_fs × ADC 全量程 amax（每个组段独立）
+ *   ir_drop  : 行位置相关增益误差，乘性，1 + ir_drop·(r/mid - 1)（IR drop 渐变）
+ */
+typedef struct {
+    const char *name;
+    double cell_var;
+    double noise_fs;
+    double ir_drop;
+} Noise;
+
+static const Noise NOISE[] = {
+    { "理想（无器件噪声）",            0.0,    0.0,   0.0 },
+    { "cell变异 0.5%",                 0.005,  0.0,   0.0 },
+    { "cell变异 1%",                   0.01,   0.0,   0.0 },
+    { "cell变异 1% + 列噪声0.1%FS",    0.01,   0.001, 0.0 },
+    { "cell变异 2% + 列噪声0.1%FS",    0.02,   0.001, 0.0 },
+    { "cell变异 2% + 列噪声0.3%FS",    0.02,   0.003, 0.0 },
+};
+
+/* Box-Muller 高斯（复用 rng，每 seed 重置，可复现）
+ *   u1 ∈ (0,1]，u2 ∈ (0,1)；r = sqrt(-2 ln u1)，z = r·sin(2π·u2) */
+static double next_gauss(void)
+{
+    double u1 = ((double)next_rand() + 1.0) * 0.5;   /* [-1,1] → [0,1) */
+    double u2 = ((double)next_rand() + 1.0) * 0.5;
+    if (u1 <= 0.0) u1 = 1e-9;
+    if (u2 <= 0.0) u2 = 1e-9;
+    return sqrt(-2.0 * log(u1)) * sin(6.283185307179586 * u2);
+}
+
 /* ---- 内存计算单元路径：DAC → 模拟组段累加 → ADC → 数字 scale → fp32 跨组累加 ---- */
 static double dac_quant(double v, double step, double rmax)
 {
@@ -109,7 +143,7 @@ static double dac_quant(double v, double step, double rmax)
 
 static void dev_cim_gemv(float *y, const float *x, const unsigned char *packed,
                          const unsigned char *scales, int in, int rows, int group,
-                         int dac_bits, int adc_bits)
+                         int dac_bits, int adc_bits, const Noise *nz)
 {
     const int ngrp = (in + group - 1) / group;
     const int pcols = in / 2;
@@ -131,6 +165,8 @@ static void dev_cim_gemv(float *y, const float *x, const unsigned char *packed,
     double amax = 0.0;
     for (int r = 0; r < rows; r++) {
         const unsigned char *pr = packed + (size_t)r * pcols;
+        /* IR drop：行位置相关增益（行靠 bitline 驱动端近端无 drop，远端最大） */
+        const double ir = 1.0 + nz->ir_drop * ((double)r / (rows > 1 ? rows - 1 : 1) - 0.5);
         for (int g = 0; g < ngrp; g++) {
             int n = in - g * group;
             if (n > group) n = group;
@@ -140,15 +176,17 @@ static void dev_cim_gemv(float *y, const float *x, const unsigned char *packed,
             double acc = 0.0;
             for (int j = 0; j < half; j++) {
                 const float *pv = REF_E2M1_PAIR[pb[j]];
-                double w0 = pv[0], w1 = pv[1];
+                /* cell 变异：电导存储误差，乘性，逐权重独立 */
+                double w0 = pv[0] * (1.0 + nz->cell_var * next_gauss());
+                double w1 = pv[1] * (1.0 + nz->cell_var * next_gauss());
                 double x0 = dac_quant((double)x[base + 2 * j],     dac_step, rmax);
                 double x1 = dac_quant((double)x[base + 2 * j + 1], dac_step, rmax);
-                acc += w0 * x0 + w1 * x1;
+                acc += ir * (w0 * x0 + w1 * x1);
             }
             if (n & 1) {
-                double w = (double)REF_E2M1[pb[half] & 0x0F];
+                double w = (double)REF_E2M1[pb[half] & 0x0F] * (1.0 + nz->cell_var * next_gauss());
                 double xq = dac_quant((double)x[base + n - 1], dac_step, rmax);
-                acc += w * xq;
+                acc += ir * w * xq;
             }
             s[(size_t)r * ngrp + g] = acc;
             double a = fabs(acc);
@@ -157,15 +195,17 @@ static void dev_cim_gemv(float *y, const float *x, const unsigned char *packed,
     }
     if (amax == 0.0) amax = 1.0;
     const double adc_step = amax / (double)(1 << (adc_bits - 1));
+    const double th_noise = nz->noise_fs * amax;
 
-    /* 3. ADC + 数字外围：量化组段部分和 → ×scale → fp32 跨组累加 */
+    /* 3. ADC + 数字外围：量化组段部分和（+列/热噪声）→ ×scale → fp32 跨组累加 */
     for (int r = 0; r < rows; r++) {
         const unsigned char *sr = scales + (size_t)r * ngrp;
         float acc = 0.0f;
         for (int g = 0; g < ngrp; g++) {
             const unsigned char sb = sr[g];
             if (sb == 255) continue;
-            double q = dac_quant(s[(size_t)r * ngrp + g], adc_step, amax);
+            double q = dac_quant(s[(size_t)r * ngrp + g] + th_noise * next_gauss(),
+                                 adc_step, amax);
             float w = (float)q * (float)REF_E8M0[sb];   /* fp32 尺度应用 */
             acc += w;                                    /* fp32 跨组累加 */
         }
@@ -258,29 +298,33 @@ int main(void)
         { 8, 12 }, { 10, 10 }, { 10, 12 }, { 12, 12 },
     };
 
-    printf("  DAC   ADC   maxrel   p99.9   max|err|/RMS\n");
-    for (size_t c = 0; c < sizeof(cfgs) / sizeof(cfgs[0]); c++) {
-        double maxrel = 0, p999 = 0, nrms = 0;
-        const int SEEDS = 3;
-        for (int s = 0; s < SEEDS; s++) {
-            rng = 0x1000 + s;
-            for (int i = 0; i < width; i++) x[i] = next_rand() * 1.5f;
-            ref_k3_matmul_mxfp4(refy, x, packed, scales, width, rows, group);
-            dev_cim_gemv(d16, x, packed, scales, width, rows, group,
-                         cfgs[c].dac, cfgs[c].adc);
-            Stats b;
-            stats(d16, refy, rows, &b);
-            if (b.maxrel > maxrel) { maxrel = b.maxrel; p999 = b.p999; }
-            if (b.normrms > nrms) nrms = b.normrms;
+    for (size_t n = 0; n < sizeof(NOISE) / sizeof(NOISE[0]); n++) {
+        printf("\n=== 器件噪声场景: %s ===\n", NOISE[n].name);
+        printf("  DAC   ADC   maxrel   p99.9   max|err|/RMS\n");
+        for (size_t c = 0; c < sizeof(cfgs) / sizeof(cfgs[0]); c++) {
+            double maxrel = 0, p999 = 0, nrms = 0;
+            const int SEEDS = 3;
+            for (int s = 0; s < SEEDS; s++) {
+                rng = 0x1000 + s;
+                for (int i = 0; i < width; i++) x[i] = next_rand() * 1.5f;
+                ref_k3_matmul_mxfp4(refy, x, packed, scales, width, rows, group);
+                dev_cim_gemv(d16, x, packed, scales, width, rows, group,
+                             cfgs[c].dac, cfgs[c].adc, &NOISE[n]);
+                Stats b;
+                stats(d16, refy, rows, &b);
+                if (b.maxrel > maxrel) { maxrel = b.maxrel; p999 = b.p999; }
+                if (b.normrms > nrms) nrms = b.normrms;
+            }
+            printf("  %2d    %2d   %.3e  %.3e  %+.2e\n",
+                   cfgs[c].dac, cfgs[c].adc, maxrel, p999, nrms);
         }
-        printf("  %2d    %2d   %.3e  %.3e  %+.2e\n",
-               cfgs[c].dac, cfgs[c].adc, maxrel, p999, nrms);
     }
 
     printf("\n解读:\n");
-    printf("  1. 误差 = DAC激活量化 + ADC组段量化 + 数字侧scale/fp32累加（vs double）\n");
+    printf("  1. 误差 = DAC激活量化 + ADC组段量化 + 器件噪声 + 数字侧scale/fp32累加\n");
     printf("  2. maxrel 仍被近零点积放大（分母→0），看 p99.9 / max|err|/RMS\n");
-    printf("  3. 理想模拟：无器件噪声（cell变异/IR drop/热噪声未建模）——下界\n");
-    printf("  4. 与 CPU 参考不同步：设备不逐位对齐 CPU，契约 = 误差落在容忍内\n");
+    printf("  3. 理想场景是无噪声下界；器件噪声（cell变异/热噪声/IR drop）只会更差\n");
+    printf("  4. 流片规格:选 DAC/ADC 位数必须给器件噪声留裕量,契约=max|err|/RMS 量级\n");
+    printf("  5. 与 CPU 参考不同步：设备不逐位对齐 CPU，契约 = 误差落在容忍内\n");
     return 0;
 }
