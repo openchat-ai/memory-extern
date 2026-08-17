@@ -81,6 +81,8 @@ echo "== [6/7] 06_sched 三级调度器 K3 trace 重放 =="
 ( cd ../06_sched
   iverilog -g2012 -Wall -o tb_sched sched3.v selfsched_tb.v
   check_tb "06_sched" tb_sched
-  rm -f tb_sched )
+  iverilog -g2012 -Wall -o tb_sched4 sched4.v selfsched4_tb.v
+  check_tb "06_sched4 索引哈希" tb_sched4
+  rm -f tb_sched tb_sched4 )
 
 echo "== 全部通过 =="
