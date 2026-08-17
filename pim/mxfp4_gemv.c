@@ -85,6 +85,36 @@ void pim_mxfp4_gemv(float *y, const float *x, const uint8_t *packed,
     }
 }
 
+/* pim_mxfp4_periph_acc — the DEVICE's digital periphery, standalone golden.
+ *
+ * 设备结构里"全数字"的部分（见 sim_cim.c:6-9）：模拟阵列给每个 (row, group)
+ * 一个部分和，ADC 量化后进入数字外围：
+ *     y[r] = fp32 顺序累加 Σ_g  (q[r][g] × 2^(sb-127))
+ *
+ * 两个结构性事实（与 CPU 参考的根本差异，sim_cim.c 头注释）：
+ *   1. E8M0 scale 是精确的 2 的幂，乘进去 = 指数加法（尾数不动）——本函数用
+ *      ldexpf(1.0f, sb-127) × q 复现同一个 IEEE fp32 乘法；
+ *   2. 跨组累加用 fp32（RN），不是 CPU 参考的 double。所以本函数**不与**
+ *      pim_mxfp4_gemv 逐位相等——那是两种语义，契约是误差容限（sim_cim 量过）。
+ *
+ * 输入 q 是 ADC 输出（fp32）。sb==255（NaN scale）跳过（贡献 0），同 CPU 参考。
+ * RTL 第 5 课以此为准逐位对齐：fp32 RN 加法的实现必须与 IEEE 完全一致。
+ */
+void pim_mxfp4_periph_acc(float *y, const float *q, const uint8_t *scales,
+                          int rows, int ngrp)
+{
+    for (int r = 0; r < rows; r++) {
+        const float *qr = q + (size_t)r * ngrp;
+        const uint8_t *sr = scales + (size_t)r * ngrp;
+        float acc = 0.0f;
+        for (int g = 0; g < ngrp; g++) {
+            if (sr[g] == 255) continue;                 /* NaN scale: contribute nothing */
+            acc += qr[g] * ldexpf(1.0f, (int)sr[g] - 127);   /* fp32 RN 乘 + 加 */
+        }
+        y[r] = acc;
+    }
+}
+
 void pim_mxfp4_dequant(float *out, const uint8_t *packed, const uint8_t *scales,
                        int rows, int pcols, int group)
 {

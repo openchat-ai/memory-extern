@@ -1,0 +1,5 @@
+read_lib -w sky130.tt.lib
+collapse
+strash
+dretime
+stime -t

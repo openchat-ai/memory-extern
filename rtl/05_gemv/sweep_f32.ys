@@ -1,0 +1,4 @@
+read_liberty -lib sky130.tt.lib
+read_verilog f32_add.v
+synth -top f32_add
+abc -liberty sky130.tt.lib -script /data/data/com.termux/files/home/sram/rtl/05_gemv/statt.script

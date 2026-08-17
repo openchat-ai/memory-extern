@@ -1,0 +1,4 @@
+read_liberty -lib sky130.tt.lib
+read_verilog tt.abc.v
+stat -liberty sky130.tt.lib
+abc -liberty sky130.tt.lib -D 100

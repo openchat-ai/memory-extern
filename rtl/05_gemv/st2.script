@@ -1,0 +1,9 @@
+strash
+&get -n
+&dch -f
+&nf
+&put
+&dc2
+&dretime
+&put -v
+print_stats -t

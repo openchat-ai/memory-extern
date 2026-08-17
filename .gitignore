@@ -5,3 +5,19 @@ __pycache__/
 *.a
 *.so
 .venv/
+
+# RTL 编译产物与仿真日志
+rtl/05_gemv/*.log
+rtl/05_gemv/e2e_cmp
+rtl/05_gemv/statt
+rtl/05_gemv/gen_add_cases
+rtl/05_gemv/gen_dequant_tb
+rtl/05_gemv/gen_e2e
+rtl/05_gemv/gen_fixture
+rtl/05_gemv/gen_mac_edge
+rtl/05_gemv/tb_add
+rtl/05_gemv/tb_dq
+rtl/05_gemv/tb_e2e
+rtl/05_gemv/tb_mac
+rtl/05_gemv/tb_mac_edge
+rtl/05_gemv/tb_py
