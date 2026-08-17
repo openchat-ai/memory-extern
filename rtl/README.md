@@ -124,6 +124,22 @@ vvp tb                                  # 运行仿真（vvp = RTL 的"模拟器
     - 收益：yosys flatten 综合后 **6596 → 3030 cells（-54%），FF 数不变**，
       MUX 660→467；桶移前的 27 级移位级联正是旧网表 4 倍冗余的出处
     - 卫生：三个 RTL 文件补 `` `timescale 1ns/1ps ``，`iverilog -Wall` 0 警告
+  - `opt.sh` —— 一键面积报告（严谨口径，2026-08-17）✅
+    - 功能：`./opt.sh matrix` 面积矩阵（各版本 flatten 口径）；`./opt.sh top`
+      门级构成 top 12；已纳入 `check.sh [7/7]` 面积回归门
+    - **口径（重要）**：OpenLane（TT 流片流程）`SYNTH_NO_FLAT` 默认 0 =
+      综合时 flatten。故"能流片"的面积必须以 **flatten 后**为准，reharden.py
+      正是读 yosys "Number of cells:" 行。**未 flatten 的 5408 cells 是误导口径**。
+    - 当前矩阵（flatten，1 tile ≈ 1000 门官方规格）：
+      | 版本 | cells |
+      |---|---|
+      | tt_um_periph_mac | 1676 |
+      | tt_um + 面积脚本(area2) | 1651 |
+      | periph_mac 纯核 | 2656 |
+    - 诚实标注：旧 README 记录的 1111 cells 无法复现（当时可能未记录 flatten 步骤）；
+      1651/1676 是当前可复现的 flatten 口径，方向一致（flatten 大幅缩小）
+    - 面积脚本 `area2.abc.script`（strash/&dch -f/&nf）兼容当前内嵌 ABC，
+      但对该网表增益 ≈0（1651 vs 1676，RTL 层优化早已榨干水分）
 - `06_sched` —— 三级预取调度器 RTL 模型 ✅
   - 落盘（2026-08-16）：`sched3.v`（L0 pinned 静态热表 4 槽 + L1 LRU 5 槽 +
     L1.5 环形预取池 4 槽，全阻塞赋值规避 03 踩过的 iverilog 数组 bug）
@@ -173,11 +189,32 @@ vvp tb                                  # 运行仿真（vvp = RTL 的"模拟器
   `go = run && !run_pp` 保证单拍脉冲（电平 go 会让 FSM 重复启动）
 - **对拍 TB**（tt_wrap_tb）：wrapper 内 periph_mac(accB) vs 直连参考(accA) 全 32 位
   逐位；3 行 8 组 ALL PASS
-- **面积**：tt_um_periph_mac 整包 yosys 综合 **1111 cells / 57 FF**（内嵌表格在
-  综合后成常量供电，periph_scale 乘法器被优化掉）——落 1 tile 预算内有余量
+- **面积（flatten 口径，2026-08-17 修正）**：tt_um_periph_mac 整包 = **1676 cells / 57 FF**
+  （内嵌表格综合后成常量供电，periph_scale 乘法器被优化掉）。**注意：> 1 tile(≈1000门)，
+  需 2 tile 或继续裁剪**。早期记录的 1111 cells 无法复现，已弃用，见上方 opt.sh 口径说明
 - **调试债**：① 表格组号落后一拍→row_g 在 go 沿即置 1；② 电平 go 重复启动；
   ③ 参考驱动 go 必须单拍（与 fixup 同训——输入禁与 posedge 落同一拍）
-- 待办：TT 提交清单（pin 规划、GDS 预检、日期截止）
+- 待办：TT 提交清单（pin 规划、GDS 预检、日期截止；面积见 opt.sh 矩阵决定 1/2 tile）
+
+## 版本 B — tt_um_bf16（流片目标，1 tile）
+
+- 决策（2026-08-17）：**第二版才是流片对象，版本 A（tt_um_periph_mac）退役**。
+  版本 A 痛点：1651-1676 cells 超 1 tile（需 2 tile=140€），且 fp32 精度偏离
+  北极星 MX 生态（真实 MXFP4 用 bf16/fp16 累加）。
+- **bf16_add.v**：bf16（1+8+7）IEEE-754 RN 加法器。与 `f32_add.v` 同构教科书式
+  一次舍入，指数域同 fp32（8 位偏置 127），尾数 24→8 位 → 面积缩小 3-4 倍。
+  验证：30018 随机+边界用例 vs C 参考 ALL PASS（独立生成器 gen_bf16_cases.c）。
+- **periph_scale_bf16.v**：bf16 × 2^(sb-127)（E8M0 尺度，精确 2 幂乘）。
+  验证：12120 用例 vs C（ldexpf）ALL PASS。**调试债**：9 位 signed 指数溢出
+  （e2 最小 -260 超出 -256 下界）→ 已扩 10 位；次正规 sticky 边界 Rc>=9（非 8，
+  全移出才置 sticky）。f32 版 periph_scale.v 有同类隐患未触发，暂未扰动。
+- **periph_mac_bf16.v**：跨组 bf16 累加（NGRP 参数化），与 periph_mac.v 同构。
+- **tt_um_bf16.v**：TT 提交顶层，行表格演示（3 行 8 组），引脚同版本 A。
+  对拍（tt_wrap_bf16_tb）3 行逐位核实：行 0=+0、行 1=对消+0、行 2=acc 0x4000(=2.0)。
+- **面积（flatten 口径）：tt_um_bf16 整包 = 791 cells / 41 FF → 1 tile 内（≤1000）**。
+  综合：`./opt.sh bf16`；回归：check.sh [8/11]~[11/11]。
+- **双版本关系**：版本 A（f32）证明完整 fp32 语义，版本 B（bf16）是面积/精度
+  权衡后的流片实体。bf16 是 MX 生态标准累加精度，贴合北极星。
 
 ## 对照表（你已经会的 → 硬件对应）
 
