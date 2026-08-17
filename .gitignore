@@ -21,3 +21,8 @@ rtl/05_gemv/tb_e2e
 rtl/05_gemv/tb_mac
 rtl/05_gemv/tb_mac_edge
 rtl/05_gemv/tb_py
+rtl/05_gemv/tb_bf16
+rtl/05_gemv/tb_s16
+rtl/05_gemv/tb_wrap16
+rtl/05_gemv/gen_bf16_cases
+rtl/05_gemv/gen_bf16_scale_cases

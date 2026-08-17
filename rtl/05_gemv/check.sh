@@ -85,4 +85,30 @@ echo "== [6/7] 06_sched 三级调度器 K3 trace 重放 =="
   check_tb "06_sched4 索引哈希" tb_sched4
   rm -f tb_sched tb_sched4 )
 
+echo "== [7/7] 一键面积报告 (opt.sh, flatten 口径) =="
+n=$(./opt.sh matrix | grep -oE 'tt_um_periph_mac +[0-9]+' | grep -oE '[0-9]+')
+echo "tt_um_periph_mac flatten cells=$n"
+[ -n "$n" ] && [ "$n" -gt 0 ] || { echo "!! opt.sh 面积报告失败"; exit 1; }
+
+echo "== [8/11] bf16_add vs C (30018) =="
+[ -x gen_bf16_cases ] || cc -O2 -o gen_bf16_cases gen_bf16_cases.c -lm
+./gen_bf16_cases
+iverilog -g2012 -Wall -o tb_bf16 bf16_add.v bf16_add_tb.v
+check_tb "bf16_add" tb_bf16
+
+echo "== [9/11] periph_scale_bf16 vs C (12120) =="
+[ -x gen_bf16_scale_cases ] || cc -O2 -o gen_bf16_scale_cases gen_bf16_scale_cases.c -lm
+./gen_bf16_scale_cases
+iverilog -g2012 -Wall -o tb_s16 periph_scale_bf16.v periph_scale_bf16_tb.v
+check_tb "periph_scale_bf16" tb_s16
+
+echo "== [10/11] tt_um_bf16 wrapper 探针对拍 (3 行) =="
+iverilog -g2012 -Wall -o tb_wrap16 tt_um_bf16.v periph_mac_bf16.v periph_scale_bf16.v bf16_add.v tt_wrap_bf16_tb.v
+check_tb "tt_um_bf16 wrapper" tb_wrap16
+
+echo "== [11/11] 版本 B 面积 (tt_um_bf16, 目标 <=1000) =="
+n=$(./opt.sh bf16 | grep -oE 'tt_um_bf16 +[0-9]+$' | grep -oE '[0-9]+$')
+echo "tt_um_bf16 flatten cells=$n"
+[ -n "$n" ] && [ "$n" -gt 0 ] && [ "$n" -le 1000 ] || { echo "!! 版本 B 面积失败或超 1 tile"; exit 1; }
+
 echo "== 全部通过 =="
