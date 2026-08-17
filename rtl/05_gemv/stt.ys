@@ -1,0 +1,2 @@
+read_verilog tt.abc.v
+abc -lib sky130.tt.lib -script /data/data/com.termux/files/home/sram/rtl/05_gemv/stattime.script

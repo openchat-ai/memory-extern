@@ -1,0 +1,7 @@
+strash
+&get -n
+&dch -f
+&nf
+&put
+dretime
+stime

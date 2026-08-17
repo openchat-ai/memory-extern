@@ -1,0 +1,5 @@
+read_liberty -lib sky130.tt.lib
+read_verilog tt_um_periph_mac.v periph_mac.v periph_scale.v f32_add.v
+synth -top tt_um_periph_mac
+dfflibmap -liberty sky130.tt.lib
+abc -liberty sky130.tt.lib -D 1

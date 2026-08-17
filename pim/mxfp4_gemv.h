@@ -40,6 +40,13 @@ void pim_mxfp4_dequant(float *out,
                        const uint8_t *packed, const uint8_t *scales,
                        int rows, int pcols, int group);
 
+/* Device digital periphery golden: y[r] = Σ_g q[r][g] × 2^(sb-127), fp32 RN
+ * sequential accumulate. q = post-ADC group partial sums (fp32). Semantics of
+ * the DEVICE, not the CPU reference — contract is error-within-tolerance.
+ * RTL lesson 5 aligns to this bit-exact. */
+void pim_mxfp4_periph_acc(float *y, const float *q, const uint8_t *scales,
+                          int rows, int ngrp);
+
 #ifdef __cplusplus
 }
 #endif
