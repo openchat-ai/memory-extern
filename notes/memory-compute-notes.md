@@ -322,3 +322,26 @@ max|err|/RMS（DAC10/ADC12，3 种子最差，对照 double 精准参考）：
 - [x] 流片导向模拟：`pim/sim_cim.c` 加器件噪声（cell变异/热噪声/IR drop）
       → 位数加不回去，<0.1% cell 变异才保 1e-3；`tools/sim_cim_throughput.py`
       die 级三道闸 → ADC 非墙，唯一自洽路线 = DRAM近存+数字cell+MXFP4 trunk
+
+## 硬件实测：拔 8GB 条前后对比（2026-08-18，llama-bench CPU-only `-ngl 0`，8 线程）
+
+**内存配置**（Win32_PhysicalMemory）
+
+| 项 | 拔条前 | 拔条后 |
+| --- | --- | --- |
+| 容量 | 40GB（DIMMA0 16 + DIMMB0 16 + DIMMB1 8，flex 模式） | 32GB（DIMMA0 16 + DIMMB0 16） |
+| 运行频率 | 2400 MT/s | **3200 MT/s（回满）** |
+
+**llama-bench 单流生成（`-p 64 -n 128 -ngl 0`，tg 列，8 线程）**
+
+| 模型 | 拔条前 | 拔条后 | 提升 |
+| --- | --- | --- | --- |
+| dense Qwen3.8-27B Q3_K_S（11.7GB 全读） | ~1.6 t/s（≈19 GB/s 折算） | **1.98 ± 0.05 t/s**（≈23 GB/s） | ~20% |
+| MoE Qwen3.6-35B-A3B Q3_K_S（14.3GB） | ~5.1 t/s（算力墙） | **5.58 ± 0.73 t/s** | ~9% |
+
+- 拔条前带宽 ~19 GB/s（原会话存档）；拔条后有效带宽 ≈ 11.7GB × 1.98 ≈ **23 GB/s**，
+  仅为 DDR4 双通道 3200 理论（51.2 GB/s）的 ~45%。
+- 频率回满但带宽未翻倍 → 单流生成仍受 GEMV 计算/访存重叠限制，dense 侧算力墙主导；
+  MoE（每 token 只读 ~2.5GB 活跃专家）t/s 更高且更贴近纯带宽表现。
+- 结论：2400→3200 实际收益 ~20%（dense）/9%（MoE），与"加内存到 256"不同路，
+  本机瓶颈依旧在算力而非带宽。
