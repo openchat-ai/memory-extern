@@ -182,8 +182,14 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
   ≈120/256，专家首触必 miss ≈ 40 层×120 ≈ 4800 次，占 touches（~35000）的 **13.7%**
   为命中率物理下限。12GiB=243 槽/层已装下全部出现过的专家（驱逐 236），实测 0.850
   已贴死 1−4800/35000≈**0.863 容量上限**。要验证 Qwen LRU 真正的 90% 位置，需
-  ≥300 token 长 trace 稀释 compulsory（touches 线性涨、unique 亚线性涨）；当前短
-  trace 的 0.85 上限是测量口径而非曲线形状问题。
+≥300 token 长 trace 稀释 compulsory（touches 线性涨、unique 亚线性涨）；当前短
+   trace 的 0.85 上限是测量口径而非曲线形状问题。
+- **✅ 长 trace 稀释复核（`data/traces/trace-3.jsonl`，240 token）**：compulsory 地板
+  由 **13.7% 稀释到 8.5%**（每层 unique 均值 ≈162.7 → 首触 miss 6508/76800）；理论 LRU
+  上限 ≈91.5%，**纯 LRU @8GiB 离线仿真 = 0.9086（90.86%）** ——长 trace 下 LRU 能到
+  90%，坐实"0.85 是短 trace 测量口径"。**同步修正决策门**：4GiB 预算 C/B = 1.08x、
+  D/B = 1.09x（短 trace 是 1.14-1.15x）→ **≤4GiB 下 C/B < 1.10，静态热表决策门不再通过**；
+  8GiB 档 C=0.9125 vs B=0.8430（+7pt）仍有利，属预算充足档。短 trace 的决策门是乐观上界。
 - **C 档真机端到端（同日，4GiB 预算，cap63 热表 = pin 63 专家/层 + LRU 18 槽/层，
   `data/cscan/`）**：
   | 测试负载 | 热表来源 | miss | vs 无 pin |
