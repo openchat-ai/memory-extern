@@ -35,16 +35,16 @@ mkdir -p "$WORK"; cd "$WORK"
 
 # ---------- 1. clone 完整 llama.cpp ----------
 if [ ! -d llama.cpp/.git ]; then
-  echo "[1/6] clone llama.cpp ..."
+  echo "[1/7] clone llama.cpp ..."
   git clone --quiet https://github.com/ggml-org/llama.cpp.git llama.cpp || {
     git clone --quiet git@github.com:ggml-org/llama.cpp.git llama.cpp || exit 1; }
 else
-  echo "[1/6] llama.cpp 已存在, 跳过"
+  echo "[1/7] llama.cpp 已存在, 跳过"
 fi
 cd llama.cpp
 
 # ---------- 2. 合体: 对位拷入 SparkMoE 零件(先 diff) ----------
-echo "[2/6] 合体有人件 ..."
+echo "[2/7] 合体: 对位拷入 SparkMoE 零件 ..."
 declare -A MAP=(
   ["llama-graph.cpp"]="src/llama-graph.cpp"
   ["llama-kv-cache.cpp"]="src/llama-kv-cache.cpp"
@@ -80,7 +80,7 @@ if [ -d "$REPO_SPARK/moe-paging" ]; then
 fi
 
 # ---------- 3. 补丁 ----------
-echo "[3/6] apply 补丁 ..."
+echo "[3/7] apply 补丁 ..."
 if [ -f "$REPO_SPARK/patches/c-tier-pin.patch" ]; then
   git apply "$REPO_SPARK/patches/c-tier-pin.patch" 2>/dev/null \
     && echo "  c-tier-pin.patch OK" || echo "  c-tier-pin.patch 已合或跳过"
@@ -89,21 +89,28 @@ echo "  提醒: TRACE-COLLECTION.md 的 remap_callback + --moe-trace 需人工�
 
 # ---------- 4. 编译 ----------
 if [ $SKIP_BUILD -eq 0 ]; then
-  echo "[4/6] cmake build (llama-cli, CPU) ..."
+  echo "[4/7] cmake build (llama-cli, CPU) ..."
   cmake -B build -DCMAKE_BUILD_TYPE=Release -DLLAMA_CURL=OFF -DLLAMA_CUDA=OFF -DGGML_OPENMP=ON 2>&1 | tail -2
   cmake --build build -j"$(nproc)" --target llama-cli 2>&1 | tail -5
   [ -x build/bin/llama-cli ] || { echo "编译失败, 查上方报错"; exit 1; }
   echo "  编译成功: build/bin/llama-cli"
 else
-  echo "[4/6] 跳过编译(--skip-build)"
+  echo "[4/7] 跳过编译(--skip-build)"
 fi
 
 # ---------- 5. 冒烟 ----------
-echo "[5/6] 冒烟测试 (生成 8 tokens) ..."
+echo "[5/7] 冒烟测试 (生成 8 tokens) ..."
 build/bin/llama-cli -m "$MODEL" -p "hi" -n 8 -ngl 0 2>&1 | tail -6
 
+# ---------- 5b. 核对真实张量形状(静态量, 供跳变点上下界精确化) ----------
+echo "[5b] 导出专家张量形状 -> $WORK/tensor_shapes.txt"
+build/bin/llama-cli -m "$MODEL" -p "hi" -n 1 -ngl 0 --verbose 2>&1 \
+  | grep -iE "expert|ffn|w1|w3|w2|moe" > "$WORK/tensor_shapes.txt"
+wc -l "$WORK/tensor_shapes.txt"
+echo "  (把此文件回传, 可精确算每专家字节与每层槽数上限)"
+
 # ---------- 6. 采 trace ----------
-echo "[6/6] 采集 2 条独立 trace ..."
+echo "[6/7] 采集 2 条独立 trace ..."
 mkdir -p "$WORK/traces"
 for kind in code chat; do
   case $kind in
@@ -117,5 +124,7 @@ for kind in code chat; do
 done
 
 echo
-echo "完成。trace 位置: $WORK/traces/"
-echo "把 $WORK/traces/*.jsonl 回传后即可离线分析(profile_trace.py / sram_stats.py)"
+echo "[7/7] 完成。产出:"
+echo "  $WORK/traces/trace_{code,chat}.jsonl   (路由轨迹)"
+echo "  $WORK/tensor_shapes.txt                (张量形状)"
+echo "把这两个文件回传后即可离线分析(profile_trace.py / sram_stats.py)"
