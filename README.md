@@ -205,3 +205,8 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
 - [x] RTL 学习环境（iverilog 手机仿真）+ 第一个模块（01_counter→06_sched 六课全绿，check.sh 7 门回归）
 - [x] "负载均衡杀缓存"成文（K3 Quantile Balancing + DeepSeek 在线 bias 双证据，白皮书 §5.9）
 - [x] `sim_cache2.py`：上游 sim_cache.py 升级（请求顺序为一等维度），`--order trace,layer-first` 一表对照 36% vs 90%，随工具核对读效率/compulsory
+- [x] **算力墙实测定案（2026-08-18，终局）**：真机拔条 40→32GB（2400→3200MT/s）后
+      llama-bench CPU-only 实测 dense 27B 1.98 t/s、MoE 35B-A3B 5.58 t/s；回填
+      `sim_compare.py` 得 `5.58 ≪ 带宽墙_B (18.0)` → **本机算力墙主导，缓存/带宽优化
+      在本机零 tok/s 收益，芯片纯缓存增量 = 0**。缓存路线唯一成立条件 =
+      "芯片连算力一起解"（卸载专家 GEMM）。详见 `notes/memory-compute-notes.md` 末章。
