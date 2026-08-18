@@ -33,6 +33,8 @@ void pim_mxfp4_gemv_opt_v7(float *y, const float *x, const uint8_t *packed,
                             const uint8_t *scales, int in, int rows, int group);
 void pim_mxfp4_gemv_opt_v8(float *y, const float *x, const uint8_t *packed,
                             const uint8_t *scales, int in, int rows, int group);
+void pim_mxfp4_gemv_opt_v9(float *y, const float *x, const uint8_t *packed,
+                            const uint8_t *scales, int in, int rows, int group);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -466,6 +468,98 @@ void pim_mxfp4_gemv_opt_v8(float *y, const float *x, const uint8_t *packed,
 }
 #endif
 
+/* ---- v9: NEON 2-pass: NEON dequant + NEON dot product ----
+ * v4 的瓶颈：dequant 和 dot 混在同一个循环里，编译器无法分离优化。
+ * v9 用两遍：
+ *   Pass 1: 用 NEON 把整个 group 的 packed nibbles 解包为连续 float 数组
+ *   Pass 2: 用 NEON vfmaq_f32 做16元素展开的 dot product
+ * 优势：Pass 2 是标准 SIMD dot product，编译器可完美向量化。
+ * 栈 buffer (group=32 floats =128B) 保证在 L1 内。
+ */
+#if defined(__aarch64__)
+void pim_mxfp4_gemv_opt_v9(float *y, const float *x, const uint8_t *packed,
+                            const uint8_t *scales, int in, int rows, int group)
+{
+    const int pcols = in / 2;
+    const int ngrp  = (in + group - 1) / group;
+    const int gbyte = group / 2;
+    const float *t = PIM_E2M1;
+    float wbuf[32] __attribute__((aligned(16)));
+
+    for (int r = 0; r < rows; r++) {
+        const uint8_t *pr = packed + (size_t)r * pcols;
+        const uint8_t *sr = scales + (size_t)r * ngrp;
+        float32x4_t vsum = vdupq_n_f32(0);
+
+        for (int g = 0; g < ngrp; g++) {
+            const uint8_t sb = sr[g];
+            if (sb == 255) continue;
+            const uint8_t *pb = pr + (size_t)g * gbyte;
+            const float *xg = x + (size_t)g * group;
+            const float sc = PIM_E8M0[sb];
+            int n = in - g * group;
+            if (n > group) n = group;
+
+            /* Pass 1: NEON dequant — 8 nibbles per iteration */
+            int i = 0;
+            for (; i + 7 < n; i += 8) {
+                const uint8_t b0 = pb[(i+0) >> 1];
+                const uint8_t b1 = pb[(i+2) >> 1];
+                const uint8_t b2 = pb[(i+4) >> 1];
+                const uint8_t b3 = pb[(i+6) >> 1];
+                float32x4_t vw0 = {t[b0 & 0x0F] * sc, t[b0 >> 4] * sc,
+                                    t[b1 & 0x0F] * sc, t[b1 >> 4] * sc};
+                float32x4_t vw1 = {t[b2 & 0x0F] * sc, t[b2 >> 4] * sc,
+                                    t[b3 & 0x0F] * sc, t[b3 >> 4] * sc};
+                vst1q_f32(wbuf + i,     vw0);
+                vst1q_f32(wbuf + i + 4, vw1);
+            }
+            for (; i + 3 < n; i += 4) {
+                const uint8_t b0 = pb[i >> 1];
+                float32x4_t vw = {t[b0 & 0x0F] * sc, t[b0 >> 4] * sc, 0, 0};
+                vst1q_f32(wbuf + i, vw);
+            }
+            for (; i < n; i++) {
+                const uint8_t byte = pb[i >> 1];
+                const uint8_t nib = (i & 1) ? (byte >> 4) : (byte & 0x0F);
+                wbuf[i] = t[nib] * sc;
+            }
+
+            /* Pass 2: NEON dot product — 16 elements per iteration */
+            i = 0;
+            for (; i + 15 < n; i += 16) {
+                float32x4_t vw0 = vld1q_f32(wbuf + i);
+                float32x4_t vw1 = vld1q_f32(wbuf + i + 4);
+                float32x4_t vw2 = vld1q_f32(wbuf + i + 8);
+                float32x4_t vw3 = vld1q_f32(wbuf + i + 12);
+                float32x4_t vx0 = vld1q_f32(xg + i);
+                float32x4_t vx1 = vld1q_f32(xg + i + 4);
+                float32x4_t vx2 = vld1q_f32(xg + i + 8);
+                float32x4_t vx3 = vld1q_f32(xg + i + 12);
+                vsum = vfmaq_f32(vsum, vx0, vw0);
+                vsum = vfmaq_f32(vsum, vx1, vw1);
+                vsum = vfmaq_f32(vsum, vx2, vw2);
+                vsum = vfmaq_f32(vsum, vx3, vw3);
+            }
+            for (; i + 3 < n; i += 4) {
+                float32x4_t vw = vld1q_f32(wbuf + i);
+                float32x4_t vx = vld1q_f32(xg + i);
+                vsum = vfmaq_f32(vsum, vx, vw);
+            }
+            for (; i < n; i++)
+                vsum = vfmaq_n_f32(vsum, vld1q_f32(xg + i), wbuf[i]);
+        }
+        float tmp[4]; vst1q_f32(tmp, vsum);
+        y[r] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+    }
+}
+#else
+void pim_mxfp4_gemv_opt_v9(float *y, const float *x, const uint8_t *packed,
+                            const uint8_t *scales, int in, int rows, int group) {
+    pim_mxfp4_gemv_opt(y, x, packed, scales, in, rows, group);
+}
+#endif
+
 /* ---- v7: NEON + 编译器友好的指令流 ----
  * 同 v4 但使用8路展开、更好的指令调度。
  */
@@ -879,6 +973,7 @@ int main(int argc, char **argv)
         double r_v6  = bench_kernel(pim_mxfp4_gemv_opt_v6,  R, cols, reps);
         double r_v7  = bench_kernel(pim_mxfp4_gemv_opt_v7,  R, cols, reps);
         double r_v8  = bench_kernel(pim_mxfp4_gemv_opt_v8,  R, cols, reps);
+        double r_v9  = bench_kernel(pim_mxfp4_gemv_opt_v9,  R, cols, reps);
         printf("  reference : %7.1f MB/s  (%6.1f GFLOP/s)  x1.00\n",
                r_ref, r_ref * 4e-3);
         printf("  opt(f32)  : %7.1f MB/s  (%6.1f GFLOP/s)  x%.2f\n",
@@ -897,6 +992,8 @@ int main(int argc, char **argv)
                r_v7, r_v7 * 4e-3, r_v7 / r_ref);
         printf("  v8(4row)  : %7.1f MB/s  (%6.1f GFLOP/s)  x%.2f\n",
                r_v8, r_v8 * 4e-3, r_v8 / r_ref);
+        printf("  v9(2pass) : %7.1f MB/s  (%6.1f GFLOP/s)  x%.2f\n",
+               r_v9, r_v9 * 4e-3, r_v9 / r_ref);
 
         if (batch[bi] > 1) {
             double r_mt   = bench_mt(pim_mxfp4_gemv_opt, 8, R, cols, reps);
@@ -920,6 +1017,7 @@ int main(int argc, char **argv)
     double r_dram_v6  = bench_dram(pim_mxfp4_gemv_opt_v6,  rows * 320, cols, reps);
     double r_dram_v7  = bench_dram(pim_mxfp4_gemv_opt_v7,  rows * 320, cols, reps);
     double r_dram_v8  = bench_dram(pim_mxfp4_gemv_opt_v8,  rows * 320, cols, reps);
+    double r_dram_v9  = bench_dram(pim_mxfp4_gemv_opt_v9,  rows * 320, cols, reps);
     printf("  reference : %7.1f MB/s  (%6.1f GFLOP/s)\n", r_dram_ref, r_dram_ref * 4e-3);
     printf("  opt(f32)  : %7.1f MB/s  (%6.1f GFLOP/s)\n", r_dram_opt, r_dram_opt * 4e-3);
     printf("  v2(unpack): %7.1f MB/s  (%6.1f GFLOP/s)\n", r_dram_v2, r_dram_v2 * 4e-3);
@@ -929,6 +1027,7 @@ int main(int argc, char **argv)
     printf("  v6(pf+8w) : %7.1f MB/s  (%6.1f GFLOP/s)\n", r_dram_v6, r_dram_v6 * 4e-3);
     printf("  v7(vec4)  : %7.1f MB/s  (%6.1f GFLOP/s)\n", r_dram_v7, r_dram_v7 * 4e-3);
     printf("  v8(4row)  : %7.1f MB/s  (%6.1f GFLOP/s)\n", r_dram_v8, r_dram_v8 * 4e-3);
+    printf("  v9(2pass) : %7.1f MB/s  (%6.1f GFLOP/s)\n", r_dram_v9, r_dram_v9 * 4e-3);
     printf("\n");
 
     printf("解读:\n");
