@@ -11,7 +11,24 @@
 #include <limits>
 #include <stdexcept>
 
+// 研究补丁（TRACE-COLLECTION.md）：真实路由 trace 采集，勿合入主线。
+namespace {
+std::mutex g_trace_mutex;
+FILE * g_trace_file = nullptr;
+}
+
 namespace llama_moe {
+
+void llama_moe_set_trace_file(const char * path) {
+    std::lock_guard<std::mutex> lock(g_trace_mutex);
+    if (g_trace_file != nullptr) {
+        std::fclose(g_trace_file);
+        g_trace_file = nullptr;
+    }
+    if (path != nullptr) {
+        g_trace_file = std::fopen(path, "w");
+    }
+}
 
 bool mode_uses_explicit_paging(enum llama_moe_paging_mode mode) {
     return mode == LLAMA_MOE_PAGING_MODE_EXPLICIT;
@@ -139,6 +156,16 @@ void paging_manager::remap_callback(
         GGML_ABORT("invalid MoE paging remap operation");
     }
     try {
+        if (g_trace_file != nullptr) {
+            const int32_t * ids = static_cast<const int32_t *>(source->data);
+            const size_t n = static_cast<size_t>(ggml_nelements(source));
+            std::lock_guard<std::mutex> lock(g_trace_mutex);
+            std::fprintf(g_trace_file, "{\"layer\":%d,\"experts\":[", cache->layer);
+            for (size_t i = 0; i < n; ++i) {
+                std::fprintf(g_trace_file, "%s%d", i ? "," : "", ids[i]);
+            }
+            std::fprintf(g_trace_file, "]}\n");
+        }
         cache->resolve(
             static_cast<const int32_t *>(source->data),
             static_cast<size_t>(ggml_nelements(source)),

@@ -56,4 +56,7 @@ private:
 
 bool mode_uses_explicit_paging(enum llama_moe_paging_mode mode);
 
+// 研究：真实路由 trace 采集（TRACE-COLLECTION.md），path 为 NULL 时关闭
+void llama_moe_set_trace_file(const char * path);
+
 }
