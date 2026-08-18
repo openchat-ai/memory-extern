@@ -1034,5 +1034,225 @@ int main(int argc, char **argv)
     printf("  - 若 opt>>reference: 瓶颈在 compute (参考 double 累加慢)\n");
     printf("  - 若 opt≈reference 且接近 memcpy 带宽: 瓶颈在 DRAM\n");
     printf("  - 若 DRAM-bound 远低于 memcpy: 引擎在 DRAM 侧也有优化空间\n");
+
+    /* ================================================================
+     * Q3 基准：3-bit 量化，8 个值 {-4..3}，byte-packed (1 weight/byte)
+     * 格式简化版：每 weight 占1字节低3位，group_scale=float32
+     * ================================================================ */
+    printf("\n===== Q3 GEMV Benchmark (3-bit, 8 values {-4..3}) =====\n");
+    printf("Q3 vs MXFP4: 更小查表(8 vs 16)、vdotq_s32 直接匹配\n\n");
+
+    for (int bi = 0; bi < 3; bi++) {
+        int R = rows * batch[bi];
+        int q3_pcols = R * cols;  /* 每 weight 1 byte (简化打包) */
+        int q3_ngrp = (cols + 31) / 32;
+
+        float     *x3  = malloc(sizeof(float) * cols);
+        float     *y3  = malloc(sizeof(float) * R);
+        uint8_t   *pk3 = malloc((size_t)R * cols);  /* byte-packed Q3 */
+        uint8_t   *sc3 = malloc((size_t)R * q3_ngrp);
+        if (!x3 || !y3 || !pk3 || !sc3) { printf("OOM\n"); exit(1); }
+
+        unsigned seed = 0xBEEF9999u;
+        fill_float(x3, cols, seed);
+        fill_pseudorand(pk3, (size_t)R * cols, seed + 1);
+        for (size_t i = 0; i < (size_t)R * cols; i++)
+            pk3[i] &= 0x07;  /* 3-bit: 0-7 */
+        fill_pseudorand(sc3, (size_t)R * q3_ngrp, seed + 2);
+        for (size_t i = 0; i < (size_t)R * q3_ngrp; i++)
+            sc3[i] &= 0x7F;
+
+        /* --- Q3 变体 A: 标量查表 (baseline) --- */
+        /* Q3 有8个值: int codes 0..7, 映射到 -4..3 */
+        {
+            double t0 = now_s();
+            for (int rep = 0; rep < reps; rep++) {
+                for (int r = 0; r < R; r++) {
+                    float acc = 0;
+                    for (int g = 0; g < q3_ngrp; g++) {
+                        float sc = (float)(sc3[r * q3_ngrp + g] - 32) * 0.01f;
+                        const uint8_t *pb = pk3 + (size_t)r * cols + (size_t)g * 32;
+                        const float *xg = x3 + (size_t)g * 32;
+                        for (int i = 0; i < 32; i++) {
+                            int code = pb[i] & 0x07;
+                            int val = code - 4;  /* -4..3 */
+                            acc += (float)val * sc * xg[i];
+                        }
+                    }
+                    y3[r] = acc;
+                }
+            }
+            double dt = now_s() - t0;
+            double mbps = (double)R * cols * reps / dt / 1e6;
+            printf("  Q3 scalar  : %7.1f MB/s  (%6.1f GFLOP/s)\n", mbps, mbps * 2e-3);
+        }
+
+        /* --- Q3 变体 B: NEON FMA (同 v4 思路) --- */
+#if defined(__aarch64__)
+        {
+            /* Q3 有8个值: code 0..7 → val -4..3 → float */
+            float q3_table[8];
+            for (int c = 0; c < 8; c++) q3_table[c] = (float)(c - 4);
+
+            double t0 = now_s();
+            for (int rep = 0; rep < reps; rep++) {
+                for (int r = 0; r < R; r++) {
+                    float32x4_t vac0 = vdupq_n_f32(0);
+                    for (int g = 0; g < q3_ngrp; g++) {
+                        float sc = (float)(sc3[r * q3_ngrp + g] - 32) * 0.01f;
+                        const uint8_t *pb = pk3 + (size_t)r * cols + (size_t)g * 32;
+                        const float *xg = x3 + (size_t)g * 32;
+                        float32x4_t vsc = vdupq_n_f32(sc);
+                        int i = 0;
+                        for (; i + 7 < 32; i += 8) {
+                            float32x4_t vw0 = {q3_table[pb[i]&7], q3_table[pb[i+1]&7],
+                                                q3_table[pb[i+2]&7], q3_table[pb[i+3]&7]};
+                            float32x4_t vw1 = {q3_table[pb[i+4]&7], q3_table[pb[i+5]&7],
+                                                q3_table[pb[i+6]&7], q3_table[pb[i+7]&7]};
+                            float32x4_t vx0 = vld1q_f32(xg + i);
+                            float32x4_t vx1 = vld1q_f32(xg + i + 4);
+                            vw0 = vmulq_f32(vw0, vsc);
+                            vw1 = vmulq_f32(vw1, vsc);
+                            vac0 = vfmaq_f32(vac0, vx0, vw0);
+                            vac0 = vfmaq_f32(vac0, vx1, vw1);
+                        }
+                        for (; i + 3 < 32; i += 4) {
+                            float32x4_t vw = {q3_table[pb[i]&7], q3_table[pb[i+1]&7],
+                                                q3_table[pb[i+2]&7], q3_table[pb[i+3]&7]};
+                            vw = vmulq_f32(vw, vsc);
+                            vac0 = vfmaq_f32(vac0, vld1q_f32(xg + i), vw);
+                        }
+                    }
+                    float tmp[4]; vst1q_f32(tmp, vac0);
+                    y3[r] = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+                }
+            }
+            double dt = now_s() - t0;
+            double mbps = (double)R * cols * reps / dt / 1e6;
+            printf("  Q3 NEON    : %7.1f MB/s  (%6.1f GFLOP/s)\n", mbps, mbps * 2e-3);
+        }
+
+        /* --- Q3 变体 C: vdotq_s32 (int8 点积) --- */
+        {
+            /* E2M1→int8 查表: code 0..7 → int8 {-4..3} */
+            int8_t q3_i8[8] = {-4, -3, -2, -1, 0, 1, 2, 3};
+
+            double t0 = now_s();
+            for (int rep = 0; rep < reps; rep++) {
+                for (int r = 0; r < R; r++) {
+                    int32_t acc32[4] = {0, 0, 0, 0};
+                    for (int g = 0; g < q3_ngrp; g++) {
+                        float sc = (float)(sc3[r * q3_ngrp + g] - 32) * 0.01f;
+                        const uint8_t *pb = pk3 + (size_t)r * cols + (size_t)g * 32;
+                        const float *xg = x3 + (size_t)g * 32;
+
+                        /* 把32个 x(float32) 量化为 int8 */
+                        float x_absmax = 0.01f;
+                        for (int i = 0; i < 32; i++) {
+                            float a = fabsf(xg[i]);
+                            if (a > x_absmax) x_absmax = a;
+                        }
+                        float x_scale = 127.0f / x_absmax;
+                        int8_t x_i8[32];
+                        for (int i = 0; i < 32; i++)
+                            x_i8[i] = (int8_t)(xg[i] * x_scale + (xg[i] >= 0 ? 0.5f : -0.5f));
+
+                        /* 解包 Q3 code → int8 weight */
+                        int8_t w_i8[32];
+                        for (int i = 0; i < 32; i++)
+                            w_i8[i] = q3_i8[pb[i] & 7];
+
+                        /* vdotq_s32: 16 个 int8 乘累加 */
+                        int8x16_t vx_lo = vld1q_s8(x_i8);
+                        int8x16_t vx_hi = vld1q_s8(x_i8 + 16);
+                        int8x16_t vw_lo = vld1q_s8(w_i8);
+                        int8x16_t vw_hi = vld1q_s8(w_i8 + 16);
+                        int32x4_t sum = vdotq_s32(vdupq_n_s32(0), vx_lo, vw_lo);
+                        sum = vdotq_s32(sum, vx_hi, vw_hi);
+
+                        /* 反量化: sum * (sc / x_scale) */
+                        float inv_xsc = sc / x_scale;
+                        float32x4_t vf = vcvtq_f32_s32(sum);
+                        vf = vmulq_n_f32(vf, inv_xsc);
+                        float32x4_t vac_cur = vld1q_f32((float*)acc32);
+                        vac_cur = vaddq_f32(vac_cur, vf);
+                        vst1q_f32((float*)acc32, vac_cur);
+                    }
+                    y3[r] = (float)(acc32[0] + acc32[1] + acc32[2] + acc32[3]);
+                }
+            }
+            double dt = now_s() - t0;
+            double mbps = (double)R * cols * reps / dt / 1e6;
+            printf("  Q3 vdotq   : %7.1f MB/s  (%6.1f GFLOP/s)\n", mbps, mbps * 2e-3);
+        }
+
+        /* --- Q3 变体 D: vdotq_s32 + 4-row 并行 --- */
+        {
+            int8_t q3_i8[8] = {-4, -3, -2, -1, 0, 1, 2, 3};
+
+            double t0 = now_s();
+            for (int rep = 0; rep < reps; rep++) {
+                int r = 0;
+                for (; r + 3 < R; r += 4) {
+                    int32x4_t vsum = vdupq_n_s32(0);
+                    for (int g = 0; g < q3_ngrp; g++) {
+                        float sc0 = (float)(sc3[(r+0)*q3_ngrp+g] - 32) * 0.01f;
+                        float sc1 = (float)(sc3[(r+1)*q3_ngrp+g] - 32) * 0.01f;
+                        float sc2 = (float)(sc3[(r+2)*q3_ngrp+g] - 32) * 0.01f;
+                        float sc3v= (float)(sc3[(r+3)*q3_ngrp+g] - 32) * 0.01f;
+                        const float *xg = x3 + (size_t)g * 32;
+
+                        /* x→int8 量化 (4行共享) */
+                        float x_absmax = 0.01f;
+                        for (int i = 0; i < 32; i++) {
+                            float a = fabsf(xg[i]);
+                            if (a > x_absmax) x_absmax = a;
+                        }
+                        float x_scale = 127.0f / x_absmax;
+                        int8_t x_i8_buf[32];
+                        for (int ii = 0; ii < 32; ii++)
+                            x_i8_buf[ii] = (int8_t)(xg[ii] * x_scale + (xg[ii] >= 0 ? 0.5f : -0.5f));
+                        int8x16_t vx_lo = vld1q_s8(x_i8_buf);
+                        int8x16_t vx_hi = vld1q_s8(x_i8_buf + 16);
+
+                        for (int row = 0; row < 4; row++) {
+                            const uint8_t *pb = pk3 + (size_t)(r+row) * cols + (size_t)g * 32;
+                            float sc_r = (row==0)?sc0:(row==1)?sc1:(row==2)?sc2:sc3v;
+                            int8_t w_i8[32];
+                            for (int i = 0; i < 32; i++) w_i8[i] = q3_i8[pb[i] & 7];
+                            int8x16_t vw_lo = vld1q_s8(w_i8);
+                            int8x16_t vw_hi = vld1q_s8(w_i8 + 16);
+                            int32x4_t dot = vdupq_n_s32(0);
+                            dot = vdotq_s32(dot, vx_lo, vw_lo);
+                            dot = vdotq_s32(dot, vx_hi, vw_hi);
+                            float32x4_t vf = vcvtq_f32_s32(dot);
+                            vf = vmulq_n_f32(vf, sc_r / x_scale);
+                            float tmp_f[4]; vst1q_f32(tmp_f, vf);
+                            y3[r+row] += tmp_f[0]+tmp_f[1]+tmp_f[2]+tmp_f[3];
+                        }
+                    }
+                }
+                for (; r < R; r++) {
+                    float acc = 0;
+                    for (int g = 0; g < q3_ngrp; g++) {
+                        float sc = (float)(sc3[r * q3_ngrp + g] - 32) * 0.01f;
+                        const uint8_t *pb = pk3 + (size_t)r * cols + (size_t)g * 32;
+                        const float *xg = x3 + (size_t)g * 32;
+                        for (int i = 0; i < 32; i++)
+                            acc += (float)((pb[i] & 7) - 4) * sc * xg[i];
+                    }
+                    y3[r] = acc;
+                }
+            }
+            double dt = now_s() - t0;
+            double mbps = (double)R * cols * reps / dt / 1e6;
+            printf("  Q3 vdotq4r : %7.1f MB/s  (%6.1f GFLOP/s)\n", mbps, mbps * 2e-3);
+        }
+#endif
+
+        printf("\n");
+        free(x3); free(y3); free(pk3); free(sc3);
+    }
+
     return 0;
 }
