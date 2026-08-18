@@ -12,11 +12,11 @@
 /* Pair table: byte -> {low-nibble value, high-nibble value}. Low nibble = EVEN
  * element; reversing it produces right statistics in wrong positions. Built the
  * same way as k3_pair_init (k3_ops.c:1191). */
-static float PIM_E2M1_PAIR[256][2];
+float PIM_E2M1_PAIR[256][2];
 
 /* E8M0: bare biased exponent -> power of two. 255 is NaN by spec; map to zero so
  * one bad byte cannot poison a row. Same rule as k3_e8m0_init (k3_ops.c:1206). */
-static float PIM_E8M0[256];
+float PIM_E8M0[256];
 
 static int PIM_READY = 0;
 
