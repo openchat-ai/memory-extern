@@ -13,6 +13,11 @@ static const float PIM_E2M1[16] = {
    -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -3.0f, -4.0f, -6.0f
 };
 
+/* Pair table (built by pim_tables_init in mxfp4_gemv.c). Exposed so bench/opt
+ * variants can reuse the same values without re-deriving them. */
+extern float PIM_E2M1_PAIR[256][2];
+extern float PIM_E8M0[256];
+
 /* y[out] = W[out][in] . x[in], where W is stored MXFP4-packed.
  *
  * This is the ONE computation the PIM device performs; everything else in a MoE
