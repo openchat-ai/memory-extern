@@ -202,6 +202,8 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
   - **真机 B 档 8GiB 实测命中率 = 0.9400**（hits=94471 misses=6027，evictions=421，
     bytes_read=7.59GB）——与离线 0.9396 吻合到 **0.04%**，坐实 Qwen LRU 90% 位置 =
     4-8GiB；300-token 下 LRU 直接越过 90%，与 trace-3 的 0.9086 同向且更高。
+    （B 档实测在模型入 ext4 后以 `/root/models/` 快路径完成；trace-4 采集时模型在
+    /mnt/f 9p 路径，但 trace 只含专家路由序列，与模型读盘速度无关，两者均有效。）
   - **决策门终局：C/B = 1.06x < 1.10 → 静态热表不值得做 C++**（与 trace-3 的 1.08x
     一致；trace-1 短 trace 的 1.14-1.15x 确为乐观上界，作废）。长 trace 下 LRU 自身
     已逼近 compulsory 地板，静态 pin 无增量空间——本条覆盖"决策门通过"旧结论。

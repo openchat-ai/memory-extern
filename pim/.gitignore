@@ -1,3 +1,6 @@
 verify
 fixture_mxfp4.bin
 bench_gemv
+bench_mxfp4_f32
+bench_q3
+bench_q3_x86
