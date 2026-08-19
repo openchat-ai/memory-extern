@@ -1,0 +1,13 @@
+=== 开始 12:48:02 ===
+warm: 79116ms
+r1 native: 34517ms
+r1 os: 30089ms
+r1 explicit: 44689ms
+r2 native: 30288ms
+r2 os: 30244ms
+r2 explicit: 41482ms
+r3 native: 30005ms
+r3 os: 29657ms
+r3 explicit: 37110ms
+=== 结束 12:54:29 ===
+DONE
