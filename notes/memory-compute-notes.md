@@ -355,6 +355,74 @@ max|err|/RMS（DAC10/ADC12，3 种子最差，对照 double 精准参考）：
    结论在流片约束下的具体化。
 5. 未建模（只低不高）：模拟累加 settle 时间、DAC 驱动、跨 die 部分和聚合。
 
+### PIM 精度预算（2026-08-19，真实权重逐误差源分解，`tools/pim_precision_budget.py`）
+
+**数据与口径**：
+- 权重 = `dequant_tensor` 从 GGUF 抽真实行（gate_exps IQ3_XXS 512 行、down_exps IQ3_S 64 行、
+  ssm_out Q8_0 64 行）；参考 = double 累加（dequant 权重）。激活 = RMSNorm 后随机 n=64。
+- normrms = max|err|/RMS(ref)（最坏单行，与 sim_cim.c 同口径）；括号给行级 p95。
+  器件 = cell 变异 0.5% + 列噪声 0.1%FS；ADC 组段=256（组段 32-256 不敏感，见下）。
+
+| 误差源 | gate IQ3_XXS | down IQ3_S | ssm_out Q8_0 | 判定 |
+|---|---:|---:|---:|---|
+| cell 4bit 均匀 blk32 | 1.05 (p95 .37) | .60 (.37) | .50 (.22) | ✗ 超标 |
+| cell 6bit 均匀 blk32 | .18 (.06) | .10 (.07) | .11 (.06) | △ 边缘 |
+| cell 8bit 均匀 blk32 | .033 (.014) | .038 (.022) | .022 (.013) | ✓ |
+| MXFP4 E2M1 (blk32) | 1.33 | .95 | .89 | ✗ 指数网格不匹配 |
+| cell 8bit 均匀 blk256（模型原块） | .080 | .037 | .034 | ✓（略逊 blk32） |
+| DAC10 / DAC12 | 1.4e-2 / 4.5e-3 | 7.4e-3 / 1.9e-3 | 9.5e-3 / 2.4e-3 | DAC≥10 |
+| ADC10 / ADC12 | 1.1e-2 / 2.7e-3 | 4.1e-3 / 1.0e-3 | 6.3e-3 / 1.5e-3 | ADC≥12 |
+| 组合 8bit+DAC10+ADC12+器件 | 5.1e-2 | 4.3e-2 | 3.2e-2 | 表示/器件主导 |
+| 组段 32/64/128/256（fp cell） | 1.3-1.5e-2 | 7.7-8e-3 | 9-10e-3 | 不敏感 |
+
+**关键结论**：
+1. **表示误差主导**：4bit（均匀 blk32/blk256 或 MXFP4 E2M1）表示误差 0.5-1.3（p95 也 0.2-0.4）
+   → 超标；6bit 到 0.1-0.2（p95 ~0.06），8bit 到 0.02-0.04（p95 0.01-0.02）。
+2. **MXFP4 E2M1 反而更差（0.9-1.3）**：E2M1 指数档（1,1.5,2,3,4,6,8,12）对 IQ3 系**均匀网格**
+   权重不匹配；同 bit 下均匀量化更贴近。**与 sim_cim 4.04e-3 不矛盾**：那是"参考即 MXFP4"
+   （表示误差归零）的**模拟附加误差**；本表参考=真实权重，**含表示误差**。
+3. **外围**：DAC12 ≈ 2-4.5e-3、ADC12 ≈ 1-2.7e-3，模拟附加（DAC12+ADC12）≈ sim_cim 4.04e-3 同量级 ✓。
+4. **组段不敏感**（1e-2 内）：组段大小可自由选（面积/能量权衡）。
+5. **器件噪声**：0.5% cell 变异 + 0.1%FS 列噪声贡献 ~1e-2 量级（组合中 8bit cell 主导），
+   与 sim_cim 噪声表一致（cell 变异 0.5% → 1.22e-2）。
+6. **总预算**：8bit blk32 + DAC10-12 + ADC12 + 器件 ≈ 3-6e-2（最坏行）；要 <1e-2 需
+   8bit cell（或 6bit blk32）+ DAC12/ADC14 + 降器件。
+7. **gate 稀疏**（54.7% 零行）p50=0 → 误差集中少数行，normrms 最坏口径偏保守；
+   若选 4bit/MXFP4，真实影响必须模型级（perplexity）验证。
+8. **容量-带宽权衡**：8bit cell = 2× 4bit 带宽。Q3_GEMV 引擎建议 block=256（与模型同块），
+   但精度 blk32 更好 → **精度优先选 blk32**。
+9. **修正 353 行"MXFP4 trunk 精度可保 ~1e-3"**：该判定指**模拟附加误差**（参考即 MXFP4）；
+   对真实权重的**表示误差**，MXFP4-E2M1 为 0.9-1.3，需 6-8bit 均匀块级或模型级验证兜底。
+
+### ✅ 8bit 注入实证闭环（2026-08-19，`tools/gguf_requant.c` + research-cli，真机 CPU-only 8 线程）
+
+**动机**：预算结论说 "8bit blk32 表示误差 0.022-0.038 可保"，但"可保"只是数值到表象的
+跳转——把 8bit 误差真正注入模型看生成是否还正常，是唯一的闭环证据。
+
+**方法**：
+- 8bit 均匀 blk32 表示在 GGUF 里即官方 **Q8_0**（block32 fp16 scale + 8bit，仅 127/128
+  除法细节差异）→ 注入 = 把模型里 iq3_xxs/iq3_s/iq4_xs（120 个 expert 权重张量）
+  dequant 后重新 quantize 成 Q8_0，f32/q8_0/q6_K 原样复制。
+- fork 无 llama-quantize → 自写 `tools/gguf_requant.c`（自解析 GGUF：KV 区原样复制 +
+  733 张量流式重写，OpenMP 并行 dequant/quant，~7 分钟产出 36.67GB 新模型）。
+- 两个模型各生成 16 token（同一 prompt，`-t 8 -n 16`），research-cli 输出 token id，
+  `tools/decode_toks.py` 从 GGUF 词表解码成文本。
+
+**结果**（`data/pim/inject_compare/`）：
+- Q3 原模型：`The dog finally stirred, yawned widely, and…` —— 正常。
+- 8bit 注入版：`The lazy dog, finally roused from its slumber…` —— **同样连贯合理**，
+  语义与 prompt 高度相关。token 序列不完全一致（采样随机 + logits 轻微漂移），
+  但生成质量没有可见损伤。
+- 37GB 注入模型在 27GB RAM + 8GB swap 的机器上靠 mmap 换页跑通未 OOM（~15 分钟）。
+
+**结论**：
+- **"8bit blk32 表示误差 ~3% 不破坏生成"实证成立**：PIM 用 8bit cell 存 Q3 权重，
+  在内存算完后把结果给 CPU 的方案在精度上是成立的。
+- 6bit（0.1-0.2）与 4bit（0.5-1.3）/MXFP4（0.9-1.3）仍建议保持"需模型级验证才敢用"，
+  误差非线性放大（本闭环只证到 8bit 底线）。
+- 产物：`/root/models/Qwen3.6-35B-A3B-UD-Q3_K_S-8bit.gguf`（36.67GB）；工具
+  `tools/gguf_requant.c`、`tools/run_requant.sh`、`tools/run_compare.sh`、`tools/decode_toks.py`。
+
 ## 待办
 - [x] 用现有 trace 跑"每层历史热表"的衰减预取模拟（`tools/predict_hotset.py`）
 - [x] 分层流式带宽需求（`tools/sim_stream.py`）：DRAM 热/NVMe 冷，96GB 常驻→93.6% 就地消化
@@ -371,6 +439,12 @@ max|err|/RMS（DAC10/ADC12，3 种子最差，对照 double 精准参考）：
 - [x] 流片导向模拟：`pim/sim_cim.c` 加器件噪声（cell变异/热噪声/IR drop）
       → 位数加不回去，<0.1% cell 变异才保 1e-3；`tools/sim_cim_throughput.py`
       die 级三道闸 → ADC 非墙，唯一自洽路线 = DRAM近存+数字cell+MXFP4 trunk
+- [x] PIM 精度预算真实权重逐误差源分解（`tools/pim_precision_budget.py`）：
+     表示误差主导（4bit 0.5-1.3、6bit 0.1-0.2、8bit 0.02-0.04）、
+     MXFP4-E2M1 指数网格与 IQ3 均匀网格不匹配反而更差、外围需 DAC≥10/ADC≥12、
+组段 32-256 不敏感
+- [x] **8bit 误差真实注入实证**（`tools/gguf_requant.c`：iq3→Q8_0 重写 120 张量）：
+     research-cli 对比生成，注入版 16 token 语义连贯正常，8bit 表示"保下限"实证成立
 
 ## 硬件实测：拔 8GB 条前后对比（2026-08-18，llama-bench CPU-only `-ngl 0`，8 线程）
 
@@ -667,3 +741,79 @@ set_trace_file，moe-paging.cpp:60-61）；`os` 分页模式不写文件。
 ### 下一步
 
 砍掉 GEMV 内核优化，全力补 CIM 阵列 RTL（P0）。
+
+## PIM 全 GEMV 卸载收益模型（2026-08-19 正式化，`tools/pim_full_unload_model.py`）
+
+> **纠正方向 A 的边界**：PIM 的价值不在"替换专家 GEMV"（专家只占每 token 计算 7%），
+> 而在"**全部权重 GEMV 在内存侧算完、只把结果向量传回 CPU**"——消除 dense 6.55GB
+> 每 token 的搬运。以下是正式化模型，参数全部来自 GGUF offset 差实测。
+
+### 0. 模型真实构成（GGUF offset 差逐字节验证，合计 15.359GB = 文件大小）
+
+"Q3_K_S" 实为 **IQ 混合量化**（UD 版），非 Q3_K_S 布局：
+
+| 类别 | 字节 | 量化 | 每层 |
+| --- | --- | --- | --- |
+| 专家 down | 4.696 GB | IQ1_M（实测 3.44 bpw）| 256 专家 × 512×2048，115.3MB |
+| 专家 gate+up | 4.110 GB | IQ2_S（实测 3.06 bpw）| 256 专家 × 2048×512，102.8MB |
+| dense（SSM/attn/embd/shared/router）| 6.553 GB | Q5_0 等 | — |
+
+### 1. 每 token 计算量（GEMV MACs）
+
+- dense：6.553GB × 8 / 5.5bpw ≈ **9.53 G MACs（93%）**
+- 专家：40 层 × 8 激活专家 × (2048×512 + 512×2048) = **0.67 G MACs（7%）**
+- 合计 **10.20 G MACs/token**
+
+### 2. 数据移动（对比）
+
+| 路线 | 每 token 移动 | 实测带宽墙 | 实测 |
+| --- | --- | --- | --- |
+| CPU-only（现状）| 搬权重 6.828 GB | 29GB/s → **4.25 t/s** | **4.25 t/s 贴墙 100%** |
+| PIM 全 GEMV 卸载 | 传结果 **656 KB** | ×10,403 | 通信墙消失 |
+
+- 传回构成：每层 dense 激活 8KB + 专家加权输出 8KB + 路由 1KB ≈ 16.4KB/层 × 40。
+  专家 gate→up→down 在 PIM 内串联，只传最终 2048 维 fp32 结果，不传部分和。
+- **实测带宽 29GB/s**（4.25 t/s × 6.83GB 反推）= DDR4 双通道 3200 理论的 57%；
+  431% CPU 利用率 = 内存等待特征（带宽墙铁证），**非算力不足**。
+
+### 3. 新墙 = PIM 算力
+
+| 目标 t/s | 需 PIM 算力 | 备注 |
+| --- | --- | --- |
+| 20 | 0.41 TFLOP/s | — |
+| 40 | 0.82 TFLOP/s | ≈ sim_cim 判决的 50 tok/s 同量级 |
+| 100 | 2.04 TFLOP/s | — |
+| 250 | 5.10 TFLOP/s | 每 token GEMV 7.5ms |
+| 500 | 10.20 TFLOP/s | — |
+
+### 4. CPU 侧剩余（非 GEMV，峰值 0.38 TFLOP/s）
+
+| seq | 非 GEMV FLOP/token | CPU 时间 | 主导 |
+| --- | --- | --- | --- |
+| 128 | 1.34 G | 3.5 ms | attention |
+| 1024 | 86 G | 224 ms | attention |
+| 4096 | 1374 G | 3579 ms | attention |
+
+- 短序列（seq≤128）：非 GEMV ~3.5ms/token，仅 40 t/s 的 9% 开销，可接受。
+- **seq≥1024 时 10 层 full-attention 成为新墙** → QK^T/AV 同为 GEMV，可继续下沉，
+  CPU 只留 softmax/逐元素/路由/采样。
+
+### 5. 修正标注（以下旧判定作废）
+
+| 旧判定 | 位置 | 错误 | 修正 |
+| --- | --- | --- | --- |
+| "dense 侧算力墙主导" | 本条 393-394 | 忽略 dense 每 token 全读 | 实测贴带宽墙 29GB/s |
+| "soft << 带宽墙_B（5.6 vs 18）→ 软件未触及带宽墙，被算力压死" | 本条 407-412 | 带宽墙_B=18 用"每 token 只读 2.5GB"假设 | 实际每 token 读 6.83GB → 带宽墙 ≈4.5 t/s，实测 4.25 贴墙 |
+| "Qwen 引擎低效（0.3% 利用率）" | 本条 507-508 | 把带宽墙误判为引擎低效 | 4.25 = 硬件极限，非引擎问题 |
+| "重心 = 卸载 Sparse/专家 GEMM" | 本条 512-517 | 专家仅 7% | 需卸载**全部 GEMV（dense+专家）** |
+
+### 6. 未建模（只低不高）
+
+- 模拟累加 settle / DAC 驱动 / 跨 die 部分和聚合（同 sim_cim 口径）
+- IQ1_M/IQ2_S/Q5_0 格式在 PIM 侧的**解量化开销与精度预算**（模拟域 vs 数字 cell；
+  MXFP4 契约需与当前模型重量化衔接）
+- PIM 内存侧权重驻留容量（dense 6.55GB 全驻留是前提，同"专家全驻留 16GB"推演）
+
+**一句话**：方向 A 的答案收敛为——llama.cpp 在 Hygon 已贴带宽墙（4.25 t/s，非算力墙）；
+PIM 必须卸载**全部** GEMV（dense 93% + 专家 7%），数据移动降 ×10⁴，新墙 = crossbar 算力
+（40 t/s 需 ~0.8 TFLOP/s）与长序列 attention（可继续下沉 QK^T/AV）。

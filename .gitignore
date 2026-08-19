@@ -25,4 +25,8 @@ rtl/05_gemv/tb_bf16
 rtl/05_gemv/tb_s16
 rtl/05_gemv/tb_wrap16
 rtl/05_gemv/gen_bf16_cases
-rtl/05_gemv/gen_bf16_scale_cases
+# 实验数据大文件
+data/pim/*.f32
+data/pim/*.f16
+data/pim/*.bin
+data/pim/*.hugedata

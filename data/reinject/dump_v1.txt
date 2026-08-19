@@ -1,0 +1,79 @@
+n_kv=54 n_tensors=733 data_offset=10990048
+type distribution:
+  f32             361
+  q8_0            370
+  q6_K              2
+
+first 60 tensors:
+  output.weight                                      q6_K       size=417177600 off=0
+  output_norm.weight                                 f32        size=8192     off=417177600
+  token_embd.weight                                  q6_K       size=417177600 off=417185792
+  blk.0.attn_gate.weight                             q8_0       size=8912896  off=834363392
+  blk.0.attn_norm.weight                             f32        size=8192     off=843276288
+  blk.0.attn_qkv.weight                              q8_0       size=17825792 off=843284480
+  blk.0.ffn_down_exps.weight                         q8_0       size=285212672 off=861110272
+  blk.0.ffn_down_shexp.weight                        q8_0       size=1114112  off=1146322944
+  blk.0.ffn_gate_exps.weight                         q8_0       size=285212672 off=1147437056
+  blk.0.ffn_gate_inp.weight                          f32        size=2097152  off=1432649728
+  blk.0.ffn_gate_inp_shexp.weight                    f32        size=8192     off=1434746880
+  blk.0.ffn_gate_shexp.weight                        q8_0       size=1114112  off=1434755072
+  blk.0.ffn_up_exps.weight                           q8_0       size=285212672 off=1435869184
+  blk.0.ffn_up_shexp.weight                          q8_0       size=1114112  off=1721081856
+  blk.0.post_attention_norm.weight                   f32        size=8192     off=1722195968
+  blk.0.ssm_a                                        f32        size=128      off=1722204160
+  blk.0.ssm_alpha.weight                             f32        size=262144   off=1722204288
+  blk.0.ssm_beta.weight                              f32        size=262144   off=1722466432
+  blk.0.ssm_conv1d.weight                            f32        size=131072   off=1722728576
+  blk.0.ssm_dt.bias                                  f32        size=128      off=1722859648
+  blk.0.ssm_norm.weight                              f32        size=512      off=1722859776
+  blk.0.ssm_out.weight                               q8_0       size=8912896  off=1722860288
+  blk.1.attn_gate.weight                             q8_0       size=8912896  off=1731773184
+  blk.1.attn_norm.weight                             f32        size=8192     off=1740686080
+  blk.1.attn_qkv.weight                              q8_0       size=17825792 off=1740694272
+  blk.1.ffn_down_exps.weight                         q8_0       size=285212672 off=1758520064
+  blk.1.ffn_down_shexp.weight                        q8_0       size=1114112  off=2043732736
+  blk.1.ffn_gate_exps.weight                         q8_0       size=285212672 off=2044846848
+  blk.1.ffn_gate_inp.weight                          f32        size=2097152  off=2330059520
+  blk.1.ffn_gate_inp_shexp.weight                    f32        size=8192     off=2332156672
+  blk.1.ffn_gate_shexp.weight                        q8_0       size=1114112  off=2332164864
+  blk.1.ffn_up_exps.weight                           q8_0       size=285212672 off=2333278976
+  blk.1.ffn_up_shexp.weight                          q8_0       size=1114112  off=2618491648
+  blk.1.post_attention_norm.weight                   f32        size=8192     off=2619605760
+  blk.1.ssm_a                                        f32        size=128      off=2619613952
+  blk.1.ssm_alpha.weight                             f32        size=262144   off=2619614080
+  blk.1.ssm_beta.weight                              f32        size=262144   off=2619876224
+  blk.1.ssm_conv1d.weight                            f32        size=131072   off=2620138368
+  blk.1.ssm_dt.bias                                  f32        size=128      off=2620269440
+  blk.1.ssm_norm.weight                              f32        size=512      off=2620269568
+  blk.1.ssm_out.weight                               q8_0       size=8912896  off=2620270080
+  blk.2.attn_gate.weight                             q8_0       size=8912896  off=2629182976
+  blk.2.attn_norm.weight                             f32        size=8192     off=2638095872
+  blk.2.attn_qkv.weight                              q8_0       size=17825792 off=2638104064
+  blk.2.ffn_down_exps.weight                         q8_0       size=285212672 off=2655929856
+  blk.2.ffn_down_shexp.weight                        q8_0       size=1114112  off=2941142528
+  blk.2.ffn_gate_exps.weight                         q8_0       size=285212672 off=2942256640
+  blk.2.ffn_gate_inp.weight                          f32        size=2097152  off=3227469312
+  blk.2.ffn_gate_inp_shexp.weight                    f32        size=8192     off=3229566464
+  blk.2.ffn_gate_shexp.weight                        q8_0       size=1114112  off=3229574656
+  blk.2.ffn_up_exps.weight                           q8_0       size=285212672 off=3230688768
+  blk.2.ffn_up_shexp.weight                          q8_0       size=1114112  off=3515901440
+  blk.2.post_attention_norm.weight                   f32        size=8192     off=3517015552
+  blk.2.ssm_a                                        f32        size=128      off=3517023744
+  blk.2.ssm_alpha.weight                             f32        size=262144   off=3517023872
+  blk.2.ssm_beta.weight                              f32        size=262144   off=3517286016
+  blk.2.ssm_conv1d.weight                            f32        size=131072   off=3517548160
+  blk.2.ssm_dt.bias                                  f32        size=128      off=3517679232
+  blk.2.ssm_norm.weight                              f32        size=512      off=3517679360
+  blk.2.ssm_out.weight                               q8_0       size=8912896  off=3517679872
+
+last 10 tensors:
+  blk.39.attn_v.weight                               q8_0       off=35795159552
+  blk.39.ffn_down_exps.weight                        q8_0       off=35796273664
+  blk.39.ffn_down_shexp.weight                       q8_0       off=36081486336
+  blk.39.ffn_gate_exps.weight                        q8_0       off=36082600448
+  blk.39.ffn_gate_inp.weight                         f32        off=36367813120
+  blk.39.ffn_gate_inp_shexp.weight                   f32        off=36369910272
+  blk.39.ffn_gate_shexp.weight                       q8_0       off=36369918464
+  blk.39.ffn_up_exps.weight                          q8_0       off=36371032576
+  blk.39.ffn_up_shexp.weight                         q8_0       off=36656245248
+  blk.39.post_attention_norm.weight                  f32        off=36657359360
