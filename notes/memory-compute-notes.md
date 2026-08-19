@@ -577,3 +577,45 @@ LRU @8GiB=90.86%，并发现 ≥300 token 长 trace 下 4GiB C/B 掉到 1.08x）
 
 > 注：Q3 GFLOP/s 略低于 MXFP4 是因为 Q3 每元素只做1次 int→float 转换 + 1次 FMA，
 > 而 MXFP4 做2次 nibble 提取 + 2次 FMA。但 Q3 的 MB/s 更高因为数据量更小(3-bit vs 4-bit)。
+
+---
+
+## 环境快照（2026-08-19，WSL 迁移 + 实例重构）
+
+**WSL 曾损坏根因（修正归因）**：C 盘空间不足（256GB 剩 27GB），vhdx 在 C 盘膨胀
+导致文件系统损坏——**不是 WSL bug，也不是 ext4 本身**。修复：`wsl --export` →
+`--unregister`（释放 C 盘）→ `--import` 到 D 盘。教训：**写 ext4 大文件前必须确认
+磁盘空间充足**（现 vhdx 在 D 盘 685GB 空闲）。
+
+**当前实例布局（全部在 D 盘）**：
+| distro | GUID | vhdx | 模型 |
+|---|---|---|---|
+| `qwen`（默认） | `{bfb864db-b4f9-433f-b970-e0e8e2aae2b8}` | `D:\wsl\qwen\qwen.vhdx` | `/root/models/Qwen3.6-35B-A3B-UD-Q3_K_S.gguf`（15.36GB） |
+| `k3-27b`（另有安排） | `{a21a6b77-e186-4858-83b5-5fc87b798297}` | `D:\wsl\k3-27b\k3-27b.vhdx` | `/root/models/Qwen3.8-27B-Q3_K_S.gguf`（12.57GB） |
+| `K3`（遗留，未装完，勿动） | `{11d304ff-634e-4f7c-8b5a-7440e25b0c43}` | `H:\wsl\K3\ext4.vhdx` | — |
+
+- 启动：默认 `wsl`（= qwen）；指定 `wsl -d k3-27b`；默认实例指针 = 注册表
+  `HKCU:\...\Lxss\<GUID>` 的 `DistributionName`。
+- **WSL 定位磁盘的唯一指针 = 注册表 `BasePath` + `VhdFileName`**。改 vhdx 名/位置
+  必须 shutdown 后同步改注册表两处；自查命令见 `D:\wsl\README` 无 → 用
+  `Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss\<GUID>'`。
+- **备份**：`D:\wsl\backup.tar`（2.67GB，迁移前旧快照，无模型；vhdx 损坏时
+  `wsl --import qwen D:\wsl\qwen D:\wsl\backup.tar` 兜底，但模型需重拷）。k3-27b
+  是 vhdx 复制 + 注册表克隆建的，**无 tar 备份**。
+- 内存：`.wslconfig` `memory=28GB processors=16 swap=8GB`（所有实例共享 28GB，
+  模型任务一次只跑一个）。
+- **9p 瓶颈解除**：模型入 ext4 后 B 档实测从 ~12s/token 降到 ~0.8-1.5s/token。
+- **clone 实例的坑**：vhdx 复制法建的新实例会带旧实例 `/etc/wsl.conf` 的 systemd
+  设置，启动报 `Failed to start the systemd user session for 'root'`（无害，忽略）；
+  9p 拷大文件若被 systemd 会话异常中断会拷不完整——拷完必须比对字节数。
+  （k3-27b 首拷缺 443MB，重拷后 12,574,489,568 B 与源一致。）
+
+**trace-4 终局（300-token）+ B 档真机铁证**：详见 README "开放项 A 真机闭环"。
+关键：compulsory 13.7%→5.8%；LRU @4GiB=0.9021 / @8GiB=0.9396；真机 8GiB **0.9400**
+（吻合 0.04%）；C/B=1.06x < 1.10 → **静态热表不值得做 C++**，决策门终局关闭。
+采集命令（可复用）：
+```
+wsl -d qwen -e bash -lc "/root/sparkmoe-fork/build/bin/research-cli -m /root/models/Qwen3.6-35B-A3B-UD-Q3_K_S.gguf -ngl 0 -t 8 -n 300 -p '<固定中文prompt>' --moe-paging explicit --moe-slots 256 --moe-trace /mnt/f/sram/sram/data/traces/trace-4.jsonl --top-k 1 -s 42"
+```
+⚠️ `--moe-trace` 只在 `--moe-paging explicit` 下激活（paging_manager 构造时才
+set_trace_file，moe-paging.cpp:60-61）；`os` 分页模式不写文件。
