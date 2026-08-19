@@ -190,6 +190,21 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
   90%，坐实"0.85 是短 trace 测量口径"。**同步修正决策门**：4GiB 预算 C/B = 1.08x、
   D/B = 1.09x（短 trace 是 1.14-1.15x）→ **≤4GiB 下 C/B < 1.10，静态热表决策门不再通过**；
   8GiB 档 C=0.9125 vs B=0.8430（+7pt）仍有利，属预算充足档。短 trace 的决策门是乐观上界。
+- **✅ 300-token 终局复核 + B 档真机铁证（`data/traces/trace-4.jsonl` + `data/bscan/cache-8192-300.log`）**：
+  - 采集：`research-cli --moe-paging explicit --moe-slots 256 --moe-trace <file>`，seed 42、
+    贪婪（--top-k 1）、固定中文 prompt、300 生成 token（302 段，12080 层调用）。⚠️
+    `--moe-trace` 只在 `paging_manager` 构造时激活（moe-paging.cpp:60-61），
+    `--moe-paging os` 下不写文件——采集必须显式分页。
+  - **compulsory 地板稀释到 5.8%**（121→13.7%、240→8.5%、300→5.8% 单调）；每层 unique
+    均值 ~200（n50 15-20、top20% 覆盖 0.50-0.74 不变）。
+  - 离线 LRU 仿真：**4GiB=0.9021（90% 位置提前到 4GiB）、8GiB=0.9396、12GiB（244 槽 ≥
+    最大层 unique 235）全覆盖无驱逐**。
+  - **真机 B 档 8GiB 实测命中率 = 0.9400**（hits=94471 misses=6027，evictions=421，
+    bytes_read=7.59GB）——与离线 0.9396 吻合到 **0.04%**，坐实 Qwen LRU 90% 位置 =
+    4-8GiB；300-token 下 LRU 直接越过 90%，与 trace-3 的 0.9086 同向且更高。
+  - **决策门终局：C/B = 1.06x < 1.10 → 静态热表不值得做 C++**（与 trace-3 的 1.08x
+    一致；trace-1 短 trace 的 1.14-1.15x 确为乐观上界，作废）。长 trace 下 LRU 自身
+    已逼近 compulsory 地板，静态 pin 无增量空间——本条覆盖"决策门通过"旧结论。
 - **C 档真机端到端（同日，4GiB 预算，cap63 热表 = pin 63 专家/层 + LRU 18 槽/层，
   `data/cscan/`）**：
   | 测试负载 | 热表来源 | miss | vs 无 pin |
@@ -210,6 +225,19 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
   - 实现发现：pin 专家总数 > 缓存槽数时驱逐路径抛 "no evictable MoE expert slot"
     （moe-cache.cpp:82/150）；4GiB 下 85 pin/层（离线热表满预算）必崩，cap ≤63/层正常。
   - 待办（可选）：pin/LRU 分配比扫描（如 40/41 vs 63/18 vs 0/81）定最优分账。
+
+**✅ Q3 GEMV 真机微基准（2026-08-19，Hygon C86-3G，WSL Ubuntu gcc 15.2，
+`pim/bench_q3_x86` 500 reps）**：专家权重 GEMV 是推理热路径，与算力墙结论直接相关。
+- 参数：cols=3584、Q3 8 值 {-4..3}、group=32；三档批量 64/512/20480 行（1/8/320 专家）。
+- **`opt(f32)` 4-way unroll 全档最快**：1.65-1.80 GB/s（3.3-3.6 GFLOP/s），x2.3-2.7 over
+  double scalar baseline（0.6-0.8 GB/s）。
+- **全部 AVX2 变体（gather/2pass/4row/8row）不及 opt(f32)**（x1.2-1.6）：`_mm256_i32gather_ps`
+  在这颗 Hygon（Zen 变体）上延迟高，查表+解码反被拖累；v3(8way) 寄存器压力大也不如 opt。
+- 8 线程仅在 320 专家大批量（pk=73.4MB）有效：2937 MB/s、x3.92；小批量无收益。
+- 结论：这颗 CPU 上 Q3 GEMV = 简单 fp32 + 4-way unroll 即最优；AVX2 查表花活被 gather
+  延迟吃光，多线程只在大批量划算。复现：`gcc -O3 -mavx2 -mfma -march=x86-64-v3 -o bench_q3_x86 bench_q3_x86.c -lm -lpthread && ./bench_q3_x86 500`。
+- 旁证（pim 参考内核，与主线 Q3 模型无关，仅归档）：MXFP4 double 逐位参考 ~170 MB/s、
+  f32 累加也只 x1.2——主瓶颈在 E2M1 查表 + wf 中转，不是累加精度。
 
 - 阻塞：需真实模型权重 + 作者引擎，0 资源无法离线生成（唯一 trace 为作者所有）。
 - **作者实验覆盖对照（已核验其仓库 README）**：
@@ -272,3 +300,6 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
 - [x] **开放项 A 真机闭环（2026-08-18）**：Qwen3.6-35B-A3B 真机 2 条独立 trace
       （`data/traces/`）→ 复用距离 = 幂律热尾（平滑）；静态银行 4GiB 即 0.93、
       12GiB 全驻留；C/B = 1.14-1.15x 决策门通过（`data/analysis/`）。
+- [x] **trace-4 终局 + B 档真机铁证（2026-08-19）**：300-token 长 trace 下 compulsory
+      稀释到 5.8%，LRU @4GiB=0.9021 / @8GiB=0.9396；真机 8GiB = **0.9400**（吻合 0.04%）。
+      决策门 C/B=1.06x < 1.10 → 静态热表不值得做 C++，开放项 A 全部闭合。
