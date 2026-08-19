@@ -619,3 +619,51 @@ wsl -d qwen -e bash -lc "/root/sparkmoe-fork/build/bin/research-cli -m /root/mod
 ```
 ⚠️ `--moe-trace` 只在 `--moe-paging explicit` 下激活（paging_manager 构造时才
 set_trace_file，moe-paging.cpp:60-61）；`os` 分页模式不写文件。
+
+---
+
+## 项目范围审查（2026-08-19）
+
+### 核心架构认知：PIM 引擎不需要理解模型格式
+
+模型格式解码（Q3/Q4/MXFP4）由 ggml 等现有库处理。PIM 硬件只认 int8 weights + fp16 scales。
+新模型格式出来，PIM 代码零改动，只改 CPU 侧 dequant 函数。权重在 DRAM 保持压缩，
+解码发生在 PIM 计算阵列内部（边读边解码，不回写 DRAM）。
+
+### 超范围（应停止）
+
+| 工作 | 文件 | 原因 |
+|------|------|------|
+| MXFP4 GEMV 10个变体 | bench_gemv.c v2-v9 | ggml/cuBLAS 已有工业级实现 |
+| Q3 GEMV 7个变体 | bench_q3.c | Q3 不是 PIM 目标格式 |
+| x86 AVX2 benchmark | bench_q3_x86.c | PIM 是内存侧计算，x86 内核无关 |
+| TT 芯片提交准备 | rtl/05_gemv/tt_* | 无商业价值（自评） |
+| 入门 RTL 练习 | rtl/01_counter/ 02_lru/ | 跟 PIM 研究无关 |
+
+核心问题：大量时间花在"CPU 上怎么算更快"，这是 ggml 的活。
+
+### 该做但没做（核心缺口）
+
+| 缺什么 | 优先级 | 说明 |
+|--------|--------|------|
+| CIM 阵列 RTL | P0 | DAC→SRAM阵列→ADC，模拟计算阵列，一行 Verilog 未写 |
+| PIM 驱动/主机接口 | P1 | 权重送入 PIM、触发计算、读回结果 |
+| 数据编排 | P1 | DRAM→PIM 搬运逻辑，double-buffering |
+| MoE 路由整合 | P2 | gate 计算跟 PIM 对接 |
+| CIM 周期精确仿真 | P2 | 现有 sim_cim 是精度模型不是性能模型 |
+| KV cache 联合预算 | P3 | 长上下文 KV 和专家缓存竞争 |
+
+### 已完成（正确范围内）
+
+- 缓存命中率分析（trace-1~4，真机验证 0.04% 吻合）
+- 三级预取白皮书
+- PIM 参考内核（mxfp4_gemv.c golden reference）
+- CIM 精度模型（sim_cim.c，DAC/ADC 位宽分析）
+- 数字外设 RTL（adder, scale, accumulator, dequant）
+- 调度器模型（sched3.v/sched4.v）
+- SparkMoE 源码分析 + patch
+- 真机 trace 采集 + 分析工具链
+
+### 下一步
+
+砍掉 GEMV 内核优化，全力补 CIM 阵列 RTL（P0）。
