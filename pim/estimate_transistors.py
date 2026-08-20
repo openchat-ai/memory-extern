@@ -9,7 +9,7 @@ print("=" * 60)
 # ===== 参数 =====
 MODELS = {
     "GDDR7 (12x128GB/s)": {"bw_gb": 12 * 128, "bw": 1.5e12, "mem_w": 40, "cost": 400},
-    "LPDDR5X (12x38GB/s)": {"bw_gb": 12 * 38, "bw": 460e9, "mem_w": 15, "cost": 350},
+    "LPDDR5X (12x38GB/s)": {"bw_gb": 460, "bw": 460e9, "mem_w": 15, "cost": 350},
 }
 MODEL_GB = 15.36  # Qwen3.6-35B-A3B Q3_K_S gguf
 CLOCK_GHZ = 1.0

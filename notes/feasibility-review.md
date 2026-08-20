@@ -113,16 +113,16 @@ Synopsys/Cadence LPDDR5X PHY + Controller 授权费：$500K-$2M。
 
 **预期结果**：如果 MPW < 100 万 RMB，预算可行。
 
-### 实验 5：MAC 阵列面积/功耗重算（1 天）
+### 实验 5：MAC 阵列面积/功耗重算（✅ 2026-08-20 已完成）
 
 **目的**：修正 252 MACs 为正确数字。
 
-**方法**：
-1. 基于 LPDDR5X 实际带宽重算所需 MAC 数
-2. 用 `estimate_transistors.py` 重新估算面积和功耗
-3. 对比 GEMV 吞吐是否满足需求
+**结果**：按 LPDDR5X 460 GB/s → **115 个 bf16 MAC**。
+- 脚本已同步（`pim/estimate_transistors.py` 带宽口径 460 GB/s）
+- die 面积 48.3 mm²（几乎不变，MAC 阵列仅 0.46M T，SRAM 2MB 占 87% 是面积大头）
+- 功耗 101W → **76W**（-25%）
 
-**预期结果**：128 MACs 可能就够了，省一半面积。
+**结论**：MAC 数修正对面积影响可忽略，瓶颈是 SRAM；功耗下降明显。
 
 ### 实验 6：已有 RTL 能否综合到 28nm（1-2 周）
 
