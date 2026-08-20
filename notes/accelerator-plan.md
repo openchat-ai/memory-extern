@@ -186,6 +186,32 @@ V2：同一 PCB，CIM 焊盘贴片，GEMV + CIM 混合计算
 | S3 | 固件二进制 | P0 | R9 | 芯片上的微码，运行在控制状态机上 |
 | S4 | llama.cpp 适配层 | P1 | S2 | 修改 ggml 后端，调用 SDK API |
 
+### 第三方 IP（需采购/授权）
+
+| 序号 | 模块 | 来源 | 优先级 | 说明 |
+|------|------|------|--------|------|
+| T1 | LPDDR5X PHY + Controller | Synopsys DesignWare / Cadence | P0 | 模拟 PHY，不可能自研，必须买 |
+| T2 | PCIe Gen4 x16 PHY + Controller | Synopsys / Cadence | P0 | 同上 |
+| T3 | Standard Cell Library | 华虹/中芯国际/GlobalFoundries | P0 | 28nm 工艺库 |
+| T4 | SRAM Compiler | ARM Artisan / Synopsys | P0 | 生成 2MB 片上 SRAM |
+| T5 | PLL / Clock Gen | Synopsys / ARM | P0 | 时钟生成 |
+| T6 | IO Pad Library | Foundry 提供 | P0 | 焊盘 IO |
+| T7 | JTAG Controller | ARM CoreSight / 开源 | P1 | 调试接口 |
+
+### 待定事项（需要调研后决定）
+
+| 序号 | 事项 | 影响 | 截止时间 |
+|------|------|------|---------|
+| D1 | LPDDR5X PHY 具体选哪家 | 直接影响芯片面积和功耗 | RTL 开始前 |
+| D2 | SRAM 容量最终定多少 | 2MB 是估算，需要模型验证 | 架构设计阶段 |
+| D3 | PCIe Gen4 还是 Gen5 | Gen5 带宽翻倍但功耗更高 | 架构设计阶段 |
+| D4 | 28nm 用哪家代工 | 华虹/中芯国际/联电/格芯，影响成本和性能 | 流片前 |
+| D5 | V1 是否需要 ECC | ECC 增加面积但提高可靠性 | 验证阶段 |
+| D6 | 驱动用 Linux 还是也要 Windows | Windows 驱动开发成本更高 | 软件栈开始前 |
+| D7 | 固件用 RISC-V 软核还是硬状态机 | RISC-V 灵活但增加面积 | RTL 开始前 |
+| D8 | CIM 接口协议具体定义 | V2 要用，V1 只预留 | V1 验证前 |
+| D9 | 三种容量的 BOM 成本差异 | 决定主推哪个型号 | PCB 设计前 |
+
 ## 项目阶段
 
 | 阶段 | 任务 | 时间 | 说明 |
