@@ -24,7 +24,7 @@ max_macs_util = max_macs * 0.85  # 85% 利用率
 print(f"理论最大 MAC: {max_macs:.0f}")
 print(f"85% 利用率下: {max_macs_util:.0f}")
 
-num_macs = 34  # Match bandwidth (was 115, too many for 4ch LPDDR5X)
+num_macs = 17  # Match bandwidth (34 was 239% oversubscribed)
 print(f"选择: {num_macs} MAC")
 
 # ===== 2. 各模块晶体管数 =====
@@ -35,11 +35,11 @@ t_per_mac = 4000
 total_mac = num_macs * t_per_mac
 print(f"MAC 阵列: {num_macs} × {t_per_mac:,}T = {total_mac:,}T ({total_mac/1e6:.1f}M)")
 
-# 4MB SRAM = 4096KB, 每 KB 约 20000 晶体管 (14nm 6T-SRAM cell)
-sram_kb = 4096
+# 2MB SRAM = 2048KB, 每 KB 约 20000 晶体管 (14nm 6T-SRAM cell)
+sram_kb = 2048
 t_per_sram_kb = 20000
 total_sram = sram_kb * t_per_sram_kb
-print(f"SRAM 4MB: {sram_kb}KB × {t_per_sram_kb:,}T = {total_sram:,}T ({total_sram/1e6:.1f}M)")
+print(f"SRAM 2MB: {sram_kb}KB × {t_per_sram_kb:,}T = {total_sram:,}T ({total_sram/1e6:.1f}M)")
 
 # LPDDR5X PHY: 4ch, 每 ch PHY 约 5M 晶体管 (14nm)
 lpddrx_phy = 4 * 5_000_000
@@ -158,12 +158,12 @@ print(f"\n" + "=" * 60)
 print(f"最终规格:")
 print(f"  工艺: 14nm FinFET (中芯国际)")
 print(f"  MAC 数: {num_macs}")
-print(f"  SRAM: 4MB")
-print(f"  内存: LPDDR5X 16GB (4ch)")
+print(f"  SRAM: 2MB")
+print(f"  内存: LPDDR5X 8GB (4ch)")
 print(f"  带宽: {lpddrx_bw_gbs:.0f} GB/s")
 print(f"  面积: {die_area:.1f} mm²")
 print(f"  功耗: {total_power:.1f}W")
 print(f"  晶体管: {total/1e9:.2f}B")
 print(f"  接口: PCIe Gen4 x16 + SerDes 4×")
-print(f"  多芯片: 2-8 颗互连")
+print(f"  多芯片: 2-14 颗互连")
 print(f"=" * 60)
