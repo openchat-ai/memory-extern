@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/bin/bash
 # opt.sh — 05_gemv 一键面积报告（严谨口径，可复现）
 #
 # 口径（对齐 OpenLane 流片流程）：
@@ -34,18 +34,32 @@ blocks=[b for b in re.split(r'\n=== \d+\.', lines) if 'sky130_fd_sc_hd__' in b]
 last=blocks[-1] if blocks else ''
 tot=0
 for line in last.splitlines():
-    m=re.match(r'\s*(\d+)\s+(sky130_fd_sc_hd__\S+)\s*$', line.rstrip())
-    if m: tot+=int(m.group(1))
+    m=re.match(r'\s*(sky130_fd_sc_hd__\S+)\s+(\d+)\s*$', line.rstrip())
+    if m: tot+=int(m.group(2))
 print(tot)
 PY
 }
 
 synth_flat() {    # <label> <top> <files> <script> <log>
     local label=$1 top=$2 files=$3 script=$4 log=$5
-    timeout 90 yosys -p "$readlib; read_verilog $files; synth -top $top; \
-flatten; dfflibmap -liberty $LIB; abc -liberty $LIB $script; stat" > "$log" 2>&1 \
-      && stats_cells "$log" \
-      || { echo 0; }
+    local tcl
+    tcl=$(mktemp --suffix=.tcl)
+    {
+        echo "$readlib"
+        echo "read_verilog $files"
+        echo "synth -top $top"
+        echo "flatten"
+        echo "dfflibmap -liberty $LIB"
+        [ -n "$script" ] && echo "abc -liberty $LIB -script $script" || echo "abc -liberty $LIB"
+        echo "stat"
+    } > "$tcl"
+    if timeout 90 yosys < "$tcl" > "$log" 2>&1; then
+        rm -f "$tcl"
+        stats_cells "$log"
+    else
+        rm -f "$tcl"
+        echo 0
+    fi
 }
 
 matrix() {

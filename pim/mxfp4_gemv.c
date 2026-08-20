@@ -7,6 +7,8 @@
  */
 #include "mxfp4_gemv.h"
 
+#include <stddef.h>
+#include <stdint.h>
 #include <math.h>
 
 /* Pair table: byte -> {low-nibble value, high-nibble value}. Low nibble = EVEN

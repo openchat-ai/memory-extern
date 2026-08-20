@@ -1,3 +1,4 @@
+.*q8_0(
 __pycache__/
 *.pyc
 *.pyo
@@ -25,6 +26,26 @@ rtl/05_gemv/tb_bf16
 rtl/05_gemv/tb_s16
 rtl/05_gemv/tb_wrap16
 rtl/05_gemv/gen_bf16_cases
+rtl/05_gemv/gen_bf16_scale_cases
+rtl/05_gemv/gen_add_cases_ffpc
+rtl/05_gemv/synth_check.tcl
+rtl/05_gemv/synth.tcl
+rtl/05_gemv/synth2.tcl
+rtl/05_gemv/synth3.tcl
+rtl/05_gemv/test.tcl
+rtl/05_gemv/test_nan
+rtl/05_gemv/test_nan.c
+rtl/05_gemv/test_nan2
+rtl/05_gemv/test_nan2.c
+rtl/05_gemv/help.tcl
+rtl/05_gemv/opt_m_*.log
+rtl/05_gemv/opt_*.log
+rtl/05_gemv/e2e_cmp
+rtl/05_gemv/statt
+rtl/06_sched/tb_sched
+rtl/06_sched/tb_sched4
+rtl/06_sched/sched4_log.v
+rtl/06_sched/sched3_log.v
 # 实验数据大文件
 data/pim/*.f32
 data/pim/*.f16
