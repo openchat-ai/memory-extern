@@ -716,15 +716,28 @@ set_trace_file，moe-paging.cpp:60-61）；`os` 分页模式不写文件。
 
 核心问题：大量时间花在"CPU 上怎么算更快"，这是 ggml 的活。
 
-### 该做但没做（核心缺口）
+### 两条 PIM 路线的区别（2026-08-19 澄清）
+
+| | PIM-DIMM（本项目选定路线） | SRAM-based CIM（不采用） |
+|---|---|---|
+| 存储 | 通用 DRAM（买现成的） | 自造 SRAM 阵列 |
+| 计算 | 数字芯片（已写好 RTL） | SRAM cell 本身做计算 |
+| 需要设计的 | 数字芯片 ASIC + PCB | 整颗芯片（存储+模拟+ADC+数字） |
+| 接口 | DDR4 DIMM 插槽 | 定制 |
+| 难度 | 低（纯数字） | 极高（模拟+混合信号） |
+
+**结论**：CIM 阵列（DAC→SRAM阵列→ADC）是 SRAM-based CIM 的东西，PIM-DIMM 不需要。
+
+### 该做但没做（PIM-DIMM 路线缺口）
 
 | 缺什么 | 优先级 | 说明 |
 |--------|--------|------|
-| CIM 阵列 RTL | P0 | DAC→SRAM阵列→ADC，模拟计算阵列，一行 Verilog 未写 |
-| PIM 驱动/主机接口 | P1 | 权重送入 PIM、触发计算、读回结果 |
-| 数据编排 | P1 | DRAM→PIM 搬运逻辑，double-buffering |
+| 数字芯片 ASIC 综合 | P0 | 已验证的 RTL → 综合 → 布局布线 → GDSII |
+| PCB 设计 | P0 | 数字芯片 + DRAM 焊在同一块 DIMM PCB 上 |
+| DDR4 接口控制器 | P1 | 数字芯片与 DRAM 之间的 DDR 协议对接 |
+| PIM 驱动/主机接口 | P1 | CPU 侧驱动：写权重到 PIM-DIMM、触发计算、读回结果 |
+| 数据编排 | P1 | DRAM→数字芯片搬运逻辑，double-buffering |
 | MoE 路由整合 | P2 | gate 计算跟 PIM 对接 |
-| CIM 周期精确仿真 | P2 | 现有 sim_cim 是精度模型不是性能模型 |
 | KV cache 联合预算 | P3 | 长上下文 KV 和专家缓存竞争 |
 
 ### 已完成（正确范围内）
@@ -733,14 +746,14 @@ set_trace_file，moe-paging.cpp:60-61）；`os` 分页模式不写文件。
 - 三级预取白皮书
 - PIM 参考内核（mxfp4_gemv.c golden reference）
 - CIM 精度模型（sim_cim.c，DAC/ADC 位宽分析）
-- 数字外设 RTL（adder, scale, accumulator, dequant）
-- 调度器模型（sched3.v/sched4.v）
+- 数字外设 RTL（adder, scale, accumulator, dequant）—— **已通过 iverilog 全回归验证**
+- 调度器模型（sched3.v/sched4.v）—— **已通过 iverilog 验证**
 - SparkMoE 源码分析 + patch
 - 真机 trace 采集 + 分析工具链
 
 ### 下一步
 
-砍掉 GEMV 内核优化，全力补 CIM 阵列 RTL（P0）。
+砍掉 GEMV 内核优化和 CIM 阵列方向，走 PIM-DIMM 路线：综合已有 RTL → ASIC + PCB。
 
 ## PIM 全 GEMV 卸载收益模型（2026-08-19 正式化，`tools/pim_full_unload_model.py`）
 
