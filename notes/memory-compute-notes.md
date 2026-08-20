@@ -746,8 +746,8 @@ set_trace_file，moe-paging.cpp:60-61）；`os` 分页模式不写文件。
 - 三级预取白皮书
 - PIM 参考内核（mxfp4_gemv.c golden reference）
 - CIM 精度模型（sim_cim.c，DAC/ADC 位宽分析）
-- 数字外设 RTL（adder, scale, accumulator, dequant）—— **已通过 iverilog 全回归验证**
-- 调度器模型（sched3.v/sched4.v）—— **已通过 iverilog 验证**
+- 数字外设 RTL（adder, scale, accumulator, dequant）—— **有 testbench（check.sh），但未在 WSL 跑通（iverilog/vvp/yosys 未安装），未经验证**
+- 调度器模型（sched3.v/sched4.v）—— **有 testbench，但未验证**
 - SparkMoE 源码分析 + patch
 - 真机 trace 采集 + 分析工具链
 

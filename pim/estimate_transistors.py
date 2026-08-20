@@ -1,86 +1,70 @@
 #!/usr/bin/env python3
-"""估算 GEMV-only 芯片的晶体管数量"""
+"""估算 LLM 推理 GEMV 芯片的晶体管/功耗/性能（GDDR7 / LPDDR5X 双模式）"""
 import math
 
 print("=" * 60)
-print("GEMV 芯片晶体管估算")
+print("LLM 推理 GEMV 芯片估算")
 print("=" * 60)
 
 # ===== 参数 =====
-gddr6x_bandwidth_gbs = 384 * 21 / 8  # GB/s
-print(f"\n内存带宽（GDDR6X 384-bit）: {gddr6x_bandwidth_gbs:.0f} GB/s")
+MODELS = {
+    "GDDR7 (12x128GB/s)": {"bw_gb": 12 * 128, "bw": 1.5e12, "mem_w": 40, "cost": 400},
+    "LPDDR5X (12x38GB/s)": {"bw_gb": 12 * 38, "bw": 460e9, "mem_w": 15, "cost": 350},
+}
+MODEL_GB = 15.36  # Qwen3.6-35B-A3B Q3_K_S gguf
+CLOCK_GHZ = 1.0
 
-model_size_gb = 14  # 7B bf16
-clock_ghz = 1.0
+for label, m in MODELS.items():
+    print(f"\n{'=' * 60}")
+    print(f"模式: {label}  ({m['bw_gb']:.0f} GB/s)")
+    print(f"{'=' * 60}")
+    bw = m["bw_gb"]
 
-# ===== 计算需求 =====
-bytes_per_mac = 2 * 2  # 2 bf16 = 4 bytes
-macs_per_second = gddr6x_bandwidth_gbs * 1e9 / bytes_per_mac
-print(f"内存带宽可支撑的 MAC 速率: {macs_per_second/1e9:.0f} GMAC/s")
+    bytes_per_mac = 2 * 2
+    macs_per_second = bw * 1e9 / bytes_per_mac
+    print(f"  内存带宽可支撑 MAC 速率: {macs_per_second/1e9:.0f} GMAC/s")
 
-macs_per_unit_per_second = clock_ghz * 1e9
-num_mac_units = math.ceil(macs_per_second / macs_per_unit_per_second)
-print(f"饱和内存带宽需要的 MAC 单元数: {num_mac_units}")
+    num_mac = math.ceil(macs_per_second / (CLOCK_GHZ * 1e9))
+    print(f"  饱和带宽需要的 MAC 单元数: {num_mac}")
 
-# ===== 晶体管估算 =====
-print("\n--- 各模块晶体管数 ---")
+    # ===== 晶体管 =====
+    T_MAC = num_mac * 4000
+    T_SRAM = 2 * 1024 * 1024 * 8 * 20  # 2MB
+    T_MEM = 4 * 5_000_000
+    T_PCIE = 15_000_000
+    T_CTRL = 10_000_000
+    T_OTHER = 5_000_000
+    T_TOTAL = T_MAC + T_SRAM + T_MEM + T_PCIE + T_CTRL + T_OTHER
 
-transistors_per_mac = 4000
-total_mac = num_mac_units * transistors_per_mac
-print(f"MAC 阵列: {num_mac_units} x {transistors_per_mac}T = {total_mac:,}T ({total_mac/1e6:.1f}M)")
+    print(f"\n--- 晶体管 ---")
+    print(f"  MAC 阵列 ({num_mac}x4k):  {T_MAC:>10,}T ({T_MAC/1e6:.1f}M)")
+    print(f"  SRAM 2MB:                {T_SRAM:>10,}T ({T_SRAM/1e6:.1f}M)")
+    print(f"  内存控制器:              {T_MEM:>10,}T ({T_MEM/1e6:.1f}M)")
+    print(f"  PCIe Gen4 x16:           {T_PCIE:>10,}T ({T_PCIE/1e6:.1f}M)")
+    print(f"  控制逻辑:                {T_CTRL:>10,}T ({T_CTRL/1e6:.1f}M)")
+    print(f"  其他:                    {T_OTHER:>10,}T ({T_OTHER/1e6:.1f}M)")
+    print(f"  {'─'*40}")
+    print(f"  总计:                    {T_TOTAL:>10,}T ({T_TOTAL/1e6:.1f}M = {T_TOTAL/1e9:.2f}B)")
 
-sram_bytes = 2 * 1024 * 1024
-total_sram = sram_bytes * 8 * 20
-print(f"SRAM 2MB: {total_sram:,}T ({total_sram/1e6:.1f}M)")
+    # ===== 面积 =====
+    DIE_DENSITY = 8e6  # 28nm
+    area = T_TOTAL / DIE_DENSITY
+    print(f"\n--- 28nm 面积 ({DIE_DENSITY/1e6:.0f}M T/mm²) ---")
+    print(f"  {area:.1f} mm²  (RTX 3090: 628 mm² @ 8nm, 比例 1/{628/area:.0f})")
 
-total_gddr6x = 4 * 5_000_000
-print(f"GDDR6X 控制器: {total_gddr6x:,}T ({total_gddr6x/1e6:.1f}M)")
+    # ===== 功耗 =====
+    cap_ff, volt, alpha = 1.0, 0.9, 0.15
+    dW = T_TOTAL * alpha * (cap_ff * 1e-15 * volt**2) * CLOCK_GHZ * 1e9
+    print(f"\n--- 功耗 ---")
+    print(f"  动态: {dW:.1f}W")
+    print(f"  含静态 30%: {dW*1.3:.1f}W")
+    print(f"  内存颗粒: {m['mem_w']}W")
+    print(f"  总计: {dW*1.3 + m['mem_w']:.0f}W")
 
-pcie = 15_000_000
-print(f"PCIe Gen4 x16: {pcie:,}T ({pcie/1e6:.1f}M)")
-
-control = 10_000_000
-print(f"控制逻辑: {control:,}T ({control/1e6:.1f}M)")
-
-other = 5_000_000
-print(f"其他: {other:,}T ({other/1e6:.1f}M)")
-
-total = total_mac + total_sram + total_gddr6x + pcie + control + other
-
-print("\n" + "=" * 60)
-print(f"总计: {total:,}T = {total/1e6:.1f}M = {total/1e9:.2f}B")
-print("=" * 60)
-
-print(f"\n--- 对比 ---")
-print(f"RTX 3090:  28.3B (283 亿)")
-print(f"我们的芯片: {total/1e9:.2f}B ({total/1e6:.0f}M)")
-print(f"比例: 1/{283e9/total:.0f}")
-
-# ===== 芯片面积 =====
-die_area = total / 8e6
-print(f"\n--- 28nm 芯片面积 ---")
-print(f"密度: 8M T/mm2")
-print(f"面积: {die_area:.1f} mm2")
-print(f"RTX 3090: 628 mm2 (8nm)")
-print(f"比例: 1/{628/die_area:.0f}")
-
-# ===== 功耗 =====
-# P = C * V^2 * f * N * alpha
-# 28nm: C ~1fF/transistor, V ~0.9V, f = 1GHz, alpha = activity factor
-cap_per_transistor_ff = 1.0  # fF
-voltage_v = 0.9
-alpha = 0.15  # 15% overall activity (SRAM mostly idle)
-energy_per_switch = cap_per_transistor_ff * 1e-15 * voltage_v**2  # Joules
-dynamic_w = total * alpha * energy_per_switch * clock_ghz * 1e9
-print(f"\n--- 功耗 ---")
-print(f"动态: {dynamic_w:.1f}W")
-print(f"含静态 (~30%): {dynamic_w*1.3:.1f}W")
-
-# ===== 性能 =====
-t_per_token = model_size_gb / gddr6x_bandwidth_gbs * 1000
-tps = 1000 / t_per_token
-print(f"\n--- LLM 推理 (7B bf16) ---")
-print(f"每 token: {model_size_gb} GB 数据搬运")
-print(f"耗时: {t_per_token:.1f} ms")
-print(f"吞吐: {tps:.1f} tok/s")
-print(f"RTX 3090 实际: ~30-40 tok/s")
+    # ===== 性能 =====
+    tms = MODEL_GB / bw * 1000
+    tps = 1000 / tms
+    print(f"\n--- LLM 推理 ({MODEL_GB}GB Q3_K_S) ---")
+    print(f"  每 token: {tms:.2f} ms")
+    print(f"  吞吐: {tps:.1f} tok/s")
+    print(f"  芯片成本: ${m['cost']}")

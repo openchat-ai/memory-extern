@@ -31,7 +31,7 @@
 | SRAM CIM 阵列（独立模块） | V2 做，V1 不做 |
 | CIM 阵列 RTL（DAC→SRAM→ADC） | 属于 V2 CIM 芯片，不在 V1 主芯片内 |
 | CPU 端 GEMV 内核优化（NEON/AVX2） | ggml 的活，不是芯片的活 |
-| MXFP4 E2M1 引擎 | 真实权重精度不够，已证伪 |
+| MXFP4 E2M1 引擎 | 真实权重精度不够（p50(max_err)=31%，DAC/ADC 不叠加），已证伪 |
 | Q3/Q4 CPU benchmark | 芯片不做 CPU 侧优化 |
 | TT 芯片提交 | 无商业价值 |
 | 三级预取调度器（sched3/sched4） | 属于缓存架构，芯片不做缓存 |
@@ -275,6 +275,23 @@ V2：同一 PCB，CIM 焊盘贴片，GEMV + CIM 混合计算
 | 服务器（仿真） | 5-10 万 | 5-10 万 |
 | 团队 | 100-200 万 | 150-300 万 |
 | **合计** | **150-300 万** | **190-400 万** |
+
+## PIM 精度模拟结果（2026-08-20，`tools/pim_sim_full.py`，733 tensor / 472 有效）
+
+```
+mxfp4            p50(max_err) = 3.1e-1    ← cell 表示饱和（8 档电平不够）
+int8_blk32       p50           = 1.1e-2    ← cell + DAC10 + ADC12 + noise 全部叠加
+int8_blk256      p50           = 1.4e-2
+int6_blk32       p50           = 3.4e-2    ← 边界可用
+dac_adc_only     p50           = 2.9e-3    ← 外围量化不是瓶颈
+cell_only_int8   p50           = 8.1e-3    ← 纯 cell 量化误差
+```
+
+结论：
+1. MXFP4 精度不可用（p50=31%），DAC/ADC 噪声在此之上不叠加
+2. 8-bit uniform cell (blk32) 精度可行（p50=1.1%），源量化类型差异 <2×
+3. 6-bit cell 边界可用（p50=3.4%）
+4. PIM 精度不是瓶颈，带宽才是。PIM 硬件方向仍取决于能否做足够高的带宽
 
 ## 推广路径
 
