@@ -42,6 +42,8 @@ def mxfp4_repr(w, block=32):
     """MXFP4（E2M1 + 8bit 块级 scale）权重表示，与 sim_cim.c 口径一致。
     档位 = 1,1.5,2,3,4,6,8,12（E2M1：mant 1.0/1.5 × 2^e, e=0..3），块 scale 为 2 的幂。"""
     rows, d0 = w.shape
+    if d0 < block:
+        return quant_levels(w, 4)  # fallback uniform for tiny d0
     Wb = w.reshape(rows, d0 // block, block)
     s = np.sign(Wb)
     a = np.abs(Wb)
@@ -62,8 +64,12 @@ def cell_repr(w, bits, block=None, mxfp4=False):
     if bits is None:
         return w.copy()
     if mxfp4:
+        if w.shape[1] < (block if block else 32):
+            return quant_levels(w, bits)
         return mxfp4_repr(w, block if block else 32)
     if block is None:
+        block = w.shape[1]
+    if block > w.shape[1]:
         block = w.shape[1]
     rows, d0 = w.shape
     if d0 % block != 0:
