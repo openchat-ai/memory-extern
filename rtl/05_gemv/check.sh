@@ -1,4 +1,4 @@
-#!/data/data/com.termux/files/usr/bin/bash
+#!/bin/bash
 # check.sh — 05_gemv 全套回归（含 fixture 完整性自愈 + 可综合性检查）
 # ① C 语料 20022  ② fixture 64 行  ③ edge 48 行  ④ 独立 Python ~1M  ⑤ yosys synth
 set -e
@@ -30,7 +30,7 @@ check_tb() {                          # <label> <vvp_target>
 }
 
 FIXTURE=../../pim/fixture_mxfp4.bin
-[ -x gen_fixture ]   || cc -O2 -o gen_fixture gen_fixture.c
+[ -x gen_fixture ]   || cc -O2 -I../../pim -o gen_fixture gen_fixture.c
 [ -x gen_add_cases ] || cc -O2 -o gen_add_cases gen_add_cases.c
 [ -x gen_mac_edge ]  || cc -O2 -ffp-contract=off -o gen_mac_edge gen_mac_edge.c ../../pim/mxfp4_gemv.c -lm
 
@@ -72,7 +72,9 @@ iverilog -g2012 -Wall -o tb_py f32_add.v py_run.v
 check_tb "独立参考" tb_py
 
 echo "== [5/7] 可综合性检查 (yosys synth) =="
-yosys -q -p "read_verilog -sv f32_add.v periph_scale.v periph_mac.v; synth -top periph_mac; write_verilog -noattr synth_05.v"
+printf "read_verilog -sv f32_add.v periph_scale.v periph_mac.v\nsynth -top periph_mac\nwrite_verilog -noattr synth_05.v\n" > synth_check.tcl
+yosys < synth_check.tcl >/dev/null 2>&1
+rm -f synth_check.tcl
 [ "$(grep -c 'module' synth_05.v)" -ge 1 ] || { echo "!! synth 无输出模块"; exit 1; }
 echo "synth OK ($(grep -c 'module' synth_05.v) 模块)"
 rm -f synth_05.v

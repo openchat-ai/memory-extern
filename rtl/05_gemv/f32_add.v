@@ -152,11 +152,11 @@ module f32_add (
 
     always @(*) begin
         if (a_nan || b_nan) begin
-            // C（ARM FADD）传播第一个 NaN 操作数，SNaN 静默化（mantissa bit22 置 1）
-            y = a_nan ? {a_s, 8'hFF, (a_m | 23'h400000)}
-                      : {b_s, 8'hFF, (b_m | 23'h400000)};
+            // ARM FADD: 传播第二个 NaN 操作数（SNaN 静默化，bit22=1）
+            y = b_nan ? {b_s, 8'hFF, (b_m | 23'h400000)}
+                      : {a_s, 8'hFF, (a_m | 23'h400000)};
         end else if (a_inf && b_inf) begin
-            y = (a_s == b_s) ? {a_s, 8'hFF, 23'd0} : 32'h7FC0_0000;
+            y = (a_s == b_s) ? {a_s, 8'hFF, 23'd0} : {b_s, 8'hFF, 23'h400000};
         end else if (a_inf || b_inf) begin
             y = {a_inf ? a_s : b_s, 8'hFF, 23'd0};
         end else if (result_zero) begin
