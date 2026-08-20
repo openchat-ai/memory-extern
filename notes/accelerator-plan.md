@@ -165,52 +165,52 @@ V2：同一 PCB，CIM 焊盘贴片，GEMV + CIM 混合计算
 
 ### 待写模块（V1 必须）
 
-| 序号 | 模块 | 优先级 | 依赖 | 说明 |
-|------|------|--------|------|------|
-| R1 | LPDDR5X 内存控制器 | P0 | — | 8 通道，460 GB/s，支持长鑫/Samsung/SK Hynix |
-| R2 | PCIe Gen4 x16 控制器 | P0 | — | BAR 映射、DMA、中断 |
-| R3 | DMA 引擎 | P0 | R1, R2 | DRAM ↔ 片上 SRAM 搬运，double-buffering |
-| R4 | 命令解码器 | P0 | R2 | 接收主机命令：加载权重、触发推理、读回结果 |
-| R5 | GEMV 阵列顶层 | P0 | 已有模块 | 252 个 bf16 MAC 并行，连接已有 add/scale/dequant |
-| R6 | 片上 SRAM 控制器 | P0 | R1 | 2MB SRAM buffer，读写调度 |
-| R7 | 顶层模块 | P0 | R1-R6 | 所有模块互联，时钟复位 |
-| R8 | CIM 接口（预留） | P1 | R7 | V1 不连，只留信号和时序规范 |
-| R9 | 固件/微码 ROM | P1 | R7 | 芯片启动、命令分发、状态机 |
+| 序号 | 模块 | 优先级 | 状态 | 依赖 | 说明 |
+|------|------|--------|------|------|------|
+| R1 | LPDDR5X 内存控制器 | P0 | ⬜ 未开始 | — | 8 通道，460 GB/s，支持长鑫/Samsung/SK Hynix |
+| R2 | PCIe Gen4 x16 控制器 | P0 | ⬜ 未开始 | — | BAR 映射、DMA、中断 |
+| R3 | DMA 引擎 | P0 | ⬜ 未开始 | R1, R2 | DRAM ↔ 片上 SRAM 搬运，double-buffering |
+| R4 | 命令解码器 | P0 | ⬜ 未开始 | R2 | 接收主机命令：加载权重、触发推理、读回结果 |
+| R5 | GEMV 阵列顶层 | P0 | ⬜ 未开始 | 已有模块 | 252 个 bf16 MAC 并行，连接已有 add/scale/dequant |
+| R6 | 片上 SRAM 控制器 | P0 | ⬜ 未开始 | R1 | 2MB SRAM buffer，读写调度 |
+| R7 | 顶层模块 | P0 | ⬜ 未开始 | R1-R6 | 所有模块互联，时钟复位 |
+| R8 | CIM 接口（预留） | P1 | ⬜ 未开始 | R7 | V1 不连，只留信号和时序规范 |
+| R9 | 固件/微码 ROM | P1 | ⬜ 未开始 | R7 | 芯片启动、命令分发、状态机 |
 
 ### 待写模块（软件栈）
 
-| 序号 | 模块 | 优先级 | 依赖 | 说明 |
-|------|------|--------|------|------|
-| S1 | Linux 内核驱动 | P0 | R2 | PCIe 枚举、BAR 映射、DMA、中断 |
-| S2 | 用户态 SDK | P0 | S1 | API：`load_weights()`、`infer()`、`read_result()` |
-| S3 | 固件二进制 | P0 | R9 | 芯片上的微码，运行在控制状态机上 |
-| S4 | llama.cpp 适配层 | P1 | S2 | 修改 ggml 后端，调用 SDK API |
+| 序号 | 模块 | 优先级 | 状态 | 依赖 | 说明 |
+|------|------|--------|------|------|------|
+| S1 | Linux 内核驱动 | P0 | ⬜ 未开始 | R2 | PCIe 枚举、BAR 映射、DMA、中断 |
+| S2 | 用户态 SDK | P0 | ⬜ 未开始 | S1 | API：`load_weights()`、`infer()`、`read_result()` |
+| S3 | 固件二进制 | P0 | ⬜ 未开始 | R9 | 芯片上的微码，运行在控制状态机上 |
+| S4 | llama.cpp 适配层 | P1 | ⬜ 未开始 | S2 | 修改 ggml 后端，调用 SDK API |
 
 ### 第三方 IP（需采购/授权）
 
-| 序号 | 模块 | 来源 | 优先级 | 说明 |
-|------|------|------|--------|------|
-| T1 | LPDDR5X PHY + Controller | Synopsys DesignWare / Cadence | P0 | 模拟 PHY，不可能自研，必须买 |
-| T2 | PCIe Gen4 x16 PHY + Controller | Synopsys / Cadence | P0 | 同上 |
-| T3 | Standard Cell Library | 华虹/中芯国际/GlobalFoundries | P0 | 28nm 工艺库 |
-| T4 | SRAM Compiler | ARM Artisan / Synopsys | P0 | 生成 2MB 片上 SRAM |
-| T5 | PLL / Clock Gen | Synopsys / ARM | P0 | 时钟生成 |
-| T6 | IO Pad Library | Foundry 提供 | P0 | 焊盘 IO |
-| T7 | JTAG Controller | ARM CoreSight / 开源 | P1 | 调试接口 |
+| 序号 | 模块 | 来源 | 优先级 | 状态 | 说明 |
+|------|------|------|--------|------|------|
+| T1 | LPDDR5X PHY + Controller | Synopsys DesignWare / Cadence | P0 | ⬜ 未开始 | 模拟 PHY，不可能自研，必须买 |
+| T2 | PCIe Gen4 x16 PHY + Controller | Synopsys / Cadence | P0 | ⬜ 未开始 | 同上 |
+| T3 | Standard Cell Library | 华虹/中芯国际/GlobalFoundries | P0 | ⬜ 未开始 | 28nm 工艺库 |
+| T4 | SRAM Compiler | ARM Artisan / Synopsys | P0 | ⬜ 未开始 | 生成 2MB 片上 SRAM |
+| T5 | PLL / Clock Gen | Synopsys / ARM | P0 | ⬜ 未开始 | 时钟生成 |
+| T6 | IO Pad Library | Foundry 提供 | P0 | ⬜ 未开始 | 焊盘 IO |
+| T7 | JTAG Controller | ARM CoreSight / 开源 | P1 | ⬜ 未开始 | 调试接口 |
 
 ### 待定事项（需要调研后决定）
 
-| 序号 | 事项 | 优先级 | 影响 | 截止时间 |
-|------|------|--------|------|---------|
-| D1 | LPDDR5X PHY 具体选哪家 | P0 | 直接影响芯片面积和功耗 | RTL 开始前 |
-| D2 | SRAM 容量最终定多少 | P0 | 2MB 是估算，需要模型验证 | 架构设计阶段 |
-| D3 | PCIe Gen4 还是 Gen5 | P1 | Gen5 带宽翻倍但功耗更高 | 架构设计阶段 |
-| D4 | 28nm 用哪家代工 | P0 | 华虹/中芯国际/联电/格芯，影响成本和性能 | 流片前 |
-| D5 | V1 是否需要 ECC | P1 | ECC 增加面积但提高可靠性 | 验证阶段 |
-| D6 | 驱动用 Linux 还是也要 Windows | P1 | Windows 驱动开发成本更高 | 软件栈开始前 |
-| D7 | 固件用 RISC-V 软核还是硬状态机 | P0 | RISC-V 灵活但增加面积 | RTL 开始前 |
-| D8 | CIM 接口协议具体定义 | P1 | V2 要用，V1 只预留 | V1 验证前 |
-| D9 | 三种容量的 BOM 成本差异 | P1 | 决定主推哪个型号 | PCB 设计前 |
+| 序号 | 事项 | 优先级 | 状态 | 影响 | 截止时间 |
+|------|------|--------|------|------|---------|
+| D1 | LPDDR5X PHY 具体选哪家 | P0 | ⬜ 未开始 | 直接影响芯片面积和功耗 | RTL 开始前 |
+| D2 | SRAM 容量最终定多少 | P0 | ⬜ 未开始 | 2MB 是估算，需要模型验证 | 架构设计阶段 |
+| D3 | PCIe Gen4 还是 Gen5 | P1 | ⬜ 未开始 | Gen5 带宽翻倍但功耗更高 | 架构设计阶段 |
+| D4 | 28nm 用哪家代工 | P0 | ⬜ 未开始 | 华虹/中芯国际/联电/格芯，影响成本和性能 | 流片前 |
+| D5 | V1 是否需要 ECC | P1 | ⬜ 未开始 | ECC 增加面积但提高可靠性 | 验证阶段 |
+| D6 | 驱动用 Linux 还是也要 Windows | P1 | ⬜ 未开始 | Windows 驱动开发成本更高 | 软件栈开始前 |
+| D7 | 固件用 RISC-V 软核还是硬状态机 | P0 | ⬜ 未开始 | RISC-V 灵活但增加面积 | RTL 开始前 |
+| D8 | CIM 接口协议具体定义 | P1 | ⬜ 未开始 | V2 要用，V1 只预留 | V1 验证前 |
+| D9 | 三种容量的 BOM 成本差异 | P1 | ⬜ 未开始 | 决定主推哪个型号 | PCB 设计前 |
 
 ## 项目阶段
 
