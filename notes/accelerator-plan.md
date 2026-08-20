@@ -216,13 +216,30 @@ V2：同一 PCB，CIM 焊盘贴片，GEMV + CIM 混合计算
 
 | # | 事项 | 怎么做 | 耗时 | 状态 | 优先级 |
 |---|------|--------|------|------|--------|
-| P1 | 测 EPYC 真实带宽 | `gcc -O2 stream.c -o stream && ./stream` | 1 小时 | ⬜ 未开始 | P0 |
+| P1 | 测 EPYC 真实带宽 | `gcc -O2 stream.c -o stream && ./stream` | 1 小时 | ✅ 已完成（29.3 GB/s Copy） | P0 |
 | P2 | 修正 MAC 数 + 重算 14nm | 252→115，用 14nm 参数重算面积/功耗 | 1 天 | ⬜ 未开始 | P0 |
 | P3 | 联系芯动科技问价 | 发邮件问 LPDDR5X PHY **14nm** 授权费 | 2 周 | ⬜ 未开始 | P0 |
 | P4 | 找代工厂报价 | **中芯国际 14nm MPW** 价格 | 2 周 | ⬜ 未开始 | P0 |
 | P5 | 找投资 | 需要 500-1000 万启动 | 持续 | ⬜ 未开始 | P0 |
 
 **做完 P1/P3/P4 才知道项目能不能活。P5 决定要不要继续。**
+
+### P1 实测明细（2026-08-20）
+
+- 机器：海光 Hygon C86-3G（Zen 架构，EPYC 同源），8 核 16 线程，32GB DDR4
+- 环境：WSL2 Ubuntu + gcc 15.2，`-O2 -march=native -fopenmp`，16 线程
+- 方法：STREAM v5.10，数组 4×488MB（2GB 总量，超出 L3），NTIMES=10
+- 结果（MB/s，取 min time）：
+
+| 内核 | 单线程 | 16 线程 |
+|------|--------|---------|
+| Copy | 20,782 | 29,343 |
+| Scale | 11,103 | 16,587 |
+| Add | 14,566 | 18,257 |
+| Triad | 14,265 | 18,033 |
+
+- 结论：实测峰值 ~29 GB/s（Copy），远低于计划假设的 LPDDR5X 460 GB/s（差 16×）。EPYC 实际跑 GEMV 时**内存带宽是硬瓶颈**，不是算力。V1 芯片若只靠 LPDDR5X 直焊，单 die 460 GB/s 的假设需按实际 PHY 能力重估。
+- 源码留存：`C:\Users\ADMINI~1\AppData\Local\Temp\opencode\stream.c` / `stream_omp.c`（临时目录）
 
 ## 项目阶段
 
