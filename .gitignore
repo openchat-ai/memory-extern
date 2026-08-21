@@ -51,6 +51,7 @@ data/pim/*.f32
 data/pim/*.f16
 data/pim/*.bin
 data/pim/*.hugedata
+<<<<<<< HEAD
 
 # 仿真/构建产物
 obj_dir/
@@ -69,3 +70,7 @@ rtl/11_phy_complete/sim/
 
 # 上游开源 PHY 克隆（内嵌 .git，本地依赖不入库；克隆方法见 rtl/10_phy_final/README.md）
 rtl/07_phy_wavious/
+
+# pim 芯片模拟器构建产物
+pim/research-cli/bench_chip
+>>>>>>> 2d07d13 (添加 pim/research-cli 扩展：chip测试工具、带宽测试、PIM补丁及诊断脚本)
