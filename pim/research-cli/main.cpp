@@ -3,6 +3,12 @@
 #include "llama.h"
 #include "sampling.h"
 
+extern "C" {
+void ggml_chip_set_threads(int n);
+int ggml_chip_get_threads(void);
+void ggml_chip_get_stats(long long * flops, long long * bytes, long long * ops);
+}
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -13,7 +19,10 @@
 
 int main(int argc, char ** argv) {
     double chip_tok = 13.9;
+    double stream_bw = 22.0;
     bool full_recompute = false;
+    bool sram_on = false;
+    int chip_offload = 0;
     std::vector<char *> carg;
     carg.reserve(argc);
     for (int i = 0; i < argc; ++i) {
@@ -21,11 +30,27 @@ int main(int argc, char ** argv) {
             chip_tok = atof(argv[++i]);
             continue;
         }
+        if (strcmp(argv[i], "--stream-bw") == 0 && i + 1 < argc) {
+            stream_bw = atof(argv[++i]);
+            continue;
+        }
         if (strcmp(argv[i], "--full-recompute") == 0) {
             full_recompute = true;
             continue;
         }
+        if (strcmp(argv[i], "--sram") == 0) {
+            sram_on = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--chip-offload") == 0 && i + 1 < argc) {
+            chip_offload = atoi(argv[++i]);
+            continue;
+        }
         carg.push_back(argv[i]);
+    }
+    if (chip_offload > 0) {
+        ggml_chip_set_threads(chip_offload);
+        fprintf(stderr, "chip-sim: offload ON, %d chip threads take over MoE expert matmuls\n", ggml_chip_get_threads());
     }
 
     common_params params;
@@ -46,6 +71,57 @@ int main(int argc, char ** argv) {
     common_sampler * smpl = init->sampler(0);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const llama_token eos = llama_vocab_eos(vocab);
+
+    char mbuf[64];
+    if (llama_model_meta_val_str(model, "qwen3.expert_count", mbuf, sizeof mbuf) >= 0) {
+        fprintf(stderr, "chip-sim: n_expert=%s\n", mbuf);
+    }
+    if (llama_model_meta_val_str(model, "qwen3.expert_used_count", mbuf, sizeof mbuf) >= 0) {
+        fprintf(stderr, "chip-sim: n_expert_used=%s\n", mbuf);
+    }
+    const int32_t n_expert = llama_model_n_expert(model);
+    const int32_t n_expert_used = llama_model_n_expert_used(model);
+    const int64_t w_total = llama_model_weight_nbytes(model);
+    const int64_t w_expert = llama_model_expert_weight_nbytes(model);
+    const int64_t w_shared = w_total - w_expert;
+    const int64_t w_active = w_shared + w_expert * n_expert_used / n_expert;
+    int64_t sram_bytes = 0;
+    if (sram_on) {
+        fprintf(stderr, "chip-sim: copying weights into SRAM region...\n");
+        sram_bytes = llama_model_sram_resident(model);
+        fprintf(stderr, "chip-sim: SRAM resident %lld MB / %lld MB\n",
+            (long long) (sram_bytes / (1024 * 1024)),
+            (long long) (w_total / (1024 * 1024)));
+    }
+    long long vmlck_kb = 0;
+    {
+        FILE * f = fopen("/proc/self/status", "r");
+        if (f) {
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                if (strncmp(line, "VmLck:", 6) == 0) {
+                    sscanf(line + 6, "%lld", &vmlck_kb);
+                    break;
+                }
+            }
+            fclose(f);
+        }
+    }
+    if (vmlck_kb > 0) {
+        fprintf(stderr, "chip-sim: mlock resident %lld MB (zero-copy, page-cache pinned)\n",
+            vmlck_kb / 1024);
+    }
+    long long chip_flops_base = 0;
+    if (chip_offload > 0) {
+        long long b0 = 0, b1 = 0;
+        ggml_chip_get_stats(&chip_flops_base, &b0, &b1);
+    }
+    fprintf(stderr, "chip-sim: weights total=%lld MB expert=%lld MB shared=%lld MB per-token-active=%lld MB (expert %d/%d)\\n",
+        (long long) (w_total / (1024 * 1024)),
+        (long long) (w_expert / (1024 * 1024)),
+        (long long) (w_shared / (1024 * 1024)),
+        (long long) (w_active / (1024 * 1024)),
+        n_expert_used, n_expert);
 
     llama_token im_end = -1;
     llama_token eot = -1;
@@ -78,6 +154,8 @@ int main(int argc, char ** argv) {
         n_gen = 0;
         n_decoded = 0;
         std::string pending;
+        const int64_t act_per_tok = (int64_t) llama_model_n_embd(model) * 2 + (int64_t) llama_vocab_n_tokens(vocab) * 2;
+        int64_t cum_w = 0, cum_act = 0;
         double t_prefill = 0.0;
         double t_decode = 0.0;
         double t_wall = 0.0;
@@ -91,6 +169,14 @@ int main(int argc, char ** argv) {
                 fprintf(stderr, "research-cli: decode failed\n");
                 return false;
             }
+            const int64_t w_bytes = (int64_t) toks.size() * w_active;
+            const int64_t a_bytes = (int64_t) toks.size() * act_per_tok;
+            cum_w += w_bytes;
+            cum_act += a_bytes;
+            fprintf(stderr, "[chip] t=%7.1fms %s n=%d w=%.1fMB act=%.3fMB cumW=%.0fMB\n",
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count() * 1000.0,
+                first_batch ? "prefill" : "decode", (int) toks.size(),
+                w_bytes / 1048576.0, a_bytes / 1048576.0, cum_w / 1048576.0);
             const llama_token tok = common_sampler_sample(smpl, ctx, -1);
             common_sampler_accept(smpl, tok, true);
             const std::string piece = common_token_to_piece(vocab, tok, true);
@@ -104,7 +190,7 @@ int main(int argc, char ** argv) {
             } else {
                 t_decode += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
             }
-            if (tok == eos || tok == im_end || tok == eot) {
+            if (tok == eos || tok == im_end || tok == eot || llama_vocab_is_eog(vocab, tok)) {
                 break;
             }
             for (const char * mark : {"<|im_end|>", "<|endoftext|>", "<|im_start|>"}) {
@@ -158,6 +244,60 @@ int main(int argc, char ** argv) {
                 n_decode, t_decode,
                 n_decode > 0 ? t_decode / n_decode : 0.0,
                 (int) kv_max + 1);
+        }
+        if (chip_tok > 0 && n_gen > 1) {
+            const int n_decode = n_gen - 1;
+            const double cpu_spt = t_decode / n_decode;
+            const double cpu_tps = 1.0 / cpu_spt;
+            const double cpu_bw = cpu_tps * w_active / (1024.0 * 1024.0 * 1024.0);
+            const double flop_tok = 2.0 * 3.06e9;
+            const double cpu_gflops = cpu_tps * flop_tok / 1e9;
+            const double peak_gflops = 300.0;
+            const double u_bw = stream_bw > 0 ? cpu_bw / stream_bw : 0.0;
+            const double u_flops = cpu_gflops / peak_gflops;
+            const int64_t resident_bytes = sram_bytes > 0 ? sram_bytes : (int64_t) vmlck_kb * 1024;
+            const double u_takeover = w_total > 0 ? (double) resident_bytes / (double) w_total : 0.0;
+            long long chip_flops = 0, chip_bytes = 0, chip_ops = 0;
+            ggml_chip_get_stats(&chip_flops, &chip_bytes, &chip_ops);
+            chip_flops -= chip_flops_base;
+            const double total_flops = flop_tok * (n_decode + (double) prefill.size());
+            const double chip_share = total_flops > 0 ? chip_flops / total_flops : 0.0;
+            const double chip_gflops = t_decode > 0 ? chip_flops / (t_decode + t_prefill) / 1e9 : 0.0;
+            auto bar = [](double frac) {
+                static char buf[24];
+                const int W = 20;
+                int f = (int) (frac * W + 0.5);
+                if (f < 0) f = 0;
+                if (f > W) f = W;
+                int p = 0;
+                buf[p++] = '[';
+                for (int i = 0; i < W; i++) buf[p++] = i < f ? '#' : '.';
+                buf[p++] = ']';
+                buf[p] = 0;
+                return buf;
+            };
+            fprintf(stderr, "\n[board] ====== 设备工作状态 ======\n");
+            fprintf(stderr, "[board] 内存供数 %s %3.0f%%  实测 %.1f / 上限 %.1f GiB/s\n",
+                bar(u_bw), u_bw * 100.0, cpu_bw, stream_bw);
+            fprintf(stderr, "[board] CPU算力  %s %3.0f%%  有效 %.1f GFLOPS\n",
+                bar(u_flops), u_flops * 100.0, cpu_gflops);
+            fprintf(stderr, "[board] 芯片算力 %s %3.0f%%  MoE卸载 %.0f%%FLOPs %.1f GFLOPS @%d核\n",
+                bar(chip_share), chip_share * 100.0, chip_share * 100.0, chip_gflops, ggml_chip_get_threads());
+            fprintf(stderr, "[board] 芯片接管 %s %3.0f%%  权重驻留 %.0f / %.0f MB\n",
+                bar(u_takeover), u_takeover * 100.0, resident_bytes / 1048576.0, w_total / 1048576.0);
+            fprintf(stderr, "[board] 吞吐     %.2f tok/s (目标 %.1f, 差 %.1f 倍)\n",
+                cpu_tps, chip_tok, chip_tok / cpu_tps);
+            if (u_takeover >= 0.99 && chip_share > 0.5) {
+                fprintf(stderr, "[board] 判定: 权重片上驻留 + MoE计算芯片承担 -> 芯片接管生效\n");
+            } else if (u_takeover >= 0.99) {
+                fprintf(stderr, "[board] 判定: 权重已片上驻留, CPU经手权重归零 (计算仍由CPU代算)\n");
+            } else if (u_bw >= 0.8) {
+                fprintf(stderr, "[board] 判定: 内存接近打满 -> 物理带宽墙\n");
+            } else if (u_bw < 0.5 && u_flops < 0.3) {
+                fprintf(stderr, "[board] 判定: 无一打满 -> 卡在kernel效率(dequant/访存模式), 软件可优化\n");
+            } else {
+                fprintf(stderr, "[board] 判定: 混合瓶颈\n");
+            }
         }
         llama_moe_paging_stats stats;
         if (llama_context_moe_paging_get_stats(ctx, &stats)) {
