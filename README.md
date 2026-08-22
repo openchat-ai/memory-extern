@@ -278,6 +278,12 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
   - `03_cache/` —— 参数化组相联 LRU cache4 + K3 trace 重放，复现 36% 结构性上限
   - `05_gemv/check.sh` —— 6 门回归入口（含去量化边界 bug 修复）
   - `06_sched/` —— 三级预取调度器 RTL 模型（L0 pinned / L1 LRU / L1.5 预取池，K3 re 重放分账）
+- `rtl/10_phy_final/` —— **Wavious WDDR PHY 适配**（真 LPDDR4X/5 PHY + Ibex MCU 子系统）：
+  Verilator lint 全绿；冒烟仿真 PASS（Ibex 从 TCM 启动执行原厂固件）。
+  入口文档：`rtl/10_phy_final/README.md`（操作手册+补丁清单）、
+  `notes/wddr-sim-traps.md`（Verilator 踩坑笔记）。脚本：`tools/lint_wddr.sh`、`tools/sim_wddr.sh`
+- **`notes/architecture-decision.md`** —— 顶层架构决策（v0.2）：自研数字 + PHY/SerDes NRE 授权集成（v0.1 桥片结论已否决）
+- `rtl/11_phy_complete/` —— 自研简化 DDR5 PHY 骨架支线（iverilog 可跑），见其 README
 
 目标画像：三年后既懂 MoE 调度的软件侧、又懂 RTL 的硬件侧，去定义内存设备**该干什么**——不是造模块，而是定义模块。
 

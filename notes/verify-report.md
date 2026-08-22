@@ -1,5 +1,7 @@
 # MAC 数与数据口径甄别报告
 
+> ⚠️ 本文档记录的是旧口径（34 MAC）的验证过程。新口径已改为 **68 MAC / 171 GB/s / 128 GB / 30W**（8ch LPDDR5X）。当前性能数据见 `notes/honest-assessment.md` 和 `pim/calc_performance.py`。
+
 > 结论：上游两次修正（115→34、34→17）都基于错误假设。**34 MAC 是对的，17 MAC 是错的。**
 
 ## 1. 根本错误：GEMV 的 bytes/MAC 是 2B，不是 4B
