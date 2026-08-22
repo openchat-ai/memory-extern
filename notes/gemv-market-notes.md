@@ -1,5 +1,7 @@
 # GEMV 加速芯片市场调研
 
+> ⚠️ 本文中 V1 的芯片参数为旧口径（34 MAC / 68 GB/s / 16GB），已更新为 **68 MAC / 171 GB/s / 128 GB**（8ch LPDDR5X）。竞品与市场数据仍有效。以 `pim/calc_performance.py` 为准。
+>
 > 2026-08-20 三轮调研汇总。用途：验证 V1（LPDDR5X DRAM 带宽 + 专用 GEMV 阵列 + 边缘/嵌入式推理）赛道是否成立、数字是否可复算、差距在哪里。
 >
 > **先纠正一个定位错误**：V1 **没有用 SRAM 存权重**。V1 = 全直焊 LPDDR5X（4 颗/芯片，16GB）DRAM 带宽路线，2MB SRAM 仅作片上搬运缓冲（R6 控制器，double-buffering）。Groq/Cerebras 的 SRAM 存权重路线与 V1 无关。

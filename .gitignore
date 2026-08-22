@@ -51,3 +51,21 @@ data/pim/*.f32
 data/pim/*.f16
 data/pim/*.bin
 data/pim/*.hugedata
+
+# 仿真/构建产物
+obj_dir/
+*.vvp
+*.vcd
+*.vcd.fst
+tmp_params/
+.filelist.txt
+
+# WDDR 仿真/构建产物
+obj_dir_smoke/
+.filelist_sim.txt
+verify_report.txt
+tmp_chk/
+rtl/11_phy_complete/sim/
+
+# 上游开源 PHY 克隆（内嵌 .git，本地依赖不入库；克隆方法见 rtl/10_phy_final/README.md）
+rtl/07_phy_wavious/

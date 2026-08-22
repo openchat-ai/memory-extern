@@ -1,5 +1,7 @@
 # MAC 数 vs 内存带宽分析
 
+> ⚠️ 本文档基于旧口径（34 MAC / 68 GB/s），数据已过时。新口径：**68 MAC / 171 GB/s / 128 GB / 30W**（8ch LPDDR5X）。以 `pim/calc_performance.py` 为准。
+
 ## 核心矛盾
 
 ```

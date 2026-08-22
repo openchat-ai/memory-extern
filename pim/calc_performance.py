@@ -18,6 +18,7 @@ SERDES_LANES = 4
 SERDES_RATE_GBPS = 100
 SERDES_BW = SERDES_LANES * SERDES_RATE_GBPS / 8  # 50 GB/s/chip
 
+
 # ===== 内存配置（全部用公式计算，无硬编码）=====
 # 带宽公式: channels × mt_s × bus_bits / 8 / 1e3 (GB/s)
 # 容量公式: channels × die_gb (GB)
@@ -199,14 +200,36 @@ for name in ["LPDDR5X-8ch", "LPDDR5X-4ch", "HBM3-1stack"]:
             tp = mp + dp + SRAM_POWER + SERDES_POWER + OTHER_POWER
             base = MAC_POWER + dp + SRAM_POWER + SERDES_POWER + OTHER_POWER
             print(f"  {freq:>7.1f}GHz {mp:>7.1f}W {dp:>7.1f}W {tp:>7.1f}W {(1-tp/base)*100:>5.0f}%")
+        # 整卡降频运行点：性能不变，按最低可行频率计整卡功耗与能效
+        n_chips = 224
+        mp_min = calc_dvfs_power(mf)
+        chip_w = mp_min + d["power"] + SRAM_POWER + SERDES_POWER + OTHER_POWER
+        card_w = chip_w * n_chips + 50
+        eff_bw = n_chips * d["bw"]
+        tps = 1 / (k3_layers * k3_activated_gb / eff_bw)
+        ee = tps / (card_w / 1000)
+        h200_ee = h200_tps / (700 / 1000)
+        print(f"  整卡@{mf:.2f}GHz(224颗): {card_w:.0f}W | K3 {tps:.2f} t/s"
+              f" | 能效 {ee:.2f} t/(s·kW) (H200单卡 {h200_ee:.2f}, 比值 {ee/h200_ee:.2f}x)")
     else:
         print(f"  不能降频。如需省电，关闭空闲芯片（MoE 场景）")
+        # 整卡满载能效（计算瓶颈）
+        n_chips = 224
+        chip_w = CHIP_POWER_BASE + SRAM_POWER + SERDES_POWER + d["power"]
+        card_w = chip_w * n_chips + 50
+        eff_bw = n_chips * d["bw"]
+        tps = 1 / (k3_layers * k3_activated_gb / eff_bw)
+        ee = tps / (card_w / 1000)
+        h200_ee = h200_tps / (700 / 1000)
+        print(f"  整卡满载(224颗): {card_w:.0f}W | K3 {tps:.2f} t/s"
+              f" | 能效 {ee:.2f} t/(s·kW) (H200单卡 {h200_ee:.2f}, 比值 {ee/h200_ee:.2f}x)")
 
 # 五、总结
 print("\n" + "=" * 100)
 print("五、总结")
 print("=" * 100)
 print(f"""
+
 核心参数:
   {MAC_COUNT} MAC × {CLOCK_GHZ} GHz × 4B = {COMPUTE_BW} GB/s 计算
   {MAC_COUNT} MAC × {CLOCK_GHZ} GHz × 2B = {WEIGHT_BW} GB/s 权重需求 (DRAM)
