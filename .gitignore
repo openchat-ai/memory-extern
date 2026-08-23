@@ -73,4 +73,5 @@ rtl/07_phy_wavious/
 
 # pim 芯片模拟器构建产物
 pim/research-cli/bench_chip
+pim/research-cli/chip-backend/*.so
 >>>>>>> 2d07d13 (添加 pim/research-cli 扩展：chip测试工具、带宽测试、PIM补丁及诊断脚本)
