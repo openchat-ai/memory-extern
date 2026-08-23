@@ -284,6 +284,7 @@ Kimi-K3 / DeepSeek 一类 MoE 模型推理时，专家权重是**动态路由**�
   `notes/wddr-sim-traps.md`（Verilator 踩坑笔记）。脚本：`tools/lint_wddr.sh`、`tools/sim_wddr.sh`
 - **`notes/k3-onboarding.md`** —— K3 权重上手手册（元数据提取 → 裁决 52/512 争议）
 - **`notes/bandwidth-capacity-research.md`** —— 容量×带宽低成本路径研究（v0.1 草案）
+- **`notes/independent-stack.md`** —— 独立推理栈方向 v0.1（脱离 llama.cpp，产权消解）
 - **`notes/architecture-decision.md`** —— 顶层架构决策（v0.2）：自研数字 + PHY/SerDes NRE 授权集成（v0.1 桥片结论已否决）
 - `rtl/11_phy_complete/` —— 自研简化 DDR5 PHY 骨架支线（iverilog 可跑），见其 README
 
