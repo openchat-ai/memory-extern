@@ -5,11 +5,11 @@ LISTEN = ("127.0.0.1", 8899)
 TARGET = ("github.com", 443)
 
 
-def connect_target():
+def connect_target(target):
     last = None
     for _ in range(10):
         try:
-            return socket.create_connection(TARGET, timeout=10)
+            return socket.create_connection(target, timeout=10)
         except OSError as e:
             last = e
     raise last
@@ -39,8 +39,14 @@ def handle(c):
             return
         req += d
     try:
-        t = connect_target()
-    except OSError:
+        host, port = TARGET
+        line = req.split(b"\r\n", 1)[0].split()
+        if len(line) >= 2:
+            h, _, p = line[1].decode().partition(":")
+            host = h
+            port = int(p) if p else 443
+        t = connect_target((host, port))
+    except (OSError, ValueError):
         c.sendall(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
         c.close()
         return
