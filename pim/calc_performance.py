@@ -158,9 +158,20 @@ print("\n" + "=" * 100)
 print("三、MoE 模型对比 (K3, 224 芯片)")
 print("=" * 100)
 
-k3_layers = 93
-k3_activated_gb = 52
-h200_tps = 1 / (k3_layers * k3_activated_gb / COMPETITORS["H200"]["bw"])
+# ===== K3 实测参数（notes/k3-verdict.md，2026-08-23 safetensors 全量扫描）=====
+K3 = dict(
+    n_layers_total=93,
+    n_moe_layers=92,            # layer0 为 dense
+    n_expert=896,
+    n_expert_used=16,
+    expert_mb_per_layer_quantized=17.55,   # 落盘字节实测（mxfp4-pack ≈1.82bit/w）
+    activated_gb_per_token=25.83,          # = 92层 × 16 × 17.55MB —— per-token 总量
+)
+assert abs(K3["activated_gb_per_token"] -
+           K3["n_moe_layers"] * K3["n_expert_used"] *
+           K3["expert_mb_per_layer_quantized"] / 1000) < 0.01   # 十进制口径，与带宽公式一致
+k3_activated_total = K3["activated_gb_per_token"]   # ⚠️ 勿再乘层数（旧公式双重计数）
+h200_tps = COMPETITORS["H200"]["bw"] / k3_activated_total
 
 print(f"\n{'配置':<15} {'拆分':<8} {'有效BW':>10} {'tok/s':>8} {'vs H200':>8}")
 print("-" * 55)
@@ -170,11 +181,11 @@ for name, cfg in DRAM_OPTIONS.items():
     
     # 不拆分: 16 颗工作
     eff1 = 16 * d["bw"]
-    tps1 = 1 / (k3_layers * k3_activated_gb / eff1) if eff1 > 0 else 0
-    
+    tps1 = eff1 / k3_activated_total if eff1 > 0 else 0
+
     # 拆分: 224 颗工作
     eff2 = 224 * d["bw"]
-    tps2 = 1 / (k3_layers * k3_activated_gb / eff2) if eff2 > 0 else 0
+    tps2 = eff2 / k3_activated_total if eff2 > 0 else 0
     
     print(f"{d['name']:<15} {'❌ 不拆':<8} {eff1:>8.0f}GB/s {tps1:>7.2f} {tps1/h200_tps:>7.2f}x")
     print(f"{'':<15} {'✅ 拆分':<8} {eff2:>8.0f}GB/s {tps2:>7.2f} {tps2/h200_tps:>7.2f}x")
@@ -206,7 +217,7 @@ for name in ["LPDDR5X-8ch", "LPDDR5X-4ch", "HBM3-1stack"]:
         chip_w = mp_min + d["power"] + SRAM_POWER + SERDES_POWER + OTHER_POWER
         card_w = chip_w * n_chips + 50
         eff_bw = n_chips * d["bw"]
-        tps = 1 / (k3_layers * k3_activated_gb / eff_bw)
+        tps = eff_bw / k3_activated_total
         ee = tps / (card_w / 1000)
         h200_ee = h200_tps / (700 / 1000)
         print(f"  整卡@{mf:.2f}GHz(224颗): {card_w:.0f}W | K3 {tps:.2f} t/s"
@@ -218,7 +229,7 @@ for name in ["LPDDR5X-8ch", "LPDDR5X-4ch", "HBM3-1stack"]:
         chip_w = CHIP_POWER_BASE + SRAM_POWER + SERDES_POWER + d["power"]
         card_w = chip_w * n_chips + 50
         eff_bw = n_chips * d["bw"]
-        tps = 1 / (k3_layers * k3_activated_gb / eff_bw)
+        tps = eff_bw / k3_activated_total
         ee = tps / (card_w / 1000)
         h200_ee = h200_tps / (700 / 1000)
         print(f"  整卡满载(224颗): {card_w:.0f}W | K3 {tps:.2f} t/s"
