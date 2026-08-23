@@ -7,8 +7,12 @@ bf16: 每 MAC 读 2B 权重(DRAM) + 2B 激活(SRAM) = 4B
 import math
 
 # ===== 芯片基础规格 =====
-MAC_COUNT = 68
+# MAC 定标决策（2026-08-23）：128 = 预埋派
+#   8ch(171GB/s) 下理论配平为 85 颗（171÷2B）；128 为预埋 50% 余量，
+#   未来升级 16ch/LPDDR6 时免重流。闲置颗时钟门控（ICG），仅漏电。
+MAC_COUNT = 128
 CLOCK_GHZ = 1.0
+MAC_ACTIVE_8CH = 86          # 8ch bf16 下实际喂得饱的数量（其余门控）
 BYTES_PER_MAC = 4  # bf16: 2B 权重(DRAM) + 2B 激活(SRAM) = 4B
 
 COMPUTE_BW = MAC_COUNT * CLOCK_GHZ * BYTES_PER_MAC  # 272 GB/s
@@ -54,11 +58,29 @@ COMPETITORS = {
 }
 
 # ===== 功耗模型 =====
-MAC_POWER = 20  # W @ 1GHz
+# MAC_POWER = 全阵列(128)满载 @1GHz ≈ 38W；8ch 运行时 ~86 颗活跃 + 门控漏电
+MAC_POWER = 38  # W @ 1GHz（128 颗全激活）
+MAC_LEAK_IDLE = 2  # W 门控闲置部分的漏电（估算）
 SRAM_POWER = 2  # W
 SERDES_POWER = 2  # W
 OTHER_POWER = 1  # W
 CHIP_POWER_BASE = MAC_POWER + OTHER_POWER  # 21W (不含 DRAM)
+
+# ===== IP 授权成本（2026-08-23 双模式：NRE 买断 vs Per-unit 版税）=====
+# 每颗芯片集成: LPDDR5X 8ch PHY + 4x100G SerDes（架构核心器官，不可桥接替代）
+# NRE 买断：一次付清量产免费，量大划算；版税：零前期、按颗抽成，小批量友好
+# 区间 $20-80万/协议族取中值 $40万；版税假设 $2/颗。交叉点 = 20 万颗。
+IP_NRE_USD = 400_000
+USD_TO_CNY = 7.2
+IP_NRE_CNY = IP_NRE_USD * USD_TO_CNY                    # ≈ ¥288 万
+IP_ROYALTY_PER_CHIP = round(2.0 * USD_TO_CNY, 1)        # ≈ ¥14.4/颗
+
+def ip_per_chip(total_chips=50_000, mode="nre"):
+    if mode == "royalty":
+        return IP_ROYALTY_PER_CHIP
+    return round(IP_NRE_CNY / max(total_chips, 1), 1)
+
+IP_PER_CHIP = ip_per_chip()   # 默认 NRE 口径 @5 万颗
 
 
 def calc_dram(dram_name, dram_cfg):
@@ -240,6 +262,14 @@ print("\n" + "=" * 100)
 print("五、总结")
 print("=" * 100)
 print(f"""
+
+IP 授权双模式对照（PHY+SerDes 每颗成本）:
+  产量        NRE买断     版税制    划算方
+  1,000       ¥2,880.0      ¥14.4   版税
+  10,000      ¥288.0        ¥14.4   版税
+  50,000      ¥57.6         ¥14.4   版税
+  200,000     ¥14.4         ¥14.4   ≈持平(交叉点)
+  当前默认口径: NRE@5万颗 = ¥57.6/颗；起步期建议谈版税制合同
 
 核心参数:
   {MAC_COUNT} MAC × {CLOCK_GHZ} GHz × 4B = {COMPUTE_BW} GB/s 计算
