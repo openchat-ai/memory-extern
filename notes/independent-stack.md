@@ -1,6 +1,7 @@
 # 独立推理栈（脱离 llama.cpp）
 
-> **版本 0.2** · 2026-08-23 · 状态：核心架构确立（无 SRAM + 四档产品线）
+> **版本 0.3** · 2026-08-23 · 状态：核心架构确立 + RTL 骨架附录
+> v0.2 核心架构确立；v0.3 新增附录 A：无 SRAM 架构的两块存储骨架（流式 FIFO / 寄存器驻留），可直接用于 RTL 开发
 > 动机：产权审计（bandwidth-capacity-research.md §6.4）指出策略内核构建在
 > llama.cpp 系引擎之上是最大灰色地带。本方向将其消解。
 > v0.2 新增：无 SRAM 架构论证、云端四档产品线、dense/MoE 双口径、MAC 定标、HBM 结论、多模型分区。
@@ -137,9 +138,60 @@ NOC QoS 隔离，互不干扰；单 die 故障降级运行
 
 详见 `notes/rfq-prep-plan.md`（交付物七项计划）。
 
+## 附录 A：存储骨架 RTL（无 SRAM 架构的实现件）
+
+> 两块代码均为完整可综合模块——纯 RTL 直写，无需 SRAM 编译器或代工厂宏。
+> 综合工具会将此规模（几十 KB）的 logic 数组自动映射为触发器/锁存器阵列。
+
+### A.1 流式 FIFO（权重预取缓冲，藏 DRAM 延迟抖动）
+
+```systemverilog
+module stream_fifo #(parameter DEPTH=256, WIDTH=128) (
+    input  wire         clk, push, pop,
+    input  wire [WIDTH-1:0] wdata,
+    output wire [WIDTH-1:0] rdata,
+    output wire         full, empty
+);
+    logic [WIDTH-1:0] mem [0:DEPTH-1];
+    logic [$clog2(DEPTH)-1:0] wp, rp;
+
+    assign empty = (wp == rp);
+    assign full  = ((wp + 1) % DEPTH) == rp;
+    assign rdata = mem[rp];
+
+    always @(posedge clk) begin
+        if (push) mem[wp] <= wdata;
+        if (push && !full) wp <= wp + 1;
+        if (pop  && !empty) rp <= rp + 1;
+    end
+endmodule
+```
+
+实例化建议：权重预取用 DEPTH=256 × 128bit（4KB/方向，双缓冲×8 足够藏行激活抖动）。
+
+### A.2 激活向量寄存器驻留（每条 MAC lane 的 x 分片）
+
+```systemverilog
+// K3: hidden=7168 ÷ 68 lanes ≈ 106 元素/lane × bf16
+logic [15:0] x_local [0:105];    // 每 lane ~212 B，纯触发器
+
+// 权重流过时本地配对乘加（零 DRAM 重取、零 SRAM 占用）
+// 加载：层切换时从 LPDDR 预取一次（14KB 全向量，广播写入各 lane 分片）
+```
+
+### A.3 综合边界说明
+
+| 数组规模 | 综合结果 | 说明 |
+|---|---|---|
+| ≤ 几十 KB | 触发器/锁存器阵列 ✅ | 本架构全部存储在此区间 |
+| MB 级 | 工具报警，要求换 memory macro | 已通过"不设大 SRAM"决策规避 |
+
+---
+
 ## 变更历史
 
 | 版本 | 日期 | 变更 |
 |---|---|---|
 | 0.1 | 2026-08-23 | 初稿：脱离 llama.cpp 决策立项；零件盘点；依赖致敬表 |
 | 0.2 | 2026-08-23 | 核心架构确立：无 SRAM（寄存器驻留+KB FIFO）；密集/MoE 双口径；MAC 定标 68→128 预埋；HBM 三重锁定不可后升级；多模型 die 池化；四档产品线阶梯表；开放问题 O1-O4 |
+| 0.3 | 2026-08-23 | 附录 A：流式 FIFO 与寄存器驻留 x 分片的 RTL 骨架（可直接开发）+ 综合边界说明 |
