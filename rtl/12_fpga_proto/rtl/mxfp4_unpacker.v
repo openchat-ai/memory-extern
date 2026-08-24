@@ -26,13 +26,13 @@ module mxfp4_unpacker (
         input [2:0] code;
         case (code)
             3'b000: e2m1_mag = 15'h0000; // 0.0  (exp=0,mant=0)
-            3'b001: e2m1_mag = 15'h3E00; // 0.5  (exp=126,mant=0) ≈ bf16 0x3F00>>7... 
+            3'b001: e2m1_mag = 15'h3F00; // 0.5  (exp=126,mant=0) ≈ bf16 0x3F00>>7... 
             3'b010: e2m1_mag = 15'h3F80; // 1.0  
-            3'b011: e2m1_mag = 15'h4040; // 1.5  
-            3'b100: e2m1_mag = 15'h4080; // 2.0  
-            3'b101: e2m1_mag = 15'h4100; // 3.0  
-            3'b110: e2m1_mag = 15'h4140; // 4.0  
-            3'b111: e2m1_mag = 15'h41C0; // 6.0  
+            3'b011: e2m1_mag = 15'h3FC0; // 1.5  
+            3'b100: e2m1_mag = 15'h4000; // 2.0  
+            3'b101: e2m1_mag = 15'h4040; // 3.0  
+            3'b110: e2m1_mag = 15'h4080; // 4.0  
+            3'b111: e2m1_mag = 15'h40E0; // 6.0  
         endcase
     endfunction
 
