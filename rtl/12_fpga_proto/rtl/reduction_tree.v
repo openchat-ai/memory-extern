@@ -28,7 +28,8 @@ module reduction_tree #(
     reg valid_pipe [0:STAGES];
 
     integer s, k;
-    always @(posedge clk or negedge rst_n) begin
+    // 同步复位（FPGA 规范：避免异步释放竞争）
+    always @(posedge clk) begin
         if (!rst_n) begin
             for (s = 0; s < STAGES; s = s + 1)
                 for (k = 0; k < NUM_LANES/2; k = k + 1)
