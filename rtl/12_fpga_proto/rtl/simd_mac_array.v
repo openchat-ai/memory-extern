@@ -79,10 +79,31 @@ module simd_mac_array #(
             // 当前 lane 的激活值（int8 定点）
             wire signed [7:0] x_val = x_data[i*8 +: 8];
 
-            // 乘法用移位+加法实现（Booth 编码可进一步优化）
-            // w_dec ∈ [-24, +24]，x_val ∈ [-128, +127]
-            // 积的范围：[-3072, +3072]，13 bit 够用
-            wire signed [15:0] product = w_dec * x_val;  // 综合器会映射为 LUT 加法树
+            // ── 移位加法乘法器（利用 E2M1 幅值全偶数的特性）──
+            // w_dec = 2k, k∈{0,±1,±2,±3,±4,±6,±8,±12}
+            // k·x 用单加法器+mux 实现，替代通用 8x8 乘法树
+            // 等效节省每 lane ~40% LUT
+            wire [2:0] mag = wt_data[i*4 +: 3];        // 幅值选择
+            wire      sgn = wt_data[i*4+3];             // 符号位
+            // 先符号扩展，避免移位发生在 8bit 域内回绕
+            wire signed [11:0] sx = {{4{x_val[7]}}, x_val};
+            reg  signed [11:0] kx;                      // k·x ∈ [-1536,+1512]
+            always @(*) begin
+                case (mag)
+                    3'd0: kx = 12'sd0;                          // k=0
+                    3'd1: kx = sx;                              // k=1
+                    3'd2: kx = sx <<< 1;                        // k=2
+                    3'd3: kx = sx + (sx <<< 1);                 // k=3
+                    3'd4: kx = sx <<< 2;                        // k=4
+                    3'd5: kx = (sx <<< 2) + (sx <<< 1);         // k=6
+                    3'd6: kx = sx <<< 3;                        // k=8
+                    3'd7: kx = (sx <<< 3) + (sx <<< 2);         // k=12
+                endcase
+            end
+            // 还原偶数因子：w·x = 2·(k·x)
+            wire signed [15:0] product =
+                sgn ? -$signed({kx, 1'b0})
+                    :  $signed({kx, 1'b0});
 
             always @(posedge clk) begin
                 if (!rst_n || acc_clr)
