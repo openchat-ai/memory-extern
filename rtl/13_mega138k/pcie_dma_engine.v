@@ -62,6 +62,9 @@ module pcie_dma_engine #(
 
     localparam CMD_PUSH_X     = 8'h01;   // 写激活向量
     localparam CMD_RUN_WEIGHT = 8'h02;   // 一帧权重
+    // v0.2 预留：CMD_VERIFY_BATCH=0x03 —— 投机解码批量验证
+    //   帧头后跟 k(1B)+保留(1B)+k×4B token_id；同一权重流服务 k 个激活
+    //   路由并集预取由 RISC-V 固件计算（tools/spec_decode_harness.py）
 
     // ------------------------------------------------------------------
     // 激活寄存器组：NUM_LANES × int8
