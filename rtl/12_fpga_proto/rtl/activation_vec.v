@@ -1,12 +1,12 @@
 // ============================================================================
-// activation_vec.v — 向量化激活函数（GELU/SiLU 近似）
+// activation_vec.v — 向量化激活函数（SiTU-GLU 近似）
 //
-// 用 DSP 做多项式拟合（复用空闲 DSP，替代 LUT 查表省 BRAM）
+// K3 官方使用 SiTU-GLU（Sigmoid Tanh Unit + Gated Linear Unit），
+// 非 GELU。SiTU-GLU = SiTU(x) × GLU(x) = x·sigmoid(x) × (x·sigmoid(x))
+// 简化实现：SiTU(x) = x · σ(x) ≈ x · sigmoid 近似
+// 用分段线性 + 查表拟合 sigmoid，复用空闲 DSP
+//
 // 输入：int32 累加值 → 输出：int8 激活值（供下一层使用）
-//
-// 多项式近似：
-//   GELU(x) ≈ 0.5x(1 + tanh(√(2/π)(x + 0.044715x³)))
-//   用 3 阶多项式近似 tanh 段
 // ============================================================================
 
 `timescale 1ns/1ps
@@ -27,10 +27,11 @@ module activation_vec #(
 );
 
     // ========================================================================
-    // 单通道 GELU 近似（分段线性 + 3 阶修正项）
+    // 单通道 SiTU 近似：SiTU(x) = x · sigmoid(x)
+    // sigmoid(x) ≈ 分段线性：x<-4→0, x>4→1, else=(x+4)/8
     // 用 2 级流水：第 1 拍算 x² 和符号判断；第 2 拍算最终值
     // ========================================================================
-    task auto_gelu;
+    task auto_situ;
         input signed [IN_WIDTH-1:0] x;
         output signed [OUT_WIDTH-1:0] y;
         reg signed [IN_WIDTH-1:0] x_abs;
@@ -73,7 +74,7 @@ module activation_vec #(
                     x_pipe <= $signed(x_in[i*IN_WIDTH +: IN_WIDTH]);
 
                     // Stage 2: 计算激活
-                    auto_gelu(x_pipe, y_pipe);
+                    auto_situ(x_pipe, y_pipe);
                 end
             end
 

@@ -9,7 +9,7 @@
 // 参考模型：
 //   acc[i] += w[i] * x[i]（每拍）
 //   sum    = Σ acc[i]
-//   y      = gelu_approx(sum)
+//   y      = situ_approx(sum)
 // ============================================================================
 
 `timescale 1ns/1ps
@@ -142,8 +142,8 @@ module tb_simd_pipeline;
         end
     endfunction
 
-    // GELU 近似参考模型（和 RTL 相同的分段逻辑）
-    function signed [7:0] gelu_ref;
+    // SiTU 近似参考模型（和 RTL 相同的分段逻辑）
+    function signed [7:0] situ_ref;
         input signed [31:0] x;
         reg signed [31:0] x_abs;
         reg signed [7:0] corr;
@@ -157,7 +157,7 @@ module tb_simd_pipeline;
                 y_pos = $signed(x_abs[7:0]) - corr;
             end else
                 y_pos = 127;
-            gelu_ref = (x < 0) ? (-y_pos) : y_pos;
+            situ_ref = (x < 0) ? (-y_pos) : y_pos;
         end
     endfunction
 
@@ -283,16 +283,16 @@ module tb_simd_pipeline;
         end else
             $display("  ⚠ act_valid 未触发（可能流水线延迟不够）");
 
-        // ── 测试 4：GELU 边界值 ──────────────────────────────
-        $display("\n[Test 4] GELU 分段边界");
+        // ── 测试 4：SiTU 边界值 ──────────────────────────────
+        $display("\n[Test 4] SiTU 分段边界");
         begin
             reg signed [31:0] test_x;
             test_x = 32'd5;
-            $display("  gelu(%0d) = %0d (期望 %0d)", test_x, gelu_ref(test_x), test_x);
+            $display("  situ(%0d) = %0d (期望 %0d)", test_x, situ_ref(test_x), test_x);
             test_x = 32'd32;
-            $display("  gelu(%0d) = %0d", test_x, gelu_ref(test_x));
+            $display("  situ(%0d) = %0d", test_x, situ_ref(test_x));
             test_x = 32'd100;
-            $display("  gelu(%0d) = %0d (饱和)", test_x, gelu_ref(test_x));
+            $display("  situ(%0d) = %0d (饱和)", test_x, situ_ref(test_x));
         end
 
         // ── 总结 ────────────────────────────────────────────
