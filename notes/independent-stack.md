@@ -479,6 +479,88 @@ logits 缓冲           ~600KB          ✓
 
 ---
 
+## 十四、真机任务清单（待权重机 / 板卡执行）
+
+> 本节是"软件侧已闭环、必须上真机才能继续"的任务总表。
+> 每项标注：执行机器、前置条件、产出物、回填位置。
+
+### 14.1 权重机（k3, WSL2, H:\k3）
+
+#### T1 · 解码 1.82bit 打包格式 【最高优先级】
+
+- 前置：无（k3_index.json 已在盘上）
+- 操作：
+  1. 从任一 safetensors 分片抽 1 个 expert 的 w1 weight_packed 张量
+     （形状 [3072,1792] U8，对应逻辑 [3584,7168]）
+  2. 取前 4KB 导出十六进制 + 对应 weight_scale 前 256B
+  3. 尝试常见打包假设并校验：
+     a. 每 U8 装 4 个 2bit 码 → 码表是否呈 E2M1 子集结构
+     b. 每 U8 装 2 个 4bit E2M1 → 密度对不上(应为4bit/w)，排除
+     c. 位平面切分（bitplane）布局
+  4. 用 group=16 的 scale 反量化一组 16 权重，
+     对照同层 bf16 参考值（若分片含）验证
+- 产出：`k3_pack_format.md`（位序/字节序/组内排列的最终定义）
+- 回填：`rtl/12_fpga_proto/rtl/simd_mac_array.v` 的解码查表、
+        `tools/gguf_to_frames.py` 整体重写为 safetensors 直读版
+
+#### T2 · GQA 头数确认
+
+- 操作：读 `/model/config.json` 全文，找
+  `num_attention_heads` / `num_key_value_heads`（或 MLA 相关字段）
+- 产出：一行数字，例如 `kv_heads=8`
+- 回填：`python3 tools/kv_capacity_plan.py --kv-heads <N>` → 定案运行点；
+        §12/§13 的 batch 上限改写
+
+#### T3 · 路由轨迹采样（可选，服务投机解码标定）
+
+- 前置：完整前向内存不够（verdict §六）。
+  替代方案：router 权重极小，可单独抽出 92 层 gate 的 Linear，
+  在 CPU 上对真实 prompt 跑 top16
+- 操作：采 1K 条真实 prompt 的逐层专家选择序列
+- 产出：`route_trace.jsonl`
+- 回填：`tools/spec_decode_harness.py` 的 ρ 实测值；
+        `tools/hot_expert_cache_sim.py` 换真实轨迹复跑（缓存翻案的最后机会）
+
+#### T4 · 码频率统计（若 T1 判定格式仍含 E2M1 子码）
+
+- 操作：抽样 10 个张量各 1MB，统计 16 个码的频率
+- 产出：频率表 json
+- 回填：`tools/entropy_codec.py --fit-real` → 真实压缩率定案
+
+### 14.2 板卡机（Tang Mega 138K 到手后）
+
+#### T5 · 冒烟综合
+
+- 文件：`rtl/13_mega138k/board_top.v` + `engine_core.v` +
+        `simd_mac_array.v` + `reduction_tree.v` + `.cst`
+  ⚠️ 排除 `gowin_cells_stub.v`
+- IDE：教育版 ≥V1.9.11.03，器件 GW5AST-LV138PG484AC1/I0 (PBG484A)
+- 观测：LED0 心跳 ~1Hz；LED1-3 有活动 = MAC 在跑
+- 产出：实际 LUT/DSP/Fmax 三元组 → 替换本文所有"预计"值
+
+#### T6 · PCIe Gen3 x4 DMA 打通
+
+- 参考：sipeed/TangMega-138K-example `pcie_dma_demo`（Gen3 目录）
+- 步骤：官方 demo 先通 → 换入 pcie_dma_engine →
+  `tools/host_stream.py --probe` 找设备 → 环回测速
+- 产出：实测有效 GB/s → 吞吐预测表全部刷新
+
+#### T7 · ACC16 vs ACC32 资源实测
+
+- 操作：同一工程分别以 `.ACC_WIDTH(32)` 与 `(16)` 综合两次
+- 产出：lane 成本真值 → 最终通道数定案（预计 ~73 LUT/lane 待验）
+
+### 14.3 依赖关系图
+
+```
+T1(格式) ──→ 引擎解码器重写 ──→ T5 综合 ──→ T6 DMA ──→ T7 资源定案
+T2(GQA)  ──→ KV 运行点定案（纯软件，立即可回填）
+T3(轨迹) ──→ 投机解码 ρ / 缓存终审（可选）
+T4(频率) ──→ 熵编码收益定案（依赖 T1 结论）
+```
+
+---
+
 ## 变更历史
 
 | 版本 | 日期 | 变更 |
@@ -493,3 +575,4 @@ logits 缓冲           ~600KB          ✓
 | — | — | §3.6 新增：DSP 复用方案——KV量化/ECC/激活函数，从原型升级为可用产品 |\n| — | — | §3.7 核心突破：LUT↔DSP 双向复用，Tang Mega 极限吞吐 4.2 t/s（性价比反超 U50 七倍）|
 | — | — | 新增 §12 带宽榨取四路：投机解码/热专家缓存/线上压缩/模型瘦身 |
 | — | — | 新增 §13 独立运行固件架构：kimi-k3-in-c 掏心改造清单 + RISC-V 能力边界 |
+| — | — | 新增 §14 真机任务清单：权重机 T1-T4 / 板卡 T5-T7，含操作步骤/产出物/回填位置/依赖图 |
