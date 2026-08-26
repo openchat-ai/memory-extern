@@ -105,7 +105,21 @@ activated_gb 再乘层数。若 52 本意是 per-token 总量，则公式存在�
 未执行：权重机 RAM 27GB ≪ 1.45TB，且无 SparkMoE fork 运行环境。如需路由 trace
 需在 ≥ 模型体积内存的机器上进行（或由 kimi-k3-in-c 的 LRU 路径改造采集）。
 
-## 八、存档文件位置（权重机）
+## 八、Trunk MXFP4 量化实测（T5）
+
+trunk（attention/shared/dense/embed/vision）原始 ~110GB → MXFP4 量化后实测 **36 GB**。
+量化方式：与专家同款 mxfp4-pack（group=64，scale 共享，2bit 索引编码）。
+质量待验：需跑 "Hello" 起手 + 长文续写确认无胡言（shared expert 和 attention 每 token 过）。
+
+每 token 带宽账（最终版）：
+- 专家：25.83 GB（top-16 × 92 层 × 17.55MB）
+- trunk：36 GB（量化后，全量前向必经）
+- 总计：**61.83 GB/token**（全在盘上流时）
+- 若 trunk 常驻内存（≥40GB RAM）：每 token 仅流专家 25.83 GB
+
+吞吐模型见 `tools/batch_traffic_model.py`（并集曲线 + trunk 常量可推翻重标）。
+
+## 九、存档文件位置（权重机）
 
 - /mnt/h/k3/k3_index.json —— 全量 497,220 张量的 dtype/shape/shard 清单
 - /mnt/h/k3/k3_verdict.json —— 本报告数字机器可读版
