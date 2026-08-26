@@ -5,6 +5,24 @@
 > 对应手册：k3-onboarding.md v0.1 第二步/第三步。原定 `tools/gguf_dump.c` 针对 GGUF，
 > 本权重为 safetensors 格式，改用等效 header 解析（k3_index.json 为全量张量清单存档）。
 
+## 零、K3 官方架构（2026-07 技术报告）
+
+| 项目 | 官方值 |
+|---|---|
+| 总参数 | 2.8T |
+| 激活参数 | 104B/token |
+| 层数 | 93（69 KDA + 24 Gated MLA，3:1 比例） |
+| 注意力 | KDA（Kimi Delta Attention，线性注意力）+ Gated MLA |
+| MoE | Stable LatentMoE，896 专家，top-16 |
+| 共享专家 | 2 |
+| 激活函数 | SiTU-GLU（非 GELU） |
+| 量化 | QAT（量化感知训练），MXFP4 权重 + MXFP8 激活 |
+| 上下文 | 1,048,576 tokens（1M） |
+| 路由 | Quantile Balancing |
+
+**本报告关注点**：官方描述了架构和稀疏度，但没有给出推理时每 token 的实际带宽需求。
+尤其是 trunk（非专家权重）在内存受限设备上的重读问题，官方未提及。以下为实测数据。
+
 ## 一、四个裁决性参数（全部实测确认）
 
 | 参数 | 实测值 | 旧假设 | 结论 |

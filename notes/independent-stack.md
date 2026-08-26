@@ -47,6 +47,17 @@
 
 > 一句话：**用标准逻辑硅把万亿 MoE 模型变成一台便宜的消费级设备。**
 
+### 目标模型：Kimi K3 官方架构
+
+K3 是月之暗面（Moonshot AI）于 2026 年 7 月发布的旗舰开源模型，2.8T 总参数，104B 激活参数。核心技术：
+
+- **KDA（Kimi Delta Attention）**：混合线性注意力，93 层中 69 层用 KDA、24 层用 Gated MLA（3:1 比例）。KDA 维持固定大小循环状态，支持 1M token 上下文
+- **AttnRes（Attention Residuals）**：93 层分 8 个 block，block 间用注意力机制选择性检索前序层表征
+- **Stable LatentMoE**：896 专家，top-16 激活，Quantile Balancing 路由均衡，SiTU-GLU 激活函数
+- **QAT 量化**：从 SFT 阶段起量化感知训练，MXFP4 权重 + MXFP8 激活，落盘密度 2.12 bit/weight
+
+**本项目关注的推理带宽问题**：trunk（KDA 门控投影 + Gated MLA Q/K/V/O + 共享专家 + router + dense + embed + vision）每 token 每层必经，无法稀疏化。实测 108.8GB/token（未量化 trunk），MXFP4 量化后降至 36GB。详见 `k3-verdict.md`。
+
 三条路线并行：
 
 | 路线 | 核心创新 | 目标市场 |
@@ -225,7 +236,7 @@ MAC 改用 LUT 查表后，Tang Mega 138K 上 192 个 DSP 全部空闲。
 
 | 被替代的功能 | 原 LUT 占用 | 改用 DSP 后 |
 |---|---|---|
-| 激活函数 GELU | ~2,000 | 0 |
+| 激活函数 SiTU-GLU | ~2,000 | 0 |
 | KV-Cache 量化 | ~800 | 0 |
 | NAND BCH ECC | ~3,500 | 0 |
 | **合计释放** | **~6,300** | |
@@ -479,7 +490,7 @@ kimi-k3-in-c 原版（纯 CPU）：
 |---|---|---|
 | **RISC-V AE350** (~720 MIPS) | tokenizer、采样、KV 记账、路由 softmax、预取命令、层循环控制 | ~10-50ms/token |
 | **MAC 阵列** (1,258 lanes) | 全部大矩阵乘（专家 FFN） | ~7s/token（带宽决定）|
-| **DSP 复用单元** | GELU、KV 量化 | 流水内隐藏 |
+| **DSP 复用单元** | SiTU-GLU、KV 量化 | 流水内隐藏 |
 
 **【实测修正 · T3】"路由 softmax ✅ 微秒级"不成立：**
 router 是 [896×7168] GEMV，每 token 每层 6.4M MAC × 92 层 ≈ 1.18 GFLOP/token。
@@ -522,7 +533,7 @@ logits 缓冲           ~600KB          ✓
 | llama.cpp 官方主线 | ❌ 仅支持 RV64 |
 | Linux | ❌ 无 MMU |
 | 神经网络草稿模型 | ❌ 太慢；用 n-gram 替代 |
-| GELU 等激活函数 | ❌ 走 DSP 复用单元 |
+| SiTU-GLU 等激活函数 | ❌ 走 DSP 复用单元 |
 
 定位类比：它是服务器的 BMC/EC 芯片——没人用它跑业务，
 但拔掉它整台机器就是铁块。
