@@ -1,0 +1,147 @@
+// ============================================================================
+// simd_mac_array.v — 128 个并行 MAC，各有独立累加器
+//
+// 真正的 SIMD 结构：
+//   每条通道独立乘累加，互不干扰
+//   最后由 reduction_tree 归约成单个输出
+//
+// 资源策略：
+//   - mxfp4 模式：LUT 查表 + 移位加法替代 DSP（每通道 ~90 LUT）
+//   - ACC16 模式：int16 饱和累加器，lane 成本 -40%（余量①）
+// ============================================================================
+
+`timescale 1ns/1ps
+
+module simd_mac_array #(
+    parameter NUM_LANES      = 128,   // 并行 MAC 数量
+    parameter ACC_WIDTH      = 32,    // 累加器位宽：32=精确 / 16=饱和省资源
+    parameter SATURATE       = (ACC_WIDTH <= 16)
+)(
+    input  wire                       clk,
+    input  wire                       rst_n,
+    input  wire                       en,        // 全局使能（ICG 门控）
+
+    // ---- 权重流输入（来自解包器）----
+    input  wire                       wt_valid,
+    input  wire [NUM_LANES*4-1:0]     wt_data,
+    /* verilator lint_off UNUSEDSIGNAL */
+    input  wire [7:0]                 wt_scale,  // 预留 per-block scale
+    /* verilator lint_on UNUSEDSIGNAL */
+
+    // ---- 激活值向量（x 向量分片）----
+    input  wire [NUM_LANES*8-1:0]     x_data,
+    input  wire                       x_valid,
+
+    // ---- 累加控制 ----
+    input  wire                       acc_clr,
+    input  wire                       acc_en,
+
+    // ---- 输出到归约树 ----
+    output wire [NUM_LANES*ACC_WIDTH-1:0] acc_out,
+    output wire                       acc_done
+);
+
+    // ========================================================================
+    // mxfp4 E2M1 查表解码（LUT 实现，不用 DSP）
+    // ========================================================================
+    function signed [7:0] e2m1_lut;
+        input [3:0] code;
+        reg [4:0] mag;
+        begin
+            case (code[2:0])
+                3'b000: mag = 5'd0;
+                3'b001: mag = 5'd2;
+                3'b010: mag = 5'd4;
+                3'b011: mag = 5'd6;
+                3'b100: mag = 5'd8;
+                3'b101: mag = 5'd12;
+                3'b110: mag = 5'd16;
+                3'b111: mag = 5'd24;
+                default: mag = 5'd0;
+            endcase
+            e2m1_lut = code[3] ? -$signed({3'b000, mag}) : $signed({3'b000, mag});
+        end
+    endfunction
+
+    // ========================================================================
+    // 饱和函数（ACC16 模式用）
+    // ========================================================================
+    function signed [47:0] sat16;
+        input signed [47:0] v;
+        begin
+            if      (v >  48'sd32767)  sat16 =  48'sd32767;
+            else if (v < -48'sd32768)  sat16 = -48'sd32768;
+            else                       sat16 = v;
+        end
+    endfunction
+
+    // ========================================================================
+    // 单个 MAC 通道：移位加法乘法 + 独立累加器
+    // ========================================================================
+    generate
+        genvar i;
+        for (i = 0; i < NUM_LANES; i = i + 1) begin : gen_lane
+            reg signed [ACC_WIDTH-1:0] acc;
+
+            wire signed [7:0] x_val = x_data[i*8 +: 8];
+
+            // ── 移位加法乘法器（E2M1 幅值全偶数：w = 2k）──
+            wire [2:0] mag = wt_data[i*4 +: 3];
+            wire      sgn = wt_data[i*4+3];
+            wire signed [11:0] sx = {{4{x_val[7]}}, x_val};
+            reg  signed [11:0] kx;                     // k·x ∈ [-1536,+1512]
+            always @(*) begin
+                case (mag)
+                    3'd0: kx = 12'sd0;
+                    3'd1: kx = sx;
+                    3'd2: kx = sx <<< 1;
+                    3'd3: kx = sx + (sx <<< 1);
+                    3'd4: kx = sx <<< 2;
+                    3'd5: kx = (sx <<< 2) + (sx <<< 1);
+                    3'd6: kx = sx <<< 3;
+                    3'd7: kx = (sx <<< 3) + (sx <<< 2);
+                endcase
+            end
+            // 先算窄位宽积（保留符号），靠赋值隐式符号扩展到 ACC_WIDTH
+            wire signed [12:0] prod13 =
+                sgn ? -$signed({kx, 1'b0})
+                    :  $signed({kx, 1'b0});
+            wire signed [ACC_WIDTH-1:0] product = prod13;
+
+            // ── 累加（32bit 精确 / 16bit 饱和二选一，参数常量折叠）──
+            // 统一在 48bit 域内相加（ACC16 时高 32 位自然为零扩展路径被折叠）
+            wire signed [47:0] sum_ext =
+                {{(48-ACC_WIDTH){acc[ACC_WIDTH-1]}}, acc} +
+                {{(48-ACC_WIDTH){product[ACC_WIDTH-1]}}, product};
+
+            // 饱和结果经中间线网（避免函数返回值直接位选的移植性问题）
+            wire signed [47:0] sum_sat = sat16(sum_ext);
+
+            always @(posedge clk) begin
+                if (!rst_n || acc_clr)
+                    acc <= {ACC_WIDTH{1'b0}};
+                else if (en && wt_valid && x_valid && acc_en)
+                    acc <= SATURATE ? sum_sat[ACC_WIDTH-1:0]
+                                    : sum_ext[ACC_WIDTH-1:0];
+            end
+        end
+    endgenerate
+
+    // ── 输出总线 ──
+    generate
+        for (genvar j = 0; j < NUM_LANES; j = j + 1) begin : gen_acc_out
+            assign acc_out[j*ACC_WIDTH +: ACC_WIDTH] = gen_lane[j].acc;
+        end
+    endgenerate
+
+    // ── 完成信号 ──
+    reg [15:0] done_cnt;
+    always @(posedge clk) begin
+        if (!rst_n || acc_clr)
+            done_cnt <= 16'd0;
+        else if (wt_valid && x_valid && acc_en)
+            done_cnt <= done_cnt + 16'd1;
+    end
+    assign acc_done = (done_cnt != 16'd0) && !wt_valid;
+
+endmodule

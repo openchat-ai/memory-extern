@@ -1,0 +1,28 @@
+// ============================================================================
+// mega138k_engine.cst — Tang Mega 138K Dock 引脚约束
+//
+// 引脚来源：sipeed/TangMega-138K-example 官方 pcie_dma_demo/Pins.cst
+// 芯片：GW5AST-LV138PG484AC1/I0（IDE 中封装选 PBG484A，版本 B/C）
+// ============================================================================
+
+// ---- 时钟（MS5351 / 板载差分源，仅约束正端）----
+IO_LOC  "sys_clk_p" V22;
+IO_PORT "sys_clk_p" PULL_MODE=UP DRIVE=OFF PULL_STRENGTH=STRONG BANK_VCCIO=3.3;
+
+// ---- 复位按键 ----
+IO_LOC  "rst_n_btn" AB13;
+IO_PORT "rst_n_btn" PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+
+// ---- LED ×4 ----
+IO_LOC  "led[3]" R19;
+IO_PORT "led[3]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[2]" U21;
+IO_PORT "led[2]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[1]" R17;
+IO_PORT "led[1]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[0]" T18;
+IO_PORT "led[0]" PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+
+// ---- PCIe 复位引脚（后续 DMA 集成时启用）----
+// IO_LOC  "pcie_rstn" W11;
+// IO_PORT "pcie_rstn" PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
