@@ -18,7 +18,9 @@ static float frand(void) {
 }
 
 int main(void) {
-    void * h = dlopen("/tmp/chipbuild/libchip-backend.so", RTLD_NOW | RTLD_LOCAL);
+    const char * so_path = getenv("CHIP_SO");
+    if (!so_path) so_path = "./libchip-backend.so";
+    void * h = dlopen(so_path, RTLD_NOW | RTLD_LOCAL);
     if (!h) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 1; }
     int (*score)(void) = dlsym(h, "ggml_backend_score");
     ggml_backend_reg_t (*binit)(void) = dlsym(h, "ggml_backend_init");
@@ -91,6 +93,17 @@ int main(void) {
         if (e > max_err) max_err = e;
     }
     printf("max_abs_err=%g\n", max_err);
+
+    void (*get_stats)(long long *, long long *, long long *, long long *, int *) =
+        (void (*)(long long *, long long *, long long *, long long *, int *))dlsym(h, "ggml_backend_chip_get_stats");
+    if (!get_stats) { fprintf(stderr, "stats export missing\n"); return 7; }
+    long long sf = 0, sb = 0, so = 0, ssb = 0;
+    int sw = 0;
+    get_stats(&sf, &sb, &so, &ssb, &sw);
+    printf("chip_stats flops=%lld bytes=%lld ops=%lld sram=%lld workers=%d\n",
+        sf, sb, so, ssb, sw);
+    if (!(sf > 0 && so > 0 && ssb > 0 && sw > 0)) return 8;
+
     int rc = max_err <= 1.0 ? 0 : 6;
     printf("%s\n", rc == 0 ? "MATCH" : "MISMATCH");
     return rc;

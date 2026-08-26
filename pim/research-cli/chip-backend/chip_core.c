@@ -65,8 +65,19 @@ int chip_nt_copy(void) {
     return v;
 }
 
-static chip_vec_dot_fn chip_vec_dot;
+static chip_vec_dot_fn chip_vec_dot_tab[4]; /* Q3_K, IQ3_XXS, IQ3_S, IQ4_XS */
+static chip_vec_dot_fn chip_vec_dot_cur;
 static chip_from_float_fn chip_from_float;
+
+static chip_vec_dot_fn chip_vec_dot_for(enum ggml_type t) {
+    switch (t) {
+        case GGML_TYPE_Q3_K:    return chip_vec_dot_tab[0];
+        case GGML_TYPE_IQ3_XXS: return chip_vec_dot_tab[1];
+        case GGML_TYPE_IQ3_S:   return chip_vec_dot_tab[2];
+        case GGML_TYPE_IQ4_XS:  return chip_vec_dot_tab[3];
+        default:                return NULL;
+    }
+}
 
 struct mmid_row_mapping {
     int32_t i1;
@@ -110,6 +121,7 @@ static void * ggml_chip_sram = NULL;
 static size_t ggml_chip_sram_cap = 0;
 static int64_t * ggml_chip_sram_off = NULL;
 static int64_t ggml_chip_sram_off_cap = 0;
+static int ggml_chip_zcopy = 1;
 static _Atomic int64_t ggml_chip_copy_ns_total;
 static _Atomic int64_t ggml_chip_copy_bytes_total;
 static _Atomic int64_t ggml_chip_compute_ns_total;
@@ -199,7 +211,7 @@ static void ggml_compute_forward_mul_mat_id_one_chunk(
     const size_t nb1 = dst->nb[1];
     const size_t nb2 = dst->nb[2];
 
-    chip_vec_dot_fn const vec_dot = chip_vec_dot;
+    chip_vec_dot_fn const vec_dot = chip_vec_dot_cur;
     enum ggml_type const vec_dot_type = GGML_TYPE_Q8_K;
 
     const int64_t blck_0 = 16;
@@ -297,15 +309,17 @@ static void ggml_chip_run_op(int ith, int nth) {
         if (matrix_row_counts[cur_a] <= 0) {
             continue;
         }
+        if (!ggml_chip_zcopy) {
 #ifdef __x86_64__
-        if (atomic_load_explicit(&ggml_chip_nt_copy, memory_order_relaxed) != 0) {
-            ggml_chip_nt_memcpy((char *) ggml_chip_sram + ggml_chip_sram_off[cur_a],
-                                (const char *) src0->data + cur_a * nb02, exp_bytes);
-        } else
+            if (atomic_load_explicit(&ggml_chip_nt_copy, memory_order_relaxed) != 0) {
+                ggml_chip_nt_memcpy((char *) ggml_chip_sram + ggml_chip_sram_off[cur_a],
+                                    (const char *) src0->data + cur_a * nb02, exp_bytes);
+            } else
 #endif
-        {
-            memcpy((char *) ggml_chip_sram + ggml_chip_sram_off[cur_a],
-                   (const char *) src0->data + cur_a * nb02, exp_bytes);
+            {
+                memcpy((char *) ggml_chip_sram + ggml_chip_sram_off[cur_a],
+                       (const char *) src0->data + cur_a * nb02, exp_bytes);
+            }
         }
         copied += (int64_t) exp_bytes;
         atomic_store_explicit(&ggml_chip_expert_ready[cur_a], 1, memory_order_release);
@@ -345,7 +359,9 @@ static void ggml_chip_run_op(int ith, int nth) {
                 atomic_store_explicit(&ggml_chip_comp_t0_ns,
                     (int64_t) cps.tv_sec * 1000000000LL + cps.tv_nsec, memory_order_relaxed);
             }
-            const char * src0_cur = (const char *) ggml_chip_sram + ggml_chip_sram_off[cur_a];
+            const char * src0_cur = ggml_chip_zcopy
+                ? (const char *) src0->data + (size_t) cur_a * nb02
+                : (const char *) ggml_chip_sram + ggml_chip_sram_off[cur_a];
             const void * wdata = (src1->type == GGML_TYPE_Q8_K) ? src1->data : ggml_chip_wdata;
             const size_t row_size = ggml_row_size(GGML_TYPE_Q8_K, ne10);
 
@@ -519,7 +535,11 @@ static void ggml_chip_submit(const struct ggml_tensor * dst) {
             ggml_chip_sram_off_cap = n_as;
         }
         const size_t need = (size_t) n_sel * exp_bytes;
-        if (ggml_chip_sram_cap < need) {
+        if (ggml_chip_zcopy) {
+            if ((size_t) ggml_chip_sram_cap < need) {
+                ggml_chip_sram_cap = need;
+            }
+        } else if (ggml_chip_sram_cap < need) {
             ggml_chip_sram = ggml_chip_sram_aligned_realloc(ggml_chip_sram, ggml_chip_sram_cap, need);
             ggml_chip_sram_cap = need;
         }
@@ -569,10 +589,11 @@ int chip_mul_mat_id(struct ggml_tensor * dst) {
     const struct ggml_tensor * src1 = dst->src[1];
     const struct ggml_tensor * ids  = dst->src[2];
 
-    if (!chip_vec_dot || !chip_from_float) {
+    if (!chip_from_float) {
         return -1;
     }
-    if (src0->type != GGML_TYPE_Q3_K) {
+    chip_vec_dot_fn vd = chip_vec_dot_for(src0->type);
+    if (!vd) {
         CHIP_LOG("mmid reject: src0.type=%d src1.type=%d ids.type=%d ne=[%lld,%lld,%lld]\n",
             (int)src0->type, (int)src1->type, (int)ids->type,
             (long long)src0->ne[0], (long long)src0->ne[1], (long long)src0->ne[2]);
@@ -585,25 +606,37 @@ int chip_mul_mat_id(struct ggml_tensor * dst) {
         return -4;
     }
 
+    chip_vec_dot_cur = vd; /* workers read this after submit */
     ggml_chip_submit(dst);
     ggml_chip_wait_done();
     return 0;
 }
 
-int chip_core_init(chip_vec_dot_fn vec_dot_q3_K_q8_K, void * from_float_q8_K) {
+int chip_core_init(chip_vec_dot_fn vd_q3_K, chip_vec_dot_fn vd_iq3_xxs,
+                   chip_vec_dot_fn vd_iq3_s, chip_vec_dot_fn vd_iq4_xs,
+                   void * from_float_q8_K) {
     (void)chip_nchips();
     (void)chip_nworkers();
     (void)chip_nt_copy();
 
-    chip_vec_dot = vec_dot_q3_K_q8_K;
+    chip_vec_dot_tab[0] = vd_q3_K;
+    chip_vec_dot_tab[1] = vd_iq3_xxs;
+    chip_vec_dot_tab[2] = vd_iq3_s;
+    chip_vec_dot_tab[3] = vd_iq4_xs;
     chip_from_float = (chip_from_float_fn) from_float_q8_K;
-    if (!chip_vec_dot || !chip_from_float) {
+    if (!chip_vec_dot_tab[0] || !chip_from_float) {
         CHIP_LOG("FATAL: vec_dot/from_float missing\n");
         return -1;
     }
 
     ggml_chip_nt_copy = chip_nt_copy();
     ggml_chip_nthreads = chip_nworkers();
+    {
+        const char * zc = getenv("CHIP_ZCOPY");
+        if (zc && strcmp(zc, "0") == 0) {
+            ggml_chip_zcopy = 0;
+        }
+    }
     pthread_mutex_init(&ggml_chip_done_mtx, NULL);
     pthread_cond_init(&ggml_chip_done_cv, NULL);
     atomic_store_explicit(&ggml_chip_sync_mode, 0, memory_order_relaxed);
@@ -617,7 +650,7 @@ int chip_core_init(chip_vec_dot_fn vec_dot_q3_K_q8_K, void * from_float_q8_K) {
         pthread_create(&ggml_chip_threads[i], NULL, ggml_chip_thread_main, (void *)(intptr_t)i);
     }
 
-    CHIP_LOG("init: nchips=%d workers=%d nt_copy=%d\n", chip_nchips(), ggml_chip_nthreads, ggml_chip_nt_copy);
+    CHIP_LOG("init: nchips=%d workers=%d nt_copy=%d zcopy=%d\n", chip_nchips(), ggml_chip_nthreads, ggml_chip_nt_copy, ggml_chip_zcopy);
     return 0;
 }
 
@@ -627,4 +660,24 @@ void chip_core_shutdown(void) {
         atomic_load_explicit(&ggml_chip_copy_ns_total, memory_order_relaxed) / 1000.0,
         atomic_load_explicit(&ggml_chip_compute_ns_total, memory_order_relaxed) / 1000.0,
         (long long)(atomic_load_explicit(&ggml_chip_copy_bytes_total, memory_order_relaxed) >> 20));
+}
+
+__attribute__((visibility("default")))
+void ggml_backend_chip_get_stats(long long * flops, long long * bytes, long long * ops,
+                                 long long * sram_bytes, int * workers) {
+    if (flops) {
+        *flops = (long long) atomic_load_explicit(&ggml_chip_flops_total, memory_order_relaxed);
+    }
+    if (bytes) {
+        *bytes = (long long) atomic_load_explicit(&ggml_chip_bytes_total, memory_order_relaxed);
+    }
+    if (ops) {
+        *ops = (long long) atomic_load_explicit(&ggml_chip_ops_total, memory_order_relaxed);
+    }
+    if (sram_bytes) {
+        *sram_bytes = (long long) ggml_chip_sram_cap;
+    }
+    if (workers) {
+        *workers = ggml_chip_nthreads;
+    }
 }

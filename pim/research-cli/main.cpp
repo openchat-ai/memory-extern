@@ -2,6 +2,7 @@
 #include "common.h"
 #include "llama.h"
 #include "sampling.h"
+#include "ggml-backend.h"
 
 extern "C" {
 void ggml_chip_set_threads(int n);
@@ -16,16 +17,73 @@ void ggml_chip_get_stats(long long * flops, long long * bytes, long long * ops);
 #include <vector>
 #include <thread>
 #include <chrono>
+#include <unistd.h>
+#include <dlfcn.h>
 
 int main(int argc, char ** argv) {
+    if (argc > 1 && strcmp(argv[1], "--chip-help") == 0) {
+        fprintf(stderr,
+            "research-cli 参数速查 (通用参数用 --help 查看)\n"
+            "\n"
+            "  -m <路径>          模型文件 (必填)\n"
+            "  -i                 交互聊天模式\n"
+            "  -t <N>             CPU线程数, 非MoE部分 (默认4)\n"
+            "  --predict <N>      每次最多生成token数\n"
+            "  --temp <X>         温度 (默认0.8)\n"
+            "  --seed <N>         随机种子 (默认随机)\n"
+            "  -p <文本>          单轮prompt\n"
+            "  --sys <文本>       系统提示词\n"
+            "\n"
+            "芯片/模拟参数:\n"
+            "  --traffic          打印每token内存流量账单\n"
+            "  --chip-tok <N>     内置模拟器目标速度tok/s, 0=关 (默认13.9)\n"
+            "  --stream-bw <N>    板子带宽上限GiB/s (默认22)\n"
+            "  --chip-offload <N> 内置模拟器接管MoE的线程数, 0=关 (默认0)\n"
+            "  --full-recompute   全量重算模式\n"
+            "  --sram             SRAM常驻模式\n"
+            "  --chip on|off|<so> 加载芯片插件后端 (默认on)\n"
+            "\n"
+            "环境变量:\n"
+            "  CHIP_NWORKERS=<N>            插件后端worker数 (默认4)\n"
+            "  CHIP_ZCOPY=0                 关闭零拷贝, 退回SRAM staging路径 (A/B用)\n"
+            "  CHIP_LOG_LEVEL=<0|1|2>       插件日志级别\n");
+        return 0;
+    }
     double chip_tok = 13.9;
     double stream_bw = 22.0;
     bool full_recompute = false;
     bool sram_on = false;
+    bool chip_traffic = false;
     int chip_offload = 0;
+    bool chip_on = true;
+    const char * chip_so = "/root/chipwork/libchip-backend.so";
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--chip") == 0 && i + 1 < argc) {
+            const char * v = argv[++i];
+            if (strcmp(v, "off") == 0) {
+                chip_on = false;
+            } else if (strcmp(v, "on") != 0) {
+                chip_so = v;
+            }
+            continue;
+        }
+    }
+    if (chip_on && access(chip_so, R_OK) != 0) {
+        fprintf(stderr, "[chip] 插件未找到: %s (退回纯CPU模式)\n", chip_so);
+        chip_on = false;
+    }
+    unsetenv("GGML_BACKEND_PATH");
+    if (chip_on) {
+        ggml_backend_load(chip_so);
+    }
+    ggml_backend_load_all();
     std::vector<char *> carg;
     carg.reserve(argc);
     for (int i = 0; i < argc; ++i) {
+        if (strcmp(argv[i], "--chip") == 0 && i + 1 < argc) {
+            ++i;
+            continue;
+        }
         if (strcmp(argv[i], "--chip-tok") == 0 && i + 1 < argc) {
             chip_tok = atof(argv[++i]);
             continue;
@@ -40,6 +98,10 @@ int main(int argc, char ** argv) {
         }
         if (strcmp(argv[i], "--sram") == 0) {
             sram_on = true;
+            continue;
+        }
+        if (strcmp(argv[i], "--traffic") == 0) {
+            chip_traffic = true;
             continue;
         }
         if (strcmp(argv[i], "--chip-offload") == 0 && i + 1 < argc) {
@@ -116,6 +178,21 @@ int main(int argc, char ** argv) {
         long long b0 = 0, b1 = 0;
         ggml_chip_get_stats(&chip_flops_base, &b0, &b1);
     }
+    typedef void (*chip_stats5_fn)(long long *, long long *, long long *, long long *, int *);
+    chip_stats5_fn chip_stats_plugin = NULL;
+    long long chip_flops_base_p = 0;
+    if (chip_on) {
+        void * h = dlopen(chip_so, RTLD_NOW | RTLD_GLOBAL);
+        if (h) {
+            chip_stats_plugin = (chip_stats5_fn)dlsym(h, "ggml_backend_chip_get_stats");
+            if (chip_stats_plugin) {
+                long long b0 = 0, b1 = 0, b2 = 0, b3 = 0;
+                int b4 = 0;
+                chip_stats_plugin(&chip_flops_base_p, &b0, &b1, &b2, &b4);
+                (void) b4;
+            }
+        }
+    }
     fprintf(stderr, "chip-sim: weights total=%lld MB expert=%lld MB shared=%lld MB per-token-active=%lld MB (expert %d/%d)\\n",
         (long long) (w_total / (1024 * 1024)),
         (long long) (w_expert / (1024 * 1024)),
@@ -136,7 +213,7 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    fprintf(stderr, "research-cli: chip-sim %.1f tok/s  eos=%d im_end=%d eot=%d\n", chip_tok, (int) eos, (int) im_end, (int) eot);
+    fprintf(stderr, "research-cli: chip-sim %.1f tok/s  eos=%d im_end=%d eot=%d  (--chip-help 查看全部参数)\n", chip_tok, (int) eos, (int) im_end, (int) eot);
 
     auto pace = [&](std::chrono::steady_clock::time_point t0) {
         if (chip_tok <= 0.0) {
@@ -173,7 +250,8 @@ int main(int argc, char ** argv) {
             const int64_t a_bytes = (int64_t) toks.size() * act_per_tok;
             cum_w += w_bytes;
             cum_act += a_bytes;
-            fprintf(stderr, "[chip] t=%7.1fms %s n=%d w=%.1fMB act=%.3fMB cumW=%.0fMB\n",
+            if (chip_traffic)
+                fprintf(stderr, "[chip] t=%7.1fms %s n=%d w=%.1fMB act=%.3fMB cumW=%.0fMB\n",
                 std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count() * 1000.0,
                 first_batch ? "prefill" : "decode", (int) toks.size(),
                 w_bytes / 1048576.0, a_bytes / 1048576.0, cum_w / 1048576.0);
@@ -245,7 +323,7 @@ int main(int argc, char ** argv) {
                 n_decode > 0 ? t_decode / n_decode : 0.0,
                 (int) kv_max + 1);
         }
-        if (chip_tok > 0 && n_gen > 1) {
+        if (n_gen > 1) {
             const int n_decode = n_gen - 1;
             const double cpu_spt = t_decode / n_decode;
             const double cpu_tps = 1.0 / cpu_spt;
@@ -255,11 +333,23 @@ int main(int argc, char ** argv) {
             const double peak_gflops = 300.0;
             const double u_bw = stream_bw > 0 ? cpu_bw / stream_bw : 0.0;
             const double u_flops = cpu_gflops / peak_gflops;
-            const int64_t resident_bytes = sram_bytes > 0 ? sram_bytes : (int64_t) vmlck_kb * 1024;
-            const double u_takeover = w_total > 0 ? (double) resident_bytes / (double) w_total : 0.0;
             long long chip_flops = 0, chip_bytes = 0, chip_ops = 0;
-            ggml_chip_get_stats(&chip_flops, &chip_bytes, &chip_ops);
-            chip_flops -= chip_flops_base;
+            int chip_cores = ggml_chip_get_threads();
+            long long resident_chip = 0;
+            if (chip_stats_plugin) {
+                long long pf = 0, pb = 0, po = 0, psb = 0;
+                int pw = 0;
+                chip_stats_plugin(&pf, &pb, &po, &psb, &pw);
+                chip_flops = pf - chip_flops_base_p;
+                chip_cores = pw > 0 ? pw : chip_cores;
+                resident_chip = psb;
+            } else {
+                ggml_chip_get_stats(&chip_flops, &chip_bytes, &chip_ops);
+                chip_flops -= chip_flops_base;
+            }
+            const int64_t resident_bytes = resident_chip > 0 ? resident_chip :
+                (sram_bytes > 0 ? sram_bytes : (int64_t) vmlck_kb * 1024);
+            const double u_takeover = w_total > 0 ? (double) resident_bytes / (double) w_total : 0.0;
             const double total_flops = flop_tok * (n_decode + (double) prefill.size());
             const double chip_share = total_flops > 0 ? chip_flops / total_flops : 0.0;
             const double chip_gflops = t_decode > 0 ? chip_flops / (t_decode + t_prefill) / 1e9 : 0.0;
@@ -282,11 +372,14 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "[board] CPU算力  %s %3.0f%%  有效 %.1f GFLOPS\n",
                 bar(u_flops), u_flops * 100.0, cpu_gflops);
             fprintf(stderr, "[board] 芯片算力 %s %3.0f%%  MoE卸载 %.0f%%FLOPs %.1f GFLOPS @%d核\n",
-                bar(chip_share), chip_share * 100.0, chip_share * 100.0, chip_gflops, ggml_chip_get_threads());
+                bar(chip_share), chip_share * 100.0, chip_share * 100.0, chip_gflops, chip_cores);
             fprintf(stderr, "[board] 芯片接管 %s %3.0f%%  权重驻留 %.0f / %.0f MB\n",
                 bar(u_takeover), u_takeover * 100.0, resident_bytes / 1048576.0, w_total / 1048576.0);
-            fprintf(stderr, "[board] 吞吐     %.2f tok/s (目标 %.1f, 差 %.1f 倍)\n",
-                cpu_tps, chip_tok, chip_tok / cpu_tps);
+            if (chip_tok > 0)
+                fprintf(stderr, "[board] 吞吐     %.2f tok/s (目标 %.1f, 差 %.1f 倍)\n",
+                    cpu_tps, chip_tok, chip_tok / cpu_tps);
+            else
+                fprintf(stderr, "[board] 吞吐     %.2f tok/s\n", cpu_tps);
             if (u_takeover >= 0.99 && chip_share > 0.5) {
                 fprintf(stderr, "[board] 判定: 权重片上驻留 + MoE计算芯片承担 -> 芯片接管生效\n");
             } else if (u_takeover >= 0.99) {
