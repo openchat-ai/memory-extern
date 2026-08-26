@@ -94,15 +94,24 @@ static bool chip_dev_supports_op(ggml_backend_dev_t dev, const struct ggml_tenso
         return false;
     }
     const struct ggml_tensor * a = op->src[0];
-    if (a->type != GGML_TYPE_Q3_K) {
-        return false;
+    switch (a->type) {
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ4_XS:
+            break;
+        default:
+            CHIP_LOG("supports_op reject: a type %d (%s) name=%s\n", (int)a->type, ggml_type_name(a->type), a->name);
+            return false;
     }
     const struct ggml_tensor * b = op->src[1];
     if (b->type != GGML_TYPE_F32 && b->type != GGML_TYPE_Q8_K) {
+        CHIP_LOG("supports_op reject: b type %d (%s)\n", (int)b->type, ggml_type_name(b->type));
         return false;
     }
     const struct ggml_tensor * c = op->src[2];
     if (c->type != GGML_TYPE_I32) {
+        CHIP_LOG("supports_op reject: c type %d (%s)\n", (int)c->type, ggml_type_name(c->type));
         return false;
     }
     return true;
@@ -116,6 +125,11 @@ static bool chip_dev_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_t
         fn = (cpu_buft_fn)dlsym(RTLD_DEFAULT, "ggml_backend_cpu_buffer_type");
     }
     return fn && buft == fn();
+}
+
+static bool chip_dev_offload_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
+    (void)dev;
+    return op != NULL && op->op == GGML_OP_MUL_MAT_ID;
 }
 
 static const char * chip_backend_get_name(ggml_backend_t backend) {
@@ -174,7 +188,7 @@ static struct ggml_backend_device chip_dev_instance = {
         chip_dev_buffer_from_host_ptr,
         chip_dev_supports_op,
         chip_dev_supports_buft,
-        NULL,
+        chip_dev_offload_op,
         NULL,
         NULL,
         NULL,
@@ -202,6 +216,30 @@ static ggml_backend_t chip_dev_init_backend(ggml_backend_dev_t dev, const char *
 
 typedef void (*vec_dot_q3_K_q8_K_fn)(int n, float * s, size_t bs, const void * vx, size_t bx, const void * vy, size_t by, int nrc);
 typedef void (*quantize_row_q8_K_fn)(const float * x, void * y, int64_t k);
+
+static void * resolve_sym_from_maps(const char * sym);
+
+static void * resolve_sym_robust(const char * sym) {
+    void * p = dlsym(RTLD_DEFAULT, sym);
+    if (!p) {
+        p = resolve_sym_from_maps(sym);
+    }
+    if (!p) {
+        /* symbols live in libggml-cpu which may not be loaded yet */
+        const char * names[] = { "libggml-cpu.so.0", "libggml-cpu.so", NULL };
+        for (int i = 0; names[i] && !p; i++) {
+            void * h = dlopen(names[i], RTLD_LAZY | RTLD_GLOBAL);
+            if (h) {
+                p = dlsym(RTLD_DEFAULT, sym);
+            }
+        }
+    }
+    return p;
+}
+
+static vec_dot_q3_K_q8_K_fn resolve_vec_dot(const char * sym) {
+    return (vec_dot_q3_K_q8_K_fn)resolve_sym_robust(sym);
+}
 
 static void * resolve_sym_from_maps(const char * sym) {
     FILE * f = fopen("/proc/self/maps", "r");
@@ -257,7 +295,7 @@ static enum ggml_status chip_backend_graph_compute(ggml_backend_t backend, struc
             CHIP_DBG("unexpected op=%d name=%s\n", (int)node->op, node->name ? node->name : "?");
         }
     }
-    CHIP_LOG("graph_compute done: %d mul_mat_id nodes\n", ran);
+    CHIP_DBG("graph_compute done: %d mul_mat_id nodes\n", ran);
     return GGML_STATUS_SUCCESS;
 }
 
@@ -275,23 +313,24 @@ ggml_backend_reg_t ggml_backend_init(void) {
     if (ggml_backend_score() == 0) {
         return NULL;
     }
-    vec_dot_q3_K_q8_K_fn vd = (vec_dot_q3_K_q8_K_fn)dlsym(RTLD_DEFAULT, "ggml_vec_dot_q3_K_q8_K");
-    if (!vd) {
-        vd = (vec_dot_q3_K_q8_K_fn)resolve_sym_from_maps("ggml_vec_dot_q3_K_q8_K");
-    }
-    if (!vd) {
+    vec_dot_q3_K_q8_K_fn vd_q3K   = resolve_vec_dot("ggml_vec_dot_q3_K_q8_K");
+    vec_dot_q3_K_q8_K_fn vd_ixxs  = resolve_vec_dot("ggml_vec_dot_iq3_xxs_q8_K");
+    vec_dot_q3_K_q8_K_fn vd_is    = resolve_vec_dot("ggml_vec_dot_iq3_s_q8_K");
+    vec_dot_q3_K_q8_K_fn vd_ixs   = resolve_vec_dot("ggml_vec_dot_iq4_xs_q8_K");
+    if (!vd_q3K) {
         CHIP_LOG("FATAL: ggml_vec_dot_q3_K_q8_K not resolvable\n");
         return NULL;
     }
-    quantize_row_q8_K_fn qf = (quantize_row_q8_K_fn)dlsym(RTLD_DEFAULT, "quantize_row_q8_K");
-    if (!qf) {
-        qf = (quantize_row_q8_K_fn)resolve_sym_from_maps("quantize_row_q8_K");
+    if (getenv("CHIP_LOG_LEVEL")) {
+        CHIP_LOG("vec_dot resolvers: q3_K=%p iq3_xxs=%p iq3_s=%p iq4_xs=%p\n",
+            (void*)vd_q3K, (void*)vd_ixxs, (void*)vd_is, (void*)vd_ixs);
     }
+    quantize_row_q8_K_fn qf = (quantize_row_q8_K_fn)resolve_sym_robust("quantize_row_q8_K");
     if (!qf) {
         CHIP_LOG("FATAL: quantize_row_q8_K not resolvable\n");
         return NULL;
     }
-    if (chip_core_init(vd, qf) != 0) {
+    if (chip_core_init(vd_q3K, vd_ixxs, vd_is, vd_ixs, qf) != 0) {
         return NULL;
     }
     CHIP_LOG("registered (api_version=%d)\n", CHIP_API_VERSION);
