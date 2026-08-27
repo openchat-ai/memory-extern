@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Quantile Balancing：896 个专家的路由，如何不调参就均衡</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">Quantile Balancing：896 个专家的路由，如何不调参就均衡</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">MoE 的路由均衡是出了名的难调——辅助损失的权重 λ 太大伤害质量，太小均衡不住。月之暗面说：为什么要调参？直接用分位数硬保证。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">辅助损失：MoE 的阿喀琉斯之踵</h2>
+<p style="margin:10px 0;text-align:justify;">MoE 的路由均衡，传统方案是辅助损失（auxiliary loss）：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">总损失 = 语言模型损失 + λ · 路由均衡损失
+
+路由均衡损失 = Σ(每个专家被选中的频率 - 1/总专家数)²</pre>
+<p style="margin:10px 0;text-align:justify;">这个方案的问题：</p>
+<p style="margin:10px 0;text-align:justify;">1. <strong style="color:#e74c3c;font-weight:bold;">λ 是超参数</strong>：太大 → 模型质量下降（被迫选不相关的专家）；太小 → 均衡不住</p>
+<p style="margin:10px 0;text-align:justify;">2. <strong style="color:#e74c3c;font-weight:bold;">λ 需要调</strong>：不同模型、不同规模、不同训练阶段，最优 λ 都不同</p>
+<p style="margin:10px 0;text-align:justify;">3. <strong style="color:#e74c3c;font-weight:bold;">λ 和质量是矛盾的</strong>：均衡损失和语言模型损失在梯度方向上是冲突的</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">在 2.8T 参数的 MoE 上调 λ？没人敢。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">Quantile Balancing：不调参的硬保证</h2>
+<p style="margin:10px 0;text-align:justify;">K3 的方案：<strong style="color:#e74c3c;font-weight:bold;">用分位数统计直接保证均衡</strong>，不需要辅助损失，不需要调 λ。</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">Quantile Balancing 的逻辑：
+
+1. 记录每个 token 对每个专家的 gate 值
+2. 按 gate 值排序，计算每个专家的"分位数"
+3. 根据分位数决定每个专家的"配额"
+4. 强制每个专家被选中的频率接近 1/896</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这不是"软均衡"（辅助损失），而是"硬均衡"（分位数保证）。</strong></p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">为什么分位数有效</h3>
+<p style="margin:10px 0;text-align:justify;">gate 值的分布是已知的——通常是对数正态分布或长尾分布。</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">gate 值分布（示意）：
+
+  频率
+  ↑
+  │ ██
+  │ ████
+  │ ██████
+  │ ████████
+  │ ██████████
+  │ ████████████
+  │ ██████████████
+  │ ████████████████
+  └──────────────────→ gate 值
+     0.01  0.1   1   10</pre>
+<p style="margin:10px 0;text-align:justify;">大部分 token 的 gate 值在中间区域，少数在两端。</p>
+<p style="margin:10px 0;text-align:justify;">Quantile Balancing 的做法：</p>
+<p style="margin:10px 0;text-align:justify;">- 统计所有 token 的 gate 值分位数</p>
+<p style="margin:10px 0;text-align:justify;">- 每个专家根据其 gate 值的分位数，获得对应的"配额"</p>
+<p style="margin:10px 0;text-align:justify;">- 如果某个专家的 gate 值普遍偏高（被过度选择），降低其配额</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">分位数是分布的"骨架"——它不关心具体值，只关心排序。</strong> 这使得它对 gate 值的绝对大小不敏感，只对相对排序敏感。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对比辅助损失</h2>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;"><thead><tr><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">方案</th><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">需要调参？</th><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">均衡保证？</th><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">对质量的影响？</th></tr></thead><tbody><tr><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">辅助损失</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">是（λ）</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">软保证（概率性）</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">可能伤害</td></tr><tr><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">Quantile Balancing</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;"><strong style="color:#e74c3c;font-weight:bold;">否</strong></td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;"><strong style="color:#e74c3c;font-weight:bold;">硬保证（确定性）</strong></td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;"><strong style="color:#e74c3c;font-weight:bold;">无</strong></td></tr></tbody></table>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">Quantile Balancing 是唯一一个不需要调参、不需要牺牲质量的路由均衡方案。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">我的发现：均匀路由是缓存策略的基石</h2>
+<p style="margin:10px 0;text-align:justify;">我在做专家缓存仿真时，发现了 Quantile Balancing 的一个意外好处：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">均匀路由让缓存策略可预测。</strong></p>
+<p style="margin:10px 0;text-align:justify;">如果路由不均匀（某些专家被频繁选中，某些很少），缓存策略的效果会大幅波动：</p>
+<p style="margin:10px 0;text-align:justify;">- LRU 在"热专家集中"时效果好，但"热专家分散"时效果差</p>
+<p style="margin:10px 0;text-align:justify;">- LFU 需要长期统计，短期不准</p>
+<p style="margin:10px 0;text-align:justify;">- 预取需要知道未来访问模式，不均匀路由让预测变难</p>
+<p style="margin:10px 0;text-align:justify;">Quantile Balancing 保证了<strong style="color:#e74c3c;font-weight:bold;">每个专家被选中的频率接近 1/896</strong>。这意味着：</p>
+<p style="margin:10px 0;text-align:justify;">- 每个专家的"热度"几乎相同</p>
+<p style="margin:10px 0;text-align:justify;">- LRU 和 LFU 的效果几乎一样</p>
+<p style="margin:10px 0;text-align:justify;">- 缓存命中率是可预测的（我实测 35.3%@1GB）</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">如果路由不均匀，我的 35.3% 缓存命中率可能是 10%，也可能是 60%——无法预测。</strong></p>
+<p style="margin:10px 0;text-align:justify;">Quantile Balancing 让硬件设计有了<strong style="color:#e74c3c;font-weight:bold;">确定性</strong>。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对 FPGA 实现的影响</h2>
+<p style="margin:10px 0;text-align:justify;">Quantile Balancing 对 FPGA 实现有一个直接影响：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">Router 可以用简单的 LUT 实现。</strong></p>
+<p style="margin:10px 0;text-align:justify;">传统 MoE 的 router 需要：</p>
+<p style="margin:10px 0;text-align:justify;">1. 计算每个 token 对每个专家的 gate 值（矩阵乘法）</p>
+<p style="margin:10px 0;text-align:justify;">2. 排序（top-k 选择）</p>
+<p style="margin:10px 0;text-align:justify;">3. 均衡调整（辅助损失）</p>
+<p style="margin:10px 0;text-align:justify;">K3 的 router 只需要：</p>
+<p style="margin:10px 0;text-align:justify;">1. 计算 gate 值（矩阵乘法）</p>
+<p style="margin:10px 0;text-align:justify;">2. 分位数查表（LUT）</p>
+<p style="margin:10px 0;text-align:justify;">3. 强制均衡（硬保证）</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">排序和均衡调整都可以用 LUT 替代</strong>，在 FPGA 上几乎零成本。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">MoE 的路由均衡，传统方案是"调 λ"。K3 的方案是"用分位数硬保证"。</p>
+<p style="margin:10px 0;text-align:justify;">这不是一个"更好的技巧"——它是<strong style="color:#e74c3c;font-weight:bold;">从根本上改变了问题的性质</strong>。从"如何调参让均衡和质量平衡"变成了"如何用统计方法保证均衡"。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面做了一件很聪明的事：他们没有试图"优化"辅助损失，而是<strong style="color:#e74c3c;font-weight:bold;">直接绕过了它</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">而我，作为一个在 FPGA 上试图实现 MoE 路由的人，想说：<strong style="color:#e74c3c;font-weight:bold;">Quantile Balancing 让我的工作简单了一个数量级。</strong></p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">这是 K3 技术解析系列的第六篇。下一篇：总结——月之暗面做对了什么，我做对了什么。</em></p>
+</div>
+</body>
+</html>

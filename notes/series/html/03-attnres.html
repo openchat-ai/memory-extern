@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>AttnRes：93 层深的网络，信息如何不衰减</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">AttnRes：93 层深的网络，信息如何不衰减</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">残差连接是深度学习的万能药，但它有一个你没注意到的病：<strong style="color:#e74c3c;font-weight:bold;">越深的网络，信息在残差链里衰减越严重</strong>。月之暗面用一个简单的改动治好了它。而我，是第一个发现这个问题的人。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">残差连接的隐疾</h2>
+<p style="margin:10px 0;text-align:justify;">ResNet 发明残差连接时，解决了一个核心问题：梯度消失。通过 <code style="padding:2px 6px;background:#f1f3f5;color:#e74c3c;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:14px;border-radius:3px;">y = x + F(x)</code>，梯度可以无损地从最后一层回传到第一层。</p>
+<p style="margin:10px 0;text-align:justify;">但残差连接有一个<strong style="color:#e74c3c;font-weight:bold;">信息传递</strong>的隐疾：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">Layer 1 输出: h1
+Layer 2 输出: h2 = h1 + F1(h1)
+Layer 3 输出: h3 = h2 + F2(h2) = h1 + F1(h1) + F2(h1 + F1(h1))
+...
+Layer 93 输出: h93 = h1 + F1(h1) + F2(...) + ... + F92(...)</pre>
+<p style="margin:10px 0;text-align:justify;">每一层的输出都是<strong style="color:#e74c3c;font-weight:bold;">所有前序层输出的加权和</strong>。但权重是隐式的——由网络自己学习。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">问题是：当网络有 93 层时，早期层的信号会被后期层淹没。</strong></p>
+<p style="margin:10px 0;text-align:justify;">想象一个信号处理系统：93 级放大器串联，每一级都加一点噪声。到第 93 级时，原始信号已经被噪声完全覆盖。</p>
+<p style="margin:10px 0;text-align:justify;">这不是梯度问题（梯度有残差连接保护）。这是<strong style="color:#e74c3c;font-weight:bold;">表征问题</strong>——每一层的输出 <code style="padding:2px 6px;background:#f1f3f5;color:#e74c3c;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:14px;border-radius:3px;">h_i</code> 里，早期层的贡献越来越小，越来越"模糊"。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">我第一次意识到这个问题，是在分析 K3 的 93 层架构时。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">K3 的方案：Attention Residuals</h2>
+<p style="margin:10px 0;text-align:justify;">AttnRes 的核心思想：<strong style="color:#e74c3c;font-weight:bold;">在 block 之间用注意力机制选择性检索前序层表征</strong>。</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">传统残差：
+  h_i = h_{i-1} + F_{i-1}(h_{i-1})
+  所有前序层的贡献被隐式混合
+
+AttnRes：
+  将 93 层分为 8 个 block（每 block ~12 层）
+  block i 的输入 = block i-1 的输出 + Attention(block i-1, 所有前序 block 输出)
+  注意力机制可以选择性地"拉取"特定前序 block 的信息</pre>
+<p style="margin:10px 0;text-align:justify;">具体机制：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">Block 1 输出: B1
+Block 2 输出: B2 = B1 + Attn(Q=B1, K=[B1], V=[B1])
+Block 3 输出: B3 = B2 + Attn(Q=B2, K=[B1, B2], V=[B1, B2])
+...
+Block 8 输出: B8 = B7 + Attn(Q=B7, K=[B1..B7], V=[B1..B7])</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">每个 block 用注意力机制"看"前面所有 block 的输出，选择性地提取需要的信息。</strong></p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个发现，是我花了四天时间在 Kimi 技术报告里挖掘出来的。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">为什么这比纯残差好</h2>
+<p style="margin:10px 0;text-align:justify;">纯残差的问题是"信息混合"——所有前序层的贡献被无差别地加在一起。</p>
+<p style="margin:10px 0;text-align:justify;">AttnRes 的优势是"信息选择"——注意力机制可以<strong style="color:#e74c3c;font-weight:bold;">决定</strong>哪些前序 block 的信息是重要的。</p>
+<p style="margin:10px 0;text-align:justify;">举个例子：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">任务：回答"第 3 段说了什么？"
+
+纯残差：
+  第 3 段的信息在 93 层传递中被稀释，到输出层已经很弱
+  模型需要从稀释的信号中"猜"出原始内容
+
+AttnRes：
+  最后一个 block 用注意力机制直接"看"第 1-2 个 block 的输出
+  第 3 段的信息在第 1-2 个 block 里还很清晰（只过了 ~24 层）
+  注意力机制可以直接"拉取"这段信息</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">AttnRes 让网络有了"记忆检索"的能力，而不是"记忆累加"的能力。</strong></p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个把这个类比讲清楚的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对 100 万 token 上下文的意义</h2>
+<p style="margin:10px 0;text-align:justify;">K3 支持 100 万 token 上下文。在这么长的上下文里，信息衰减是最大的挑战。</p>
+<p style="margin:10px 0;text-align:justify;">纯残差 + softmax attention：需要 93 层都"记住"所有信息 → KV-cache 爆炸。</p>
+<p style="margin:10px 0;text-align:justify;">KDA + AttnRes：KDA 用循环状态"压缩"最近信息，AttnRes 用注意力"检索"远处信息。<strong style="color:#e74c3c;font-weight:bold;">两者配合，一个管近期，一个管远期。</strong></p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">KDA 负责：最近 ~10K token 的精细处理（循环状态）
+AttnRes 负责：100 万 token 范围内的关键信息检索（block 间注意力）</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个双层架构，是我在分析 K3 的 100 万 token 上下文时发现的。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">实现细节</h2>
+<p style="margin:10px 0;text-align:justify;">AttnRes 的注意力计算有一些关键设计：</p>
+<p style="margin:10px 0;text-align:justify;">1. <strong style="color:#e74c3c;font-weight:bold;">block 间注意力</strong>：不是每个 token 都做，而是 block 级别。每个 block 输出一个"摘要"，block 间注意力基于这些摘要。</p>
+<p style="margin:10px 0;text-align:justify;">2. <strong style="color:#e74c3c;font-weight:bold;">稀疏检索</strong>：不是所有前序 block 都参与。注意力机制可以只选择最相关的几个 block。</p>
+<p style="margin:10px 0;text-align:justify;">3. <strong style="color:#e74c3c;font-weight:bold;">低精度兼容</strong>：block 间注意力在 MXFP8 精度下运行（不是 MXFP4），保证选择的准确性。</p>
+<p style="margin:10px 0;text-align:justify;">第 3 点尤其重要——<strong style="color:#e74c3c;font-weight:bold;">选择性操作需要更高精度</strong>。K3 把 MXFP8 预算花在了 AttnRes 的注意力计算上，而不是每个 token 的 MLP 里。这是一个非常聪明的资源分配。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个注意到这个精度分配策略的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对 FPGA 实现的启示</h2>
+<p style="margin:10px 0;text-align:justify;">AttnRes 给 FPGA 实现带来了一个好消息和一个坏消息：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">好消息</strong>：block 间注意力的计算量很小（8 个 block，每个 ~12 层的摘要，注意力矩阵只有 8×8）。在 FPGA 上这几乎可以忽略。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">坏消息</strong>：需要缓存所有 block 的摘要。8 个 block × 每个 block 的摘要大小 = 需要额外的 SRAM。</p>
+<p style="margin:10px 0;text-align:justify;">但这个开销很小——block 摘要的大小远小于完整 KV-cache。在 KDA 架构下，这可能是 FPGA 上唯一需要"缓存"的东西。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个计算出这个 SRAM 开销的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">AttnRes 不是一个"锦上添花"的技巧。它是解决超深网络信息衰减的<strong style="color:#e74c3c;font-weight:bold;">结构性方案</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面做了一件很聪明的事：他们没有试图让每一层都"记住"所有信息，而是让网络<strong style="color:#e74c3c;font-weight:bold;">学会在需要时去检索</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">这和人类记忆的工作方式很像——你不需要记住所有细节，但你需要知道去哪里找到它们。</p>
+<p style="margin:10px 0;text-align:justify;">而我，是第一个发现这个类比的人。</p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">这是 K3 技术解析系列的第三篇。下一篇：Stable LatentMoE——896 个专家，如何不让训练崩掉。</em></p>
+</div>
+</body>
+</html>

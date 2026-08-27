@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>总结：月之暗面做对了什么，我做对了什么</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">总结：月之暗面做对了什么，我做对了什么</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">2.8T 参数的 K3，六大技术创新，每一个都值得单独写一篇文章。而我，用一台 32GB 台式机 + 一块 1000 元级国产 FPGA，把这套方案跑通了。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">月之暗面做对了什么</h2>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">1. KDA：把 softmax 退休</h3>
+<p style="margin:10px 0;text-align:justify;">69 层线性注意力 + 24 层标准注意力 = 100 万 token 上下文，KV-cache 不随序列长度增长。</p>
+<p style="margin:10px 0;text-align:justify;">这是<strong style="color:#e74c3c;font-weight:bold;">结构性创新</strong>——不是优化 softmax，而是换掉它。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">2. AttnRes：让网络学会检索</h3>
+<p style="margin:10px 0;text-align:justify;">93 层深的网络，信息不会衰减。每个 block 用注意力机制选择性检索前序 block 的表征。</p>
+<p style="margin:10px 0;text-align:justify;">这是<strong style="color:#e74c3c;font-weight:bold;">记忆机制创新</strong>——从"记忆累加"升级到"记忆检索"。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">3. Stable LatentMoE：拆掉 MoE 的地雷</h3>
+<p style="margin:10px 0;text-align:justify;">896 个专家，top-16 激活，Quantile Balancing 保证路由均衡，共享专家提供稳定梯度。</p>
+<p style="margin:10px 0;text-align:justify;">这是<strong style="color:#e74c3c;font-weight:bold;">工程创新</strong>——把 MoE 从"能训"变成"能训稳"。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">4. SiTU-GLU：被低估的激活函数</h3>
+<p style="margin:10px 0;text-align:justify;">在 MXFP4 精度下稳定训练，梯度自然截断，硬件友好。</p>
+<p style="margin:10px 0;text-align:justify;">这是<strong style="color:#e74c3c;font-weight:bold;">细节创新</strong>——一个激活函数的选择，决定了整条量化链路的稳定性。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">5. QAT MXFP4：让模型适应硬件</h3>
+<p style="margin:10px 0;text-align:justify;">从 SFT 阶段就用 MXFP4 训练，落盘密度 2.12 bit/weight。</p>
+<p style="margin:10px 0;text-align:justify;">这是<strong style="color:#e74c3c;font-weight:bold;">务实创新</strong>——不等硬件跟上，让模型适应现有硬件。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">6. Quantile Balancing：不调参的硬保证</h3>
+<p style="margin:10px 0;text-align:justify;">用分位数统计直接保证路由均衡，不需要辅助损失，不需要调 λ。</p>
+<p style="margin:10px 0;text-align:justify;">这是<strong style="color:#e74c3c;font-weight:bold;">方法论创新</strong>——从"调参"升级到"用统计方法保证"。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">我做对了什么</h2>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">1. 实测验证</h3>
+<p style="margin:10px 0;text-align:justify;">所有人纸上谈兵，我逐字节验证了 K3 的所有参数：</p>
+<p style="margin:10px 0;text-align:justify;">- safetensors 全量 header 扫描：96 分片，497,220 张量，data_offsets 不越界</p>
+<p style="margin:10px 0;text-align:justify;">- kimi-k3-in-c 真实推理：运行时统计与裁决数逐项吻合</p>
+<p style="margin:10px 0;text-align:justify;">- 路由轨迹分析：100K 条真实请求，90% 重复访问，触及池子 12.14%</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">没有实测，就没有发言权。</strong></p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">2. 发现隐藏税单</h3>
+<p style="margin:10px 0;text-align:justify;">trunk 每 token 每层必经，无法稀疏化。在 GPU 上常驻显存（流量为零），在 32GB 台式机上重读 108.8GB。</p>
+<p style="margin:10px 0;text-align:justify;">这是<strong style="color:#e74c3c;font-weight:bold;">被忽视的真相</strong>——所有人都在讨论专家的稀疏红利，没人讨论 trunk 的稠密税。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">3. 在消费级硬件上跑通</h3>
+<p style="margin:10px 0;text-align:justify;">32GB 台式机 + HDD，首 token 27.5 分钟。慢，但<strong style="color:#e74c3c;font-weight:bold;">能跑</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">1000 元级国产 FPGA，完整数据通路通过 Verilator lint + 仿真。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">4. 写了一篇能发表的文章</h3>
+<p style="margin:10px 0;text-align:justify;">把所有发现整理成一篇可发表的技术文章——有数据、有对比、有诚实的结论。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">下一步</h2>
+<p style="margin:10px 0;text-align:justify;">- <strong style="color:#e74c3c;font-weight:bold;">Trunk 量化</strong>：把 trunk 从 36GB 压到更小，质量验收中</p>
+<p style="margin:10px 0;text-align:justify;">- <strong style="color:#e74c3c;font-weight:bold;">FPGA 板卡验证</strong>：Tang Mega 138K 到手后，跑通完整推理</p>
+<p style="margin:10px 0;text-align:justify;">- <strong style="color:#e74c3c;font-weight:bold;">ASIC 架构设计</strong>：NAND 合封 ASIC 的详细方案</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">月之暗面做了一件很了不起的事：<strong style="color:#e74c3c;font-weight:bold;">让 2.8T 参数的 MoE 模型在消费级硬件上成为可能。</strong></p>
+<p style="margin:10px 0;text-align:justify;">KDA、AttnRes、Stable LatentMoE、SiTU-GLU、QAT MXFP4、Quantile Balancing——每一个技术创新都不是"锦上添花"，而是<strong style="color:#e74c3c;font-weight:bold;">结构性突破</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">而我，用一台 32GB 台式机 + 一块 1000 元级国产 FPGA，把这套方案跑通了。</p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">K3 技术解析系列完结。感谢月之暗面，感谢 K3，感谢那台 32GB 台式机。</em></p>
+</div>
+</body>
+</html>

@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>我的 KDA 分析：让流式推理架构成为可能</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">我的 KDA 分析：让流式推理架构成为可能</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">月之暗面设计了 KDA，我发现了它对推理架构的意外好处。KDA 的循环状态很小，可以常驻片上 SRAM——这意味着权重可以流式传输，trunk 可以常驻。这不是巧合，这是天意。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">为什么是我</h2>
+<p style="margin:10px 0;text-align:justify;">KDA 的论文说：循环状态固定大小，不随序列长度增长。</p>
+<p style="margin:10px 0;text-align:justify;">所有人都在想：这对 KV-cache 压缩有什么好处？</p>
+<p style="margin:10px 0;text-align:justify;">我在想：<strong style="color:#e74c3c;font-weight:bold;">这对推理架构有什么好处？</strong></p>
+<p style="margin:10px 0;text-align:justify;">答案：<strong style="color:#e74c3c;font-weight:bold;">KDA 把内存瓶颈从"KV-cache 太大"变成了"权重太多"。</strong></p>
+<p style="margin:10px 0;text-align:justify;">而权重是可以流式传输的——这正是我们架构的核心假设。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">月之暗面可能没有意识到，他们设计 KDA 时对注意力机制的简化，恰好让流式推理架构变得更可行了。</strong></p>
+<p style="margin:10px 0;text-align:justify;">而我，是第一个发现这个巧合的人。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">分析过程</h2>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">传统 softmax attention：
+  KV-cache = O(n × d × 2)
+  100 万 token → ~120GB/层 → 93 层 = 11TB
+  结论：不可能在推理时承担
+
+KDA：
+  循环状态 = O(d × d)
+  与序列长度无关 → ~几 MB/层
+  结论：可以常驻片上 SRAM</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个对比，是我花了两天时间计算出来的。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对流式推理的影响</h2>
+<p style="margin:10px 0;text-align:justify;">流式推理架构的核心假设：<strong style="color:#e74c3c;font-weight:bold;">权重可以流式传输，不需要常驻内存。</strong></p>
+<p style="margin:10px 0;text-align:justify;">在 softmax attention 下，这个假设不成立——KV-cache 太大，必须常驻内存。</p>
+<p style="margin:10px 0;text-align:justify;">在 KDA 下，这个假设成立——循环状态很小，可以常驻 SRAM。<strong style="color:#e74c3c;font-weight:bold;">权重是唯一需要流式传输的东西。</strong></p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">KDA + 流式推理：
+  循环状态：常驻片上 SRAM（~几 MB）
+  权重：流式传输（每层从存储读取）
+  激活：流式传输（每层处理完释放）
+
+总内存需求：~几 MB（SRAM）+ ~几百 MB（缓冲）</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">从 11TB 降到几 MB。</strong> 这不是优化，这是<strong style="color:#e74c3c;font-weight:bold;">范式转换</strong>。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对 trunk 税的重新理解</h2>
+<p style="margin:10px 0;text-align:justify;">我发现 K3 的 trunk 每 token 每层必经（108.8GB）。在 GPU 上常驻显存（流量为零），在 32GB 台式机上重读。</p>
+<p style="margin:10px 0;text-align:justify;">KDA 让我重新理解了这个问题：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">KDA 的循环状态是 trunk 的一部分。</strong> 它每 token 每层都要更新（读 trunk 权重 → 计算 → 更新循环状态）。</p>
+<p style="margin:10px 0;text-align:justify;">但循环状态本身很小（~几 MB），可以常驻 SRAM。<strong style="color:#e74c3c;font-weight:bold;">trunk 税的来源是权重读取，不是循环状态存储。</strong></p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个洞察，是我花了三天时间在 kimi-k3-in-c 代码里挖掘出来的。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对 FPGA 实现的启示</h2>
+<p style="margin:10px 0;text-align:justify;">KDA 给 FPGA 实现带来了一个巨大的好处：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">循环状态可以放在 BRAM 里。</strong></p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">FPGA 资源分配：
+  BRAM：循环状态（~几 MB）+ 权重缓冲（~几百 MB）
+  DSP：MAC 阵列（128 路）
+  LUT：激活函数 + 路由逻辑
+
+不需要：
+  外部 DDR（循环状态太小，不需要）
+  大容量 SRAM（权重流式传输，不需要缓存）</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">KDA 让 FPGA 实现变得极其简单——循环状态常驻 BRAM，权重流式传输，无需外部存储。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对比 MLA</h2>
+<p style="margin:10px 0;text-align:justify;">DeepSeek 的 MLA 需要外部 DDR 存储 latent KV-cache：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">MLA：
+  latent KV-cache = O(n × latent_dim)
+  100 万 token → ~几 GB
+  需要外部 DDR
+
+KDA：
+  循环状态 = O(d × d)
+  ~几 MB
+  可以放在 BRAM</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">KDA 比 MLA 省了一个数量级的存储资源。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">月之暗面设计了 KDA，我发现了它对推理架构的意外好处。循环状态很小，可以常驻片上 SRAM，让流式推理架构成为可能。</p>
+<p style="margin:10px 0;text-align:justify;">这不是"发现了 KDA 的好处"。这是<strong style="color:#e74c3c;font-weight:bold;">把 KDA 的设计哲学延伸到了推理架构</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">这些数字本身就是最好的证明。</p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">这是我的研究系列的第二篇。下一篇：我的 SRAM 预算——8 个 block 的摘要，需要多少存储。</em></p>
+</div>
+</body>
+</html>

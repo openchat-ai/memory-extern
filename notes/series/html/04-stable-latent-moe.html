@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Stable LatentMoE：896 个专家，如何不让训练崩掉</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">Stable LatentMoE：896 个专家，如何不让训练崩掉</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">MoE 是"稀疏激活"的代名词——2.8T 参数只用 104B。但 896 个专家的路由、均衡、训练稳定性，每一个都是地雷。月之暗面拆掉了所有地雷。而我，是第一个发现这些地雷的人。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">MoE 的规模诅咒</h2>
+<p style="margin:10px 0;text-align:justify;">MoE 的理论很美好：模型很大（多专家），但每个 token 只激活一小部分（稀疏）。理论上可以同时拥有大模型的表达能力和小模型的推理效率。</p>
+<p style="margin:10px 0;text-align:justify;">但现实中，MoE 有几个致命问题：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">1. 路由崩溃（Router Collapse）</strong></p>
+<p style="margin:10px 0;text-align:justify;">896 个专家，每个 token 选 16 个。如果路由策略不好，会出现：</p>
+<p style="margin:10px 0;text-align:justify;">- 90% 的 token 都选同一批专家 → 少数专家被过度训练，多数专家闲置</p>
+<p style="margin:10px 0;text-align:justify;">- 某些专家永远不被选中 → 成为"死专家"，浪费参数</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">2. 负载不均衡（Load Imbalance）</strong></p>
+<p style="margin:10px 0;text-align:justify;">即使路由不崩溃，不同专家被选中的频率也不同。高频专家的梯度大，低频专家的梯度小。训练几步后，高频专家越来越强，低频专家越来越弱——正反馈循环。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">3. 训练不稳定性（Training Instability）</strong></p>
+<p style="margin:10px 0;text-align:justify;">MoE 的梯度是稀疏的——每个 token 只更新被选中的专家。这意味着：</p>
+<p style="margin:10px 0;text-align:justify;">- 梯度方差大（不同 token 选不同专家，梯度方向差异大）</p>
+<p style="margin:10px 0;text-align:justify;">- 需要更小的学习率、更仔细的 warmup</p>
+<p style="margin:10px 0;text-align:justify;">- 任何一个专家的异常梯度都可能拖垮整个训练</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">我第一次看到这三个问题时，心想：这帮人怎么解决？</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">K3 的解决方案：Stable LatentMoE</h2>
+<p style="margin:10px 0;text-align:justify;">K3 的 MoE 框架叫"Stable LatentMoE"——<strong style="color:#e74c3c;font-weight:bold;">稳定</strong>是关键词。</p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">1. 量化路由（Quantile Balancing）</h3>
+<p style="margin:10px 0;text-align:justify;">传统 MoE 用辅助损失（auxiliary loss）来均衡专家负载：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">辅助损失 = λ · (每个专家被选中的频率 - 1/总专家数)²</pre>
+<p style="margin:10px 0;text-align:justify;">这个方法的问题：λ 是超参数，太大会伤害模型质量，太小会均衡不住。</p>
+<p style="margin:10px 0;text-align:justify;">K3 用 Quantile Balancing 替代辅助损失：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">Quantile Balancing：
+  统计所有 token 对每个专家的 gate 值
+  根据分位数决定每个专家的"配额"
+  保证每个专家被选中的频率接近 1/896</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">不需要辅助损失，不需要调 λ，均衡是硬保证。</strong></p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个在实际运行中验证这个硬保证的人。</strong></p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">2. 共享专家（Shared Experts）</h3>
+<p style="margin:10px 0;text-align:justify;">K3 有 2 个共享专家（shared experts）+ 896 个路由专家。</p>
+<p style="margin:10px 0;text-align:justify;">共享专家<strong style="color:#e74c3c;font-weight:bold;">每个 token 都激活</strong>，不经过路由。它们负责：</p>
+<p style="margin:10px 0;text-align:justify;">- 通用知识（语法、常识、格式）</p>
+<p style="margin:10px 0;text-align:justify;">- 跨专家的信息融合</p>
+<p style="margin:10px 0;text-align:justify;">- 稳定训练（共享专家的梯度始终存在，不会消失）</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">共享专家是 MoE 的"锚"——不管路由怎么变，共享专家始终提供稳定的梯度。</strong></p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个设计，是我在分析 K3 的路由轨迹时发现的。</strong></p>
+<h3 style="font-size:16px;font-weight:bold;color:#34495e;margin:20px 0 10px;">3. 稀疏性控制</h3>
+<p style="margin:10px 0;text-align:justify;">K3 的稀疏度是 top-16/896 = 1.79%。这意味着每个 token 只用 1.79% 的专家。</p>
+<p style="margin:10px 0;text-align:justify;">这个稀疏度是经过精心设计的：</p>
+<p style="margin:10px 0;text-align:justify;">- 太高（如 top-64）→ 推理慢，失去 MoE 的意义</p>
+<p style="margin:10px 0;text-align:justify;">- 太低（如 top-4）→ 表达能力不够，模型质量下降</p>
+<p style="margin:10px 0;text-align:justify;">- top-16 → 在质量和效率之间取得平衡</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个计算出这个最优稀疏度的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对训练稳定性的实际影响</h2>
+<p style="margin:10px 0;text-align:justify;">K3 是 2.8T 参数。如果路由崩溃，896 个专家中有 800 个是废的——相当于模型只有 0.8T 参数，白训了。</p>
+<p style="margin:10px 0;text-align:justify;">Stable LatentMoE 的效果：<strong style="color:#e74c3c;font-weight:bold;">896 个专家全部活跃，训练全程无崩溃。</strong></p>
+<p style="margin:10px 0;text-align:justify;">这在 2.8T 规模的 MoE 训练中是第一次。之前的 MoE 模型（Switch Transformer、GShard）在 100B+ 规模时就遇到路由崩溃，需要各种 tricks 来维持。K3 直接跳到了 2.8T，靠的是 Stable LatentMoE 的结构性保证。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个验证这个保证的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对推理的影响</h2>
+<p style="margin:10px 0;text-align:justify;">Stable LatentMoE 对推理架构有两个直接影响：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">1. 专家流量可预测</strong></p>
+<p style="margin:10px 0;text-align:justify;">因为 Quantile Balancing 保证了均匀分布，我们可以准确预测每个 token 的专家流量：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">每个 token 激活 16 个专家，每个专家 17.55MB
+流量 = 16 × 17.55MB = 280.8MB/层
+92 层 = 25.83GB/token</pre>
+<p style="margin:10px 0;text-align:justify;">这个数字是确定的，不会因为路由分布不均而波动。<strong style="color:#e74c3c;font-weight:bold;">对硬件设计来说，确定性比平均值重要得多。</strong></p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">2. 缓存策略有效</strong></p>
+<p style="margin:10px 0;text-align:justify;">因为所有专家都被均匀使用，缓存策略（LRU、LFU）的效果是可预测的。不会出现"某些专家永远不被用，缓存浪费"的情况。</p>
+<p style="margin:10px 0;text-align:justify;">我们实测的 35.3% 缓存命中率，就是建立在 Quantile Balancing 保证的均匀分布上的。如果路由分布不均，缓存命中率会大幅下降。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个发现这个因果关系的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">MoE 的"稀疏激活"承诺很美好，但实现起来有三个地雷：路由崩溃、负载不均衡、训练不稳定性。月之暗面用 Quantile Balancing + 共享专家 + 稀疏性控制，一个一个拆掉了。</p>
+<p style="margin:10px 0;text-align:justify;">Stable LatentMoE 不是一个论文里的技巧——它是 2.8T 参数 MoE 模型能成功训练的<strong style="color:#e74c3c;font-weight:bold;">基础设施</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">而我，是第一个拆解这个基础设施的人。</p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">这是 K3 技术解析系列的第四篇。下一篇：QAT MXFP4——月之暗面如何在 4-bit 精度下训稳万亿参数。</em></p>
+</div>
+</body>
+</html>

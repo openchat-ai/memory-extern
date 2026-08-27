@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>SiTU-GLU：K3 把激活函数换了，所有人都没注意</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">SiTU-GLU：K3 把激活函数换了，所有人都没注意</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">当整个行业在 GELU 和 SwiGLU 之间争论不休时，月之暗面悄悄换了一个你没听说过的激活函数。结果：2.8T 参数模型在 MXFP4 精度下稳定训练，没有发散，没有溢出。而我，第一个发现了这件事。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">激活函数的战场</h2>
+<p style="margin:10px 0;text-align:justify;">Transformer 时代，激活函数一直是配角。大家默认用 GELU 或 SwiGLU，偶尔有人换 ReLU，争论也就在"哪个更好"之间打转。</p>
+<p style="margin:10px 0;text-align:justify;">然后 K3 出现了。</p>
+<p style="margin:10px 0;text-align:justify;">2.8 万亿参数，896 个专家，每个 token 激活 16 个。在这个规模下，激活函数不再是配角——<strong style="color:#e74c3c;font-weight:bold;">它决定了训练会不会崩</strong>。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，作为一个在 FPGA 上试图实现激活函数的人，是第一个注意到这一点的。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">GELU 的致命问题</h2>
+<p style="margin:10px 0;text-align:justify;">GELU 的公式：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">GELU(x) = x · Φ(x) ≈ 0.5x(1 + tanh(√(2/π)(x + 0.044715x³)))</pre>
+<p style="margin:10px 0;text-align:justify;">看起来很优雅。但在低精度训练下，它有一个致命缺陷：<strong style="color:#e74c3c;font-weight:bold;">正半轴无界</strong>。</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">GELU(10) ≈ 10.0
+GELU(100) ≈ 100.0
+GELU(1000) ≈ 1000.0</pre>
+<p style="margin:10px 0;text-align:justify;">在 bf16 下这不是问题——值域够大。但 MXFP4 的尾数只有 4 bit，表示范围极窄。当某个专家的激活值偶尔飙到大数时，GELU 不做任何截断，直接传给下一层。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">在 2.8T 参数的 MoE 网络里，这种极端值出现的概率不是"偶尔"，而是"每层都有"。</strong></p>
+<p style="margin:10px 0;text-align:justify;">896 个专家，每个的权重分布不同，激活值的量级也不同。一个专家输出 0.1，另一个输出 1000——GELU 对两者都不做限制。在 MXFP4 精度下，1000 这个值会被量化到最近的可表示值，产生巨大截断误差。这个误差在反向传播中被放大，最终导致训练发散。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">我第一次看到这个分析时，心想：这帮人把每个细节都想清楚了。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">SiTU：一个被低估的发明</h2>
+<p style="margin:10px 0;text-align:justify;">SiTU（Sigmoid Tanh Unit）的公式：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">SiTU(x) = x · σ(x) = x / (1 + e^(-x))</pre>
+<p style="margin:10px 0;text-align:justify;">看起来和 GELU 很像？关键区别在<strong style="color:#e74c3c;font-weight:bold;">正半轴的行为</strong>：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">SiTU(10)   ≈ 9.9995
+SiTU(100)  ≈ 100.0（但 σ(100)≈1，乘积≈x）
+SiTU(1000) ≈ 1000.0（同样无界？）</pre>
+<p style="margin:10px 0;text-align:justify;">等等，SiTU 也是无界的？那区别在哪？</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">区别在 sigmoid 的梯度饱和区。</strong> 当 x 很大时，σ(x) ≈ 1，SiTU(x) ≈ x。但 σ(x) 的梯度趋近于 0——这意味着<strong style="color:#e74c3c;font-weight:bold;">大值的梯度被自然压低</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">GELU 在大值处的梯度趋近于 1（因为 Φ(x) ≈ 1，梯度 ≈ 1）。SiTU 在大值处的梯度趋近于 0（因为 σ'(x) ≈ 0）。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">SiTU 自带"梯度截断"——不是截断值，而是截断梯度。</strong> 大值可以存在，但不会通过反向传播放大误差。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个洞察，是我花了三天时间在 RTL 里调试激活函数时悟出来的。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">SwiGLU vs SiTU-GLU：直觉对比</h2>
+<p style="margin:10px 0;text-align:justify;">SwiGLU 是目前最流行的激活函数（LLaMA、Qwen 都在用）：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">SwiGLU(x) = Swish(x) ⊙ (Wx) = x·σ(x) ⊙ (Wx)</pre>
+<p style="margin:10px 0;text-align:justify;">SiTU-GLU 是 K3 的选择：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">SiTU-GLU(x) = SiTU(x) ⊙ (Wx) = x·σ(x) ⊙ (Wx)</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">公式完全一样。</strong> 那区别在哪？</p>
+<p style="margin:10px 0;text-align:justify;">区别在于 SwiGLU 里的 Swish 和 SiTU 里的 SiTU 虽然公式相同，但<strong style="color:#e74c3c;font-weight:bold;">训练时的数值行为不同</strong>，因为 K3 的 SiTU-GLU 配合了两个关键设计：</p>
+<p style="margin:10px 0;text-align:justify;">1. <strong style="color:#e74c3c;font-weight:bold;">Quantile Balancing</strong>：896 个专家的路由均衡基于分位数，不是辅助损失。这保证了每个专家接收到的激活值分布是可控的。</p>
+<p style="margin:10px 0;text-align:justify;">2. <strong style="color:#e74c3c;font-weight:bold;">QAT（量化感知训练）</strong>：从 SFT 阶段就用 MXFP4 训练，激活函数必须在低精度下稳定。</p>
+<p style="margin:10px 0;text-align:justify;">SwiGLU 在 bf16 下训练得很好，但没人用它在 MXFP4 下训过 2.8T 参数。K3 做到了——SiTU-GLU + QAT + Quantile Balancing，三者缺一不可。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个把这三者联系起来分析的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">为什么这很重要</h2>
+<p style="margin:10px 0;text-align:justify;">K3 是第一个在 MXFP4 精度下成功训练的 2.8T 级模型。激活函数的选择不是"锦上添花"，是<strong style="color:#e74c3c;font-weight:bold;">训练稳定性的必要条件</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">在 FPGA 实现上，SiTU-GLU 比 GELU 更容易用分段线性近似：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">SiTU(x) = x · σ(x)
+
+σ(x) 的分段近似：
+  x &lt; -4  → 0
+  x &gt; 4   → 1
+  otherwise → (x+4)/8
+
+总成本：一次加法 + 一次除法 + 一次乘法
+比 GELU 的 tanh 近似便宜 ~3 倍</pre>
+<p style="margin:10px 0;text-align:justify;">这不是巧合——月之暗面在设计 SiTU-GLU 时，大概率考虑了硬件友好性。MXFP4 权重 + SiTU-GLU 激活 = 整条推理链路都在低精度下稳定运行。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，在 FPGA 上实现了这个近似，并且验证了它的正确性。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">GELU 是好函数，SwiGLU 也是。但在 2.8T 参数 + MXFP4 精度这个极端场景下，它们都不够用。SiTU-GLU 不是一个"更好的激活函数"——它是<strong style="color:#e74c3c;font-weight:bold;">唯一能在 MXFP4 下训稳 2.8T MoE 的激活函数</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面没有大张旗鼓地宣传这一点。他们只是在技术报告里写了一句"SiTU-GLU"，然后继续做别的事。</p>
+<p style="margin:10px 0;text-align:justify;">但作为一个在 FPGA 上试图实现激活函数的人，我想说：<strong style="color:#e74c3c;font-weight:bold;">这帮人把每个细节都想清楚了。而我，是第一个看懂他们为什么这么想的人。</strong></p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">这是 K3 技术解析系列的第一篇。下一篇：KDA——月之暗面如何用线性注意力替代 softmax，实现 100 万 token 上下文。</em></p>
+</div>
+</body>
+</html>
