@@ -1,0 +1,195 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 700" font-family="Arial, sans-serif">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4A90D9"/>
+      <stop offset="100%" stop-color="#357ABD"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E8744F"/>
+      <stop offset="100%" stop-color="#D4603A"/>
+    </linearGradient>
+    <linearGradient id="g3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#50B86C"/>
+      <stop offset="100%" stop-color="#3D9A55"/>
+    </linearGradient>
+    <filter id="shadow" x="-2%" y="-2%" width="104%" height="104%">
+      <feDropShadow dx="1" dy="2" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1000" height="700" fill="#F8F9FA" rx="12"/>
+
+  <!-- Title -->
+  <text x="500" y="40" text-anchor="middle" font-size="22" font-weight="bold" fill="#2C3E50">Kimi K3 架构全景</text>
+  <text x="500" y="62" text-anchor="middle" font-size="13" fill="#7F8C8D">2.8T 总参数 · 104B 激活/token · 93 层 · 896 专家</text>
+
+  <!-- Layer count badge -->
+  <rect x="30" y="85" width="200" height="560" rx="10" fill="none" stroke="#BDC3C7" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="130" y="108" text-anchor="middle" font-size="11" fill="#95A5A6">93 层</text>
+
+  <!-- === Layer blocks === -->
+
+  <!-- Block 1: Layer 1-12 (KDA) -->
+  <rect x="60" y="120" width="140" height="60" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="130" y="145" text-anchor="middle" font-size="13" font-weight="bold" fill="white">KDA</text>
+  <text x="130" y="163" text-anchor="middle" font-size="10" fill="#D6EAF8">Layer 1-12</text>
+
+  <!-- Block 2: Layer 13-24 (KDA) -->
+  <rect x="60" y="195" width="140" height="60" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="130" y="220" text-anchor="middle" font-size="13" font-weight="bold" fill="white">KDA</text>
+  <text x="130" y="238" text-anchor="middle" font-size="10" fill="#D6EAF8">Layer 13-24</text>
+
+  <!-- Block 3: Layer 25-36 (KDA) -->
+  <rect x="60" y="270" width="140" height="60" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="130" y="295" text-anchor="middle" font-size="13" font-weight="bold" fill="white">KDA</text>
+  <text x="130" y="313" text-anchor="middle" font-size="10" fill="#D6EAF8">Layer 25-36</text>
+
+  <!-- Block 4: Layer 37-48 (Gated MLA) -->
+  <rect x="60" y="345" width="140" height="60" rx="8" fill="url(#g2)" filter="url(#shadow)"/>
+  <text x="130" y="370" text-anchor="middle" font-size="13" font-weight="bold" fill="white">Gated MLA</text>
+  <text x="130" y="388" text-anchor="middle" font-size="10" fill="#FADBD8">Layer 37-48</text>
+
+  <!-- Block 5: Layer 49-60 (KDA) -->
+  <rect x="60" y="420" width="140" height="60" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="130" y="445" text-anchor="middle" font-size="13" font-weight="bold" fill="white">KDA</text>
+  <text x="130" y="463" text-anchor="middle" font-size="10" fill="#D6EAF8">Layer 49-60</text>
+
+  <!-- Block 6: Layer 61-72 (KDA) -->
+  <rect x="60" y="495" width="140" height="60" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="130" y="520" text-anchor="middle" font-size="13" font-weight="bold" fill="white">KDA</text>
+  <text x="130" y="538" text-anchor="middle" font-size="10" fill="#D6EAF8">Layer 61-72</text>
+
+  <!-- Block 7: Layer 73-84 (KDA) -->
+  <rect x="60" y="570" width="140" height="60" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="130" y="595" text-anchor="middle" font-size="13" font-weight="bold" fill="white">KDA</text>
+  <text x="130" y="613" text-anchor="middle" font-size="10" fill="#D6EAF8">Layer 73-84</text>
+
+  <!-- Block 8: Layer 85-93 (KDA + Gated MLA) -->
+  <rect x="60" y="645" width="140" height="50" rx="8" fill="url(#g1)" filter="url(#shadow)"/>
+  <text x="130" y="668" text-anchor="middle" font-size="13" font-weight="bold" fill="white">KDA + MLA</text>
+  <text x="130" y="683" text-anchor="middle" font-size="10" fill="#D6EAF8">Layer 85-93</text>
+
+  <!-- AttnRes arrows (vertical, between blocks) -->
+  <line x1="130" y1="180" x2="130" y2="195" stroke="#E74C3C" stroke-width="2" marker-end="url(#arrowRed)"/>
+  <line x1="130" y1="255" x2="130" y2="270" stroke="#E74C3C" stroke-width="2"/>
+  <line x1="130" y1="330" x2="130" y2="345" stroke="#E74C3C" stroke-width="2"/>
+  <line x1="130" y1="405" x2="130" y2="420" stroke="#E74C3C" stroke-width="2"/>
+  <line x1="130" y1="480" x2="130" y2="495" stroke="#E74C3C" stroke-width="2"/>
+  <line x1="130" y1="555" x2="130" y2="570" stroke="#E74C3C" stroke-width="2"/>
+  <line x1="130" y1="630" x2="130" y2="645" stroke="#E74C3C" stroke-width="2"/>
+
+  <!-- AttnRes label -->
+  <rect x="220" y="300" width="90" height="28" rx="6" fill="#E74C3C"/>
+  <text x="265" y="319" text-anchor="middle" font-size="11" font-weight="bold" fill="white">AttnRes</text>
+
+  <!-- AttnRes curved arrows -->
+  <path d="M 210,310 C 195,280 195,250 170,240" fill="none" stroke="#E74C3C" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <path d="M 210,310 C 195,350 195,400 170,410" fill="none" stroke="#E74C3C" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <path d="M 210,310 C 240,260 270,200 280,180" fill="none" stroke="#E74C3C" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <path d="M 210,310 C 240,380 270,480 280,520" fill="none" stroke="#E74C3C" stroke-width="1.5" stroke-dasharray="4,2"/>
+
+  <!-- Arrow marker -->
+  <defs>
+    <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6 Z" fill="#E74C3C"/>
+    </marker>
+  </defs>
+
+  <!-- === MoE Expert detail (right side) === -->
+  <rect x="380" y="100" width="280" height="280" rx="10" fill="white" stroke="#3498DB" stroke-width="2" filter="url(#shadow)"/>
+  <text x="520" y="125" text-anchor="middle" font-size="14" font-weight="bold" fill="#2C3E50">每层 MoE 细节</text>
+
+  <!-- Router -->
+  <rect x="400" y="140" width="240" height="35" rx="6" fill="#F39C12"/>
+  <text x="520" y="163" text-anchor="middle" font-size="12" font-weight="bold" fill="white">Router (Quantile Balancing)</text>
+
+  <!-- Arrow from router to experts -->
+  <line x1="440" y1="175" x2="420" y2="195" stroke="#7F8C8D" stroke-width="1.5"/>
+  <line x1="520" y1="175" x2="520" y2="195" stroke="#7F8C8D" stroke-width="1.5"/>
+  <line x1="600" y1="175" x2="620" y2="195" stroke="#7F8C8D" stroke-width="1.5"/>
+
+  <!-- Shared experts -->
+  <rect x="395" y="195" width="100" height="30" rx="5" fill="#9B59B6"/>
+  <text x="445" y="214" text-anchor="middle" font-size="10" font-weight="bold" fill="white">2 共享专家</text>
+
+  <!-- Routed experts -->
+  <rect x="505" y="195" width="130" height="30" rx="5" fill="#3498DB"/>
+  <text x="570" y="214" text-anchor="middle" font-size="10" font-weight="bold" fill="white">896 路由专家</text>
+
+  <!-- Top-16 -->
+  <rect x="645" y="195" width="30" height="30" rx="5" fill="#1ABC9C"/>
+  <text x="660" y="214" text-anchor="middle" font-size="10" font-weight="bold" fill="white">↑16</text>
+
+  <!-- Expert detail -->
+  <rect x="395" y="245" width="280" height="80" rx="6" fill="#EBF5FB" stroke="#AED6F1" stroke-width="1"/>
+  <text x="535" y="268" text-anchor="middle" font-size="11" fill="#2C3E50">单专家结构</text>
+  <text x="405" y="288" font-size="10" fill="#5D6D7E">w1 [3072, 7168] + w2 [3584, 6144] + w3 [3072, 7168]</text>
+  <text x="405" y="305" font-size="10" fill="#E74C3C" font-weight="bold">MXFP4 QAT · 17.55 MB/层</text>
+
+  <!-- Activation -->
+  <rect x="395" y="335" width="280" height="30" rx="5" fill="#27AE60"/>
+  <text x="535" y="355" text-anchor="middle" font-size="11" font-weight="bold" fill="white">SiTU-GLU 激活（非 GELU）</text>
+
+  <!-- === Trunk section (right) === -->
+  <rect x="380" y="410" width="280" height="160" rx="10" fill="white" stroke="#E67E22" stroke-width="2" filter="url(#shadow)"/>
+  <text x="520" y="435" text-anchor="middle" font-size="14" font-weight="bold" fill="#2C3E50">Trunk（每 token 必经）</text>
+
+  <rect x="395" y="450" width="130" height="25" rx="4" fill="#FDEBD0"/>
+  <text x="460" y="467" text-anchor="middle" font-size="10" fill="#E67E22">KDA 门控投影</text>
+
+  <rect x="535" y="450" width="130" height="25" rx="4" fill="#FDEBD0"/>
+  <text x="600" y="467" text-anchor="middle" font-size="10" fill="#E67E22">Gated MLA Q/K/V/O</text>
+
+  <rect x="395" y="485" width="130" height="25" rx="4" fill="#FDEBD0"/>
+  <text x="460" y="502" text-anchor="middle" font-size="10" fill="#E67E22">2 共享专家</text>
+
+  <rect x="535" y="485" width="130" height="25" rx="4" fill="#FDEBD0"/>
+  <text x="600" y="502" text-anchor="middle" font-size="10" fill="#E67E22">Router + Dense + Embed</text>
+
+  <rect x="395" y="525" width="270" height="30" rx="5" fill="#E74C3C"/>
+  <text x="530" y="545" text-anchor="middle" font-size="11" font-weight="bold" fill="white">每 token 必经 · 无法稀疏化 · 108.8 GB</text>
+
+  <!-- === Stats badge (bottom right) === -->
+  <rect x="380" y="590" width="280" height="80" rx="10" fill="#2C3E50" filter="url(#shadow)"/>
+  <text x="520" y="615" text-anchor="middle" font-size="13" font-weight="bold" fill="#F1C40F">实测数据</text>
+  <text x="395" y="638" font-size="10" fill="#ECF0F1">专家流量/token: 25.83 GB</text>
+  <text x="395" y="655" font-size="10" fill="#ECF0F1">Trunk 流量/token: 108.8 GB (未量化)</text>
+  <text x="395" y="672" font-size="10" fill="#ECF0F1">Trunk 量化后: 36 GB → 总计 61.8 GB</text>
+  <text x="530" y="638" font-size="10" fill="#ECF0F1">缓存命中率: 35.3%</text>
+  <text x="530" y="655" font-size="10" fill="#ECF0F1">路由 Zipf α: 0.279</text>
+  <text x="530" y="672" font-size="10" fill="#ECF0F1">触及池子: 12.14%</text>
+
+  <!-- === Legend === -->
+  <rect x="700" y="100" width="280" height="200" rx="10" fill="white" stroke="#BDC3C7" stroke-width="1" filter="url(#shadow)"/>
+  <text x="840" y="125" text-anchor="middle" font-size="13" font-weight="bold" fill="#2C3E50">图例</text>
+
+  <rect x="720" y="140" width="20" height="14" rx="3" fill="url(#g1)"/>
+  <text x="750" y="152" font-size="11" fill="#2C3E50">KDA（线性注意力）</text>
+
+  <rect x="720" y="165" width="20" height="14" rx="3" fill="url(#g2)"/>
+  <text x="750" y="177" font-size="11" fill="#2C3E50">Gated MLA（标准注意力）</text>
+
+  <rect x="720" y="190" width="20" height="14" rx="3" fill="url(#g3)"/>
+  <text x="750" y="202" font-size="11" fill="#2C3E50">SiTU-GLU 激活</text>
+
+  <line x1="720" y1="222" x2="740" y2="222" stroke="#E74C3C" stroke-width="2" stroke-dasharray="4,2"/>
+  <text x="750" y="226" font-size="11" fill="#2C3E50">AttnRes 检索路径</text>
+
+  <rect x="720" y="240" width="20" height="14" rx="3" fill="#9B59B6"/>
+  <text x="750" y="252" font-size="11" fill="#2C3E50">共享专家（每 token 激活）</text>
+
+  <rect x="720" y="265" width="20" height="14" rx="3" fill="#3498DB"/>
+  <text x="750" y="277" font-size="11" fill="#2C3E50">路由专家（top-16 选中）</text>
+
+  <rect x="700" y="330" width="280" height="140" rx="10" fill="#FFF3CD" stroke="#F39C12" stroke-width="1" filter="url(#shadow)"/>
+  <text x="840" y="355" text-anchor="middle" font-size="13" font-weight="bold" fill="#856404">核心发现</text>
+  <text x="715" y="378" font-size="11" fill="#856404">1. KDA 循环状态 → 常驻 SRAM</text>
+  <text x="715" y="398" font-size="11" fill="#856404">2. AttnRes block 摘要 → 仅 56 KB</text>
+  <text x="715" y="418" font-size="11" fill="#856404">3. Trunk 税 108.8GB → 量化后 36GB</text>
+  <text x="715" y="438" font-size="11" fill="#856404">4. 缓存 1GB → 35.3% 命中率</text>
+  <text x="715" y="458" font-size="11" fill="#856404">5. 路由 90% 重复 → 预取有效</text>
+
+  <!-- Source label -->
+  <text x="500" y="695" text-anchor="middle" font-size="9" fill="#BDC3C7">k3-verdict.md · independent-stack.md · batch_traffic_model.py</text>
+</svg>

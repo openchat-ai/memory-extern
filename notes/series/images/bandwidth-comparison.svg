@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 550" font-family="Arial, sans-serif">
+  <defs>
+    <linearGradient id="barA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#E74C3C"/>
+      <stop offset="100%" stop-color="#C0392B"/>
+    </linearGradient>
+    <linearGradient id="barB" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#3498DB"/>
+      <stop offset="100%" stop-color="#2980B9"/>
+    </linearGradient>
+    <linearGradient id="barC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#27AE60"/>
+      <stop offset="100%" stop-color="#1E8449"/>
+    </linearGradient>
+    <linearGradient id="barD" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#F39C12"/>
+      <stop offset="100%" stop-color="#D68910"/>
+    </linearGradient>
+    <filter id="sh" x="-1%" y="-2%" width="102%" height="108%">
+      <feDropShadow dx="0" dy="1" stdDeviation="2" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="900" height="550" fill="#F8F9FA" rx="10"/>
+
+  <text x="450" y="35" text-anchor="middle" font-size="20" font-weight="bold" fill="#2C3E50">每 Token 带宽需求对比</text>
+  <text x="450" y="55" text-anchor="middle" font-size="12" fill="#7F8C8D">GB/token · 逐项拆解</text>
+
+  <!-- Y axis -->
+  <line x1="120" y1="80" x2="120" y2="460" stroke="#BDC3C7" stroke-width="1"/>
+
+  <!-- Grid lines -->
+  <g stroke="#ECF0F1" stroke-width="0.8">
+    <line x1="120" y1="100" x2="850" y2="100"/>
+    <line x1="120" y1="150" x2="850" y2="150"/>
+    <line x1="120" y1="200" x2="850" y2="200"/>
+    <line x1="120" y1="250" x2="850" y2="250"/>
+    <line x1="120" y1="300" x2="850" y2="300"/>
+    <line x1="120" y1="350" x2="850" y2="350"/>
+    <line x1="120" y1="400" x2="850" y2="400"/>
+    <line x1="120" y1="450" x2="850" y2="450"/>
+  </g>
+
+  <!-- Y axis labels -->
+  <text x="110" y="104" text-anchor="end" font-size="10" fill="#95A5A6">0</text>
+  <text x="110" y="154" text-anchor="end" font-size="10" fill="#95A5A6">20</text>
+  <text x="110" y="204" text-anchor="end" font-size="10" fill="#95A5A6">40</text>
+  <text x="110" y="254" text-anchor="end" font-size="10" fill="#95A5A6">60</text>
+  <text x="110" y="304" text-anchor="end" font-size="10" fill="#95A5A6">80</text>
+  <text x="110" y="354" text-anchor="end" font-size="10" fill="#95A5A6">100</text>
+  <text x="110" y="404" text-anchor="end" font-size="10" fill="#95A5A6">120</text>
+  <text x="110" y="454" text-anchor="end" font-size="10" fill="#95A5A6">140</text>
+
+  <text x="70" y="275" text-anchor="middle" font-size="12" fill="#7F8C8D" transform="rotate(-90,70,275)">GB / token</text>
+
+  <!-- === Group 1: 32GB 台式机 (未量化) === -->
+  <g transform="translate(170, 0)">
+    <!-- Trunk bar -->
+    <rect x="0" y="122" width="45" height="328" rx="4" fill="url(#barA)" filter="url(#sh)"/>
+    <text x="22" y="290" text-anchor="middle" font-size="11" font-weight="bold" fill="white">108.8</text>
+
+    <!-- Experts bar (stacked on top) -->
+    <rect x="0" y="450" width="45" height="10" rx="4" fill="url(#barB)" filter="url(#sh)"/>
+
+    <!-- Label -->
+    <text x="22" y="478" text-anchor="middle" font-size="11" font-weight="bold" fill="#2C3E50">32GB 台式机</text>
+    <text x="22" y="493" text-anchor="middle" font-size="9" fill="#95A5A6">未量化</text>
+    <text x="22" y="508" text-anchor="middle" font-size="10" fill="#E74C3C" font-weight="bold">134.6 GB</text>
+  </g>
+
+  <!-- === Group 2: 32GB 台式机 (trunk量化) === -->
+  <g transform="translate(290, 0)">
+    <!-- Trunk bar -->
+    <rect x="0" y="342" width="45" height="108" rx="4" fill="url(#barD)" filter="url(#sh)"/>
+    <text x="22" y="400" text-anchor="middle" font-size="11" font-weight="bold" fill="white">36</text>
+
+    <!-- Experts bar -->
+    <rect x="0" y="450" width="45" height="10" rx="4" fill="url(#barB)" filter="url(#sh)"/>
+
+    <text x="22" y="478" text-anchor="middle" font-size="11" font-weight="bold" fill="#2C3E50">Trunk 量化后</text>
+    <text x="22" y="493" text-anchor="middle" font-size="9" fill="#95A5A6">MXFP4</text>
+    <text x="22" y="508" text-anchor="middle" font-size="10" fill="#E67E22" font-weight="bold">61.8 GB</text>
+  </g>
+
+  <!-- === Group 3: FPGA + 缓存 1GB === -->
+  <g transform="translate(430, 0)">
+    <!-- Trunk bar -->
+    <rect x="0" y="342" width="45" height="108" rx="4" fill="url(#barD)" filter="url(#sh)"/>
+    <text x="22" y="400" text-anchor="middle" font-size="11" font-weight="bold" fill="white">36</text>
+
+    <!-- Experts bar (with cache hit) -->
+    <rect x="0" y="450" width="45" height="10" rx="4" fill="url(#barC)" filter="url(#sh)"/>
+
+    <text x="22" y="478" text-anchor="middle" font-size="11" font-weight="bold" fill="#2C3E50">FPGA + 1GB缓存</text>
+    <text x="22" y="493" text-anchor="middle" font-size="9" fill="#95A5A6">35.3%命中</text>
+    <text x="22" y="508" text-anchor="middle" font-size="10" fill="#27AE60" font-weight="bold">42.5 GB</text>
+  </g>
+
+  <!-- === Group 4: ASIC (NAND合封) === -->
+  <g transform="translate(570, 0)">
+    <!-- Trunk bar -->
+    <rect x="0" y="430" width="45" height="20" rx="4" fill="url(#barD)" filter="url(#sh)"/>
+    <text x="22" y="445" text-anchor="middle" font-size="10" font-weight="bold" fill="white">~5</text>
+
+    <!-- Experts bar -->
+    <rect x="0" y="450" width="45" height="10" rx="4" fill="url(#barC)" filter="url(#sh)"/>
+
+    <text x="22" y="478" text-anchor="middle" font-size="11" font-weight="bold" fill="#2C3E50">ASIC NAND合封</text>
+    <text x="22" y="493" text-anchor="middle" font-size="9" fill="#95A5A6">目标</text>
+    <text x="22" y="508" text-anchor="middle" font-size="10" fill="#27AE60" font-weight="bold">~30 GB</text>
+  </g>
+
+  <!-- === Legend === -->
+  <rect x="700" y="80" width="180" height="130" rx="8" fill="white" stroke="#BDC3C7" stroke-width="1" filter="url(#sh)"/>
+  <text x="790" y="102" text-anchor="middle" font-size="12" font-weight="bold" fill="#2C3E50">图例</text>
+
+  <rect x="715" y="115" width="14" height="10" rx="2" fill="url(#barA)"/>
+  <text x="735" y="125" font-size="10" fill="#2C3E50">Trunk（未量化）</text>
+
+  <rect x="715" y="135" width="14" height="10" rx="2" fill="url(#barD)"/>
+  <text x="735" y="145" font-size="10" fill="#2C3E50">Trunk（MXFP4 量化）</text>
+
+  <rect x="715" y="155" width="14" height="10" rx="2" fill="url(#barB)"/>
+  <text x="735" y="165" font-size="10" fill="#2C3E50">Expert 流量</text>
+
+  <rect x="715" y="175" width="14" height="10" rx="2" fill="url(#barC)"/>
+  <text x="735" y="185" font-size="10" fill="#2C3E50">Expert（缓存命中后）</text>
+
+  <rect x="700" y="230" width="180" height="80" rx="8" fill="#FFF3CD" stroke="#F39C12" stroke-width="1" filter="url(#sh)"/>
+  <text x="790" y="252" text-anchor="middle" font-size="11" font-weight="bold" fill="#856404">关键结论</text>
+  <text x="715" y="272" font-size="10" fill="#856404">• Trunk 税是最大瓶颈</text>
+  <text x="715" y="288" font-size="10" fill="#856404">• 量化 trunk 省 72.8 GB</text>
+  <text x="715" y="304" font-size="10" fill="#856404">• 缓存再省 19.3 GB</text>
+
+  <!-- Source -->
+  <text x="450" y="540" text-anchor="middle" font-size="9" fill="#BDC3C7">数据来源: k3-verdict.md · batch_traffic_model.py · hot_expert_cache_sim.py</text>
+</svg>
