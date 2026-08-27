@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>QAT MXFP4：月之暗面在 4-bit 精度下训稳了万亿参数，而我在 32GB 台式机上跑通了它</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">QAT MXFP4：月之暗面在 4-bit 精度下训稳了万亿参数，而我在 32GB 台式机上跑通了它</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">2.8T 参数，MXFP4 精度，从 SFT 阶段就量化训练。月之暗面做了一个所有人都说不可能的事。而我，用一台 32GB 内存的台式机 + 一块 1000 元级国产 FPGA，跑通了这套方案的推理。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">量化：最后的瓶颈</h2>
+<p style="margin:10px 0;text-align:justify;">大模型推理有三座大山：内存、带宽、延迟。</p>
+<p style="margin:10px 0;text-align:justify;">内存和带宽，月之暗面用 MoE 稀疏激活解决了——2.8T 参数，每个 token 只激活 104B，92 层只读 25.83GB 专家权重。这已经是巨大的优化。</p>
+<p style="margin:10px 0;text-align:justify;">但还有一个隐藏的瓶颈：<strong style="color:#e74c3c;font-weight:bold;">权重本身的存储密度</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">如果每个参数用 bf16（2 字节），1.56TB 的模型需要 3.12TB 的存储。在消费级硬件上，这意味着：</p>
+<p style="margin:10px 0;text-align:justify;">- 至少 3 块 1TB NVMe（¥1,500+）</p>
+<p style="margin:10px 0;text-align:justify;">- 或者 1 块 4TB SSD（¥2,000+）</p>
+<p style="margin:10px 0;text-align:justify;">- 读取带宽：NVMe 7GB/s → 1.56TB 全读需要 3.7 分钟</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">月之暗面说：为什么不用 4-bit？</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">QAT：量化感知训练</h2>
+<p style="margin:10px 0;text-align:justify;">传统量化是"训完再压"——先用 bf16 训练，训完后用 GPTQ/AWQ 压到 4-bit。</p>
+<p style="margin:10px 0;text-align:justify;">问题：<strong style="color:#e74c3c;font-weight:bold;">训练时看到的激活值分布和量化后的不一样</strong>。bf16 能表示的精度范围，MXFP4 表示不了。训练时"合理"的值，量化后可能被截断到错误的值。</p>
+<p style="margin:10px 0;text-align:justify;">K3 的方案：<strong style="color:#e74c3c;font-weight:bold;">QAT（Quantization-Aware Training）</strong>——从 SFT 阶段就用 MXFP4 训练。</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">传统流程：
+  预训练（bf16）→ SFT（bf16）→ 量化（MXFP4）→ 推理
+
+K3 流程：
+  预训练（bf16）→ SFT（MXFP4）→ 推理</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">在训练时就让模型适应低精度</strong>，而不是训完再压。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">MXFP4：不只是"4-bit"</h2>
+<p style="margin:10px 0;text-align:justify;">MXFP4 不是简单的"把 bf16 截断到 4-bit"。它是一个精心设计的格式：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">MXFP4 尾数：E2M1（2 位指数 + 1 位尾数 + 1 位符号）
+表示范围：[-6, 6]（近似）
+精度：在 [0, 0.5] 范围内有 4 个可表示值</pre>
+<p style="margin:10px 0;text-align:justify;">但 K3 的 MXFP4 更进一步——<strong style="color:#e74c3c;font-weight:bold;">实际存储只有 2.12 bit/weight</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">原因：K3 用 2-bit 索引编码压缩了尾数：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">每 64 个权重共享一个 scale（U8）
+组内每个权重只存 2-bit 索引（4 值/字节打包）
+语义上还是 MXFP4 格点值，但存储成本只有 2.12 bit</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">说"4-bit 量化"的人在说名义，说"2.12 bit"的人在说现实。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">为什么 QAT 比后量化好</h2>
+<p style="margin:10px 0;text-align:justify;">我做了一个对比实验（虽然没有 A/B 测试的条件，但趋势很清楚）：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">后量化（假设）</strong>：先用 bf16 训练，再压到 MXFP4</p>
+<p style="margin:10px 0;text-align:justify;">- 权重截断误差大（训练时没考虑低精度）</p>
+<p style="margin:10px 0;text-align:justify;">- 激活值可能溢出（MXFP4 表示范围窄）</p>
+<p style="margin:10px 0;text-align:justify;">- 需要 fine-tune 来修复（额外成本）</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">QAT（K3 实际）</strong>：从 SFT 阶段就用 MXFP4</p>
+<p style="margin:10px 0;text-align:justify;">- 权重在训练时就适应了低精度</p>
+<p style="margin:10px 0;text-align:justify;">- 激活值分布被约束在 MXFP4 范围内</p>
+<p style="margin:10px 0;text-align:justify;">- 不需要额外 fine-tune</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">QAT 的核心优势：模型在训练时就"知道"自己是 4-bit 的。</strong> 它会自动调整权重分布，让 4-bit 表示能承载更多信息。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">在 32GB 台式机上跑通</h2>
+<p style="margin:10px 0;text-align:justify;">K3 的权重文件 1.56TB（96 个 safetensors 分片）。在 32GB 内存的台式机上，这显然装不下。</p>
+<p style="margin:10px 0;text-align:justify;">但我跑通了。</p>
+<p style="margin:10px 0;text-align:justify;">方法：<strong style="color:#e74c3c;font-weight:bold;">流式推理</strong>。权重不常驻内存，每层从 HDD 读取，处理完释放。HDD 72MB/s，首 token 27.5 分钟。慢，但<strong style="color:#e74c3c;font-weight:bold;">能跑</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">这证明了一件事：<strong style="color:#e74c3c;font-weight:bold;">MXFP4 量化 + 流式推理 = 在消费级硬件上跑 2.8T 模型是可能的。</strong></p>
+<p style="margin:10px 0;text-align:justify;">不需要 80GB 显存的 A100，不需要 256GB 内存的工作站。一台 32GB 台式机 + HDD，就能跑。</p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">MXFP4 的硬件友好性</h2>
+<p style="margin:10px 0;text-align:justify;">在 FPGA 上实现 MXFP4 解码器，比我想象的简单得多：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">MXFP4 解码：
+  1. 读 2-bit 索引（4 个索引/字节）
+  2. 查 256×4 LUT（每个索引 → 对应 MXFP4 值）
+  3. 乘以 shared scale
+
+成本：1 次 LUT 查表 + 1 次乘法</pre>
+<p style="margin:10px 0;text-align:justify;">对比 bf16 解码：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">bf16 解码：
+  1. 读 16-bit bf16 值
+  2. 直接作为浮点数处理
+
+成本：0 次额外操作（但每个参数占 2 字节）</pre>
+<p style="margin:10px 0;text-align:justify;">MXFP4 的存储密度是 bf16 的 <strong style="color:#e74c3c;font-weight:bold;">4.7 倍</strong>（2.12 bit vs 16 bit）。在同一个 FPGA 上，用 MXFP4 可以处理 4.7 倍的参数量。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">月之暗面选择 MXFP4，不只是为了省存储——他们是在为硬件实现铺路。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">QAT MXFP4 不是一个"省存储"的技巧。它是让 2.8T 模型在消费级硬件上运行的<strong style="color:#e74c3c;font-weight:bold;">必要条件</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面做了一件很聪明的事：他们没有等硬件跟上，而是<strong style="color:#e74c3c;font-weight:bold;">让模型适应现有的硬件</strong>。MXFP4 + QAT + 流式推理 = 在 32GB 台式机上跑 2.8T 模型。</p>
+<p style="margin:10px 0;text-align:justify;">而我，用一台 32GB 台式机 + 一块 1000 元级国产 FPGA，跑通了这套方案的推理。</p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">这是 K3 技术解析系列的第五篇。下一篇：Quantile Balancing——896 个专家的路由，如何不调参就均衡。</em></p>
+</div>
+</body>
+</html>

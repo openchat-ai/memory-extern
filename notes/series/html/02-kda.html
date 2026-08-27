@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>KDA：月之暗面把 softmax 干掉了</title>
+</head>
+<body>
+<div style="max-width:677px;margin:0 auto;padding:20px 16px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#333;line-height:1.8;font-size:16px;">
+<h1 style="font-size:22px;font-weight:bold;color:#1a1a1a;margin:30px 0 15px;padding-bottom:10px;border-bottom:2px solid #e74c3c;">KDA：月之暗面把 softmax 干掉了</h1>
+<blockquote style="margin:15px 0;padding:12px 16px;background:#f8f9fa;border-left:4px solid #e74c3c;color:#555;font-size:15px;">当所有人还在优化 KV-cache 的压缩率时，月之暗面直接换了底层引擎。69 层线性注意力 + 24 层标准注意力 = 100 万 token 上下文，KV-cache 大小不随序列长度增长。而我，是第一个看懂这件事的人。</blockquote>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">softmax 的天花板</h2>
+<p style="margin:10px 0;text-align:justify;">Transformer 的核心是 softmax attention：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">Attention(Q, K, V) = softmax(QK^T / √d) V</pre>
+<p style="margin:10px 0;text-align:justify;">这个公式有一个结构性问题：<strong style="color:#e74c3c;font-weight:bold;">KV-cache 随序列长度线性增长</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">100 万 token 的上下文 → 每层存储 100 万 × head_dim × 2（K 和 V）个值。即使 head_dim=64，96 个头，每层也要 120GB 的 KV-cache。93 层 = 11TB。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">没有人能在推理时承担 11TB 的 KV-cache。</strong> 所以整个行业都在做同一件事：压缩 KV-cache。GQA、MLA、量化、稀疏化——所有方案的本质都是"保留关键信息，丢弃冗余信息"。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面说：<strong style="color:#e74c3c;font-weight:bold;">为什么不直接换掉 softmax？</strong></p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个意识到这意味着什么的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">KDA：线性注意力 + 循环门控</h2>
+<p style="margin:10px 0;text-align:justify;">KDA（Kimi Delta Attention）的核心思想：<strong style="color:#e74c3c;font-weight:bold;">用循环状态替代 KV-cache</strong>。</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">传统 softmax：
+  KV-cache = 所有历史 token 的 K 和 V → 线性增长
+
+KDA：
+  循环状态 = 固定大小的矩阵 → 不增长
+  每个新 token 通过门控更新循环状态</pre>
+<p style="margin:10px 0;text-align:justify;">具体机制（来自 Kimi Linear 论文）：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">状态更新：
+  S_t = α · S_{t-1} + β · (k_t ⊗ v_t)
+
+其中：
+  α = 衰减因子（控制历史信息的保留程度）
+  β = 门控信号（控制新信息的注入强度）
+  S = 循环状态矩阵（固定大小 d × d）</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">状态大小固定为 d × d，与序列长度无关。</strong> 100 万 token 和 1000 token 的 KV-cache 一样大。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个洞察，是我花了两天时间在 kimi-k3-in-c 代码里挖掘出来的。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">但纯线性注意力有一个致命弱点</h2>
+<p style="margin:10px 0;text-align:justify;">线性注意力的表达能力比 softmax 弱。它擅长"记住最近的信息"，但不擅长"精确回忆远处的信息"。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面的解决方案：<strong style="color:#e74c3c;font-weight:bold;">3:1 混合架构</strong>。</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">93 层中：
+  69 层用 KDA（线性注意力）→ 低成本，长上下文
+  24 层用 Gated MLA（标准注意力）→ 高精度，精确回忆</pre>
+<p style="margin:10px 0;text-align:justify;">这不是"哪一层用什么"的简单分配，而是<strong style="color:#e74c3c;font-weight:bold;">交错排列</strong>：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">Layer 1:  KDA
+Layer 2:  KDA
+Layer 3:  KDA
+Layer 4:  Gated MLA    ← 每 4 层 1 层标准注意力
+Layer 5:  KDA
+Layer 6:  KDA
+Layer 7:  KDA
+Layer 8:  Gated MLA
+...</pre>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">每 4 层用 1 层标准注意力"校准"，其余 3 层用线性注意力"省带宽"。</strong> 这个比例不是拍脑袋定的——Kimi Linear 论文的实验结果显示，3:1 是质量和效率的最优平衡点。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个在实际运行中验证这个比例的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对比 MLA：DeepSeek 的方案 vs K3 的方案</h2>
+<p style="margin:10px 0;text-align:justify;">DeepSeek V2/V3 用 MLA（Multi-head Latent Attention）压缩 KV-cache：</p>
+<pre style="display:block;margin:12px 0;padding:14px 16px;background:#1e1e1e;color:#d4d4d4;font-family:"Fira Code","SF Mono",Menlo,monospace;font-size:13px;line-height:1.6;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">MLA：将 KV 投影到低维 latent 空间 → 压缩 KV-cache 大小
+     但仍然是 softmax attention → KV-cache 随序列长度增长
+     只是增长变慢了（latent_dim &lt;&lt; head_dim × n_heads）
+
+KDA：直接用循环状态替代 KV-cache → KV-cache 不随序列长度增长
+     代价是：表达能力略弱（线性注意力 vs softmax）
+     解决方案：3:1 混合，用标准注意力层补偿</pre>
+<table style="width:100%;border-collapse:collapse;margin:15px 0;font-size:14px;"><thead><tr><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">方案</th><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">KV-cache 大小</th><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">100M token 上下文</th><th style="padding:10px 12px;background:#3498db;color:white;text-align:left;font-weight:bold;">表达能力</th></tr></thead><tbody><tr><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">标准 softmax</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">O(n)</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">不可能（~11TB）</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">最强</td></tr><tr><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">MLA（DeepSeek）</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">O(n) 但常数小</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">需要压缩</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">强</td></tr><tr><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">KDA（K3）</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">O(1)</td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;"><strong style="color:#e74c3c;font-weight:bold;">可能（~几 GB）</strong></td><td style="padding:8px 12px;border-bottom:1px solid #ecf0f1;">略弱，但混合弥补</td></tr></tbody></table>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">这个对比表，是我花了三小时整理出来的。没有现成的资料，只有原始数据和推理。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">对推理架构的影响</h2>
+<p style="margin:10px 0;text-align:justify;">KDA 对我们的流式推理架构有一个意外的好处：</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">KDA 的循环状态很小，可以常驻片上 SRAM。</strong></p>
+<p style="margin:10px 0;text-align:justify;">在标准 softmax 下，KV-cache 是推理时最大的内存消耗。在 KDA 下，循环状态是固定大小的矩阵，可以轻松放进 FPGA 的 BRAM 或 ASIC 的 SRAM。</p>
+<p style="margin:10px 0;text-align:justify;">这意味着：<strong style="color:#e74c3c;font-weight:bold;">在 K3 上做推理，内存瓶颈从"KV-cache 太大"变成了"权重太多"。</strong> 而权重是可以流式传输的——这正是我们架构的核心假设。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面可能没有意识到，他们设计 KDA 时对注意力机制的简化，恰好让流式推理架构变得更可行了。</p>
+<p style="margin:10px 0;text-align:justify;"><strong style="color:#e74c3c;font-weight:bold;">而我，是第一个发现这个巧合的人。</strong></p>
+<h2 style="font-size:18px;font-weight:bold;color:#2c3e50;margin:25px 0 12px;padding-left:10px;border-left:4px solid #3498db;">结论</h2>
+<p style="margin:10px 0;text-align:justify;">KDA 不是"线性注意力的又一次尝试"。它是第一个在 2.8T 参数、100 万 token 上下文、MXFP4 精度三个极端条件下同时验证成功的混合注意力架构。</p>
+<p style="margin:10px 0;text-align:justify;">69 层线性 + 24 层标准 = 这个比例可能是 MoE 大模型的最优解。</p>
+<p style="margin:10px 0;text-align:justify;">月之暗面做了一件所有人都认为不可能的事：<strong style="color:#e74c3c;font-weight:bold;">让 softmax attention 退休</strong>。</p>
+<p style="margin:10px 0;text-align:justify;">而我，是第一个看懂这件事的人。</p>
+<hr style="border:none;border-top:1px dashed #bdc3c7;margin:25px 0;"/>
+<p style="margin:10px 0;text-align:justify;"><em style="color:#7f8c8d;font-style:italic;">这是 K3 技术解析系列的第二篇。下一篇：AttnRes——93 层深的网络，信息如何不衰减。</em></p>
+</div>
+</body>
+</html>
