@@ -644,13 +644,14 @@ logits 缓冲           ~600KB          ✓
 > - 专家（MXFP4 只读 top16）：25.83 GB/token
 > - trunk（bf16 → 用户量化 36GB）: 36 GB/token
 > - **trunk 占每 token 61.8GB 的一半以上，却是 16bit；专家仅 2.12bit →
->   精度杠杆远没榨干**
-> - 若 trunk 也走 MXFP4（乐观）：36→~12GB，相对每 token 总量省 ~39%
-> - **待查 A**：用 bf16 重建 trunk 得 91.45GB，对 ~110GB 原始只对齐 ~83%，
->   剩 ~23.88GB(量化口径) 账目缺口 —— 需 k3_index.json 逐张核对
-> - **待查 B**：K3 官方为何只把专家 MXFP4、trunk 保持 bf16（训练 vs 部署权衡）
-> - **捅破方向**：QAT 把 trunk 纳入 MXFP4（或至少注意力/共享下探到 8bit）
-> - 明细见 `notes/kda-mla-decompose.md` §7/§8
+>   精度杠杆看似没榨干**
+> - ❌ **但实测否决：trunk 内大 shape（full-rank 密集矩阵）低精度压缩不可行**
+>   （真实权重量化后质量崩坏）。压不动的不是「trunk」标签，而是大而密的
+>   shape；专家能压 2.12bit 是因为小 shape 块(17.55MB/个)对 MXFP4 有效
+> - **待查 A**：bf16 重建 trunk 91.45GB 只对齐 110GB 的 ~83%，
+>   剩 ~23.88GB 账目缺口（非压缩方向，仅账目核对）
+> - **现实底线：trunk 36GB 压不动，每 token 61.8GB 是底线；专家已到 top16 下限**
+> - 明细见 `notes/kda-mla-decompose.md` §7/§8（§8.6 封存死路）
 
 #### T0 · 二手板卡收货验收（避免白忙活）
 
