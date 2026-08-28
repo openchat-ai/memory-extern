@@ -134,3 +134,85 @@ router_logits = gate.weight ⊗ h_in
 
 → **每 token 真正能被「先路由后搬运」省掉的，是专家本体 25.83GB 里的 (880/896)；注意力稠密墙（trunk 36GB 中）不变。**
 → 这是本轮拆解的最终、可量化结论。
+
+## 七、T9 实测：专家侧已到理论下限（expert_extractor.py）
+
+用真实 100K 条 (layer,expert) 轨迹 + K3 实测参数（17.55MB/专家）量化：
+```
+整层读 896 专家          : 1412.8 GB/token  (理论浪费对比)
+先路由只读 top16         :   25.2 GB/token  (省 98.2%)
++1GB LRU 缓存(命中35.4%) :   16.3 GB/token
+```
+**关键反直觉结论：**
+- 25.2 GB/token 与 k3-verdict 实测 25.83 GB 吻合到 98%
+- → **现成引擎本来就是「先路由后搬运」了**，专家侧只读 top16(1.79%)，已到理论下限
+- → **专家侧不是瓶颈，省幅天花板已到（不可能再读更少）**
+- → 剩余可捅破空间在 **trunk**，不在专家
+
+## 八、T10 拆解：trunk 的真实构成与「精度黑洞」（本轮最大发现）
+
+### 8.1 实锤：trunk 除 routed experts 外全是 bf16（16bit/weight）
+
+waste K3.md 源码实锤：
+> "routed experts ship as MXFP4 ... ; everything else bf16"
+
+即：**attention / down+up / shared experts / router gate / dense / embed / vision
+全是 bf16（2 bytes/param）**，只有 routed experts 用 MXFP4 2.12bit。
+
+### 8.2 用权威 shape 重建 trunk（bf16 口径）
+
+依据 sglang kimi_linear.py + waste K3.md 实测 shape：
+
+| 块 | 层数 | bf16 字节 |
+|---|---|---|
+| Gated MLA | 24 | 16.26 GB |
+| KDA | 69 | 43.75 GB |
+| down+up(共享) | 92 | 9.45 GB |
+| shared experts(2) | 92 | 16.21 GB |
+| router gate | 92 | 1.18 GB |
+| dense layer0 | 1 | 1.45 GB |
+| embedding | 1 | 2.35 GB |
+| vision MoonViT | 1 | 0.80 GB |
+| **可识别合计** | | **91.45 GB** |
+
+对上了实测 trunk 原始 ~110GB（k3-verdict §八）的 ~83%。
+剩余 ~18.5GB 差异 → 待查（可能 attention head shape 轻微偏差，或遗漏整块权重）。
+
+### 8.3 每 token 带宽账（修正后口径）
+
+- 专家（MXFP4，只读 top16）：25.83 GB
+- trunk（bf16 → 用户量化 36GB）：36 GB
+- **总计 61.8 GB/token**
+
+### 8.4 「精度黑洞」—— 本轮最值得捅破的新发现
+
+**trunk=36GB 占每 token 61.8GB 的一半以上，却几乎全是 bf16(16bit)；只有专家用了 MXFP4(2.12bit)。**
+
+| 位置 | 精度 | 每 token 流量 |
+|---|---|---|
+| 专家（896 路由） | MXFP4 2.12bit | 25.83 GB |
+| 注意力/共享/downup/dense/embed | **bf16 16bit** | 36 GB |
+
+→ **为什么注意力和共享专家不用 MXFP4？（精度杠杆远没榨干）**
+
+由于 trunk 实测 36GB 里尚有 ~23.88GB 未与我重建的 shape 对上账（见 8.2），
+省幅口径分两种，避免过度承诺：
+
+- **保守口径（对齐部分 12.12GB 若全转 MXFP4 2.12bit）**
+  这 12.12GB 的 bf16 版本 ≈ 45.7GB 原始 → MXFP4 后 ~12.12GB，已含在 36GB 估算内，
+  实际省幅 ~只对可识别块成立，需先补齐账目缺口
+- **乐观口径（整个 trunk 36GB 若全转 MXFP4，假设同样 2.12bit 密度）**
+  `36GB ──► ~12GB`（=36 × 2.12/16，bf16→MXFP4 字节比）
+  - 相对 trunk 本身省 **24GB（~67%）**
+  - 相对每 token 总流量 61.8GB（专家25.83+trunk36）省 **24GB（~39%）**
+  ⚠️ 此口径假设 36GB 全为可 MXFP4 的权重（需先实锤 23.88GB 缺口不是量化成本/激活缓存）
+
+→ **最诚实的下一步是：先补齐 trunk 36GB 的账目缺口（待查 A），再谈省幅。**
+
+### 8.5 为什么值得捅破 & 待查
+
+- **待查 A**：trunk 那 ~18.5GB 差异（对齐不足）里是否有整块权重没算——可能是更大的蛋糕
+- **待查 B**：K3 官方为何只把专家 MXFP4、trunk 保持 bf16？（训练精度需求 vs 部署带宽的权衡）
+- **捅破方向**：QAT 能否把 trunk 也纳入 MXFP4（或至少注意力/共享下探到 8bit）——
+  若成立，每 token 61.8GB → ~37.8GB（专家25.8 + trunk~12），省 ~39%
+- **这是「先路由后搬运」之后、真正尚无人捅破的下一道墙**
