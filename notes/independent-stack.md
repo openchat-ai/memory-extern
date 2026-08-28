@@ -628,6 +628,30 @@ logits 缓冲           ~600KB          ✓
 >   要躲开它只能退到「用上一层 h 预测本层路由」，命中率非 100%
 > - 待办 T8：据此写 `expert_extractor.py` 实测「先路由后搬运」能把搬运量压到多少
 
+> **T8·实测里程碑（2026-08-28）：专家侧已到理论下限（expert_extractor.py）。**
+> 用真实 100K 条路由轨迹 + 17.55MB/专家实测参数：
+> ```
+> 整层读 896          : 1412.8 GB/token
+> 先路由只读 top16    :   25.2 GB/token  （省 98.2%，与 k3-verdict 25.83 吻合 98%）
+> +1GB LRU(命中35.4%) :   16.3 GB/token
+> ```
+> **反直觉结论：现成引擎本来就是「先路由后搬运」了，专家侧只读 1.79%(16/896)，
+> 已到理论下限，不是瓶颈。剩余可捅破空间在 trunk。**
+
+> **T10·里程碑（2026-08-28）：trunk「精度黑洞」—— 下一道真正的墙。**
+> waste K3.md 源码实锤：**trunk 除 routed experts 外全为 bf16(16bit)，
+> 只有专家用 MXFP4(2.12bit)**。
+> - 专家（MXFP4 只读 top16）：25.83 GB/token
+> - trunk（bf16 → 用户量化 36GB）: 36 GB/token
+> - **trunk 占每 token 61.8GB 的一半以上，却是 16bit；专家仅 2.12bit →
+>   精度杠杆远没榨干**
+> - 若 trunk 也走 MXFP4（乐观）：36→~12GB，相对每 token 总量省 ~39%
+> - **待查 A**：用 bf16 重建 trunk 得 91.45GB，对 ~110GB 原始只对齐 ~83%，
+>   剩 ~23.88GB(量化口径) 账目缺口 —— 需 k3_index.json 逐张核对
+> - **待查 B**：K3 官方为何只把专家 MXFP4、trunk 保持 bf16（训练 vs 部署权衡）
+> - **捅破方向**：QAT 把 trunk 纳入 MXFP4（或至少注意力/共享下探到 8bit）
+> - 明细见 `notes/kda-mla-decompose.md` §7/§8
+
 #### T0 · 二手板卡收货验收（避免白忙活）
 
 - 收货后先烧官方 demo（suntech demo / LED blink）确认板卡能工作：
