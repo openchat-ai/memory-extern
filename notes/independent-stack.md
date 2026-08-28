@@ -612,6 +612,22 @@ logits 缓冲           ~600KB          ✓
 > 上板前先做收货验收（见下），再按 T5→T6→T7 推进。
 > 后续需补购 NVMe 硬盘（容量选择见 §2.2 存储层 / §14.4）。
 
+> **结构拆解里程碑（2026-08-27）：MoE「先路由后搬运」在 K3 上成立的实锤。**
+> 来源：sglang `python/srt/models/kimi_linear.py` + `kimi_k3.py` 源码。
+> **关键事实 —— router 与 experts 吃同一个 hidden_states：**
+> ```
+> router_logits, _ = self.gate(hidden_states)
+> final_hidden_states = self.experts(hidden_states, topk_output)
+> ```
+> - `gate` = `ReplicatedLinear(7168 → 896)`，权重仅 7168×896 ≈ 6.4M 参数，
+>   **可完全常驻内存（几十 MB）**
+> - `experts` 也吃同一个入层 `hidden_states`
+> - **结论：可以「先算 router（极小常驻权重）→ 拿 top16 → 再精准搬运那 16 个专家」，
+>   把「整层读 896 专家」变成「只读 top16」**
+> - 绕不开的部分：本层 router 依赖本层注意力输出（KDA/MLA 权重须先算）；
+>   要躲开它只能退到「用上一层 h 预测本层路由」，命中率非 100%
+> - 待办 T8：据此写 `expert_extractor.py` 实测「先路由后搬运」能把搬运量压到多少
+
 #### T0 · 二手板卡收货验收（避免白忙活）
 
 - 收货后先烧官方 demo（suntech demo / LED blink）确认板卡能工作：
