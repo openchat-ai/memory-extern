@@ -236,6 +236,58 @@ final_hidden_states = self.experts(hidden_states, topk_output)  # 用途② 喂 
   命中或超纯统计 → 那才是「架走注意力稠密墙」的正主（需激活数据）
 - **教训**：评估口径必须时序留一，前/后切分在"每层独立批"轨迹下测的是集合稳定性假象
 
+## 九、T12 源码实锤（拉回 kimi_k3.py + attn_residual.py）
+
+> 之前 §6 是二手结论（websearch）。本轮把 sglang `python/sglang/srt/models/kimi_k3.py`
+> 与 `sglang/srt/layers/attn_residual.py` 原码拖回逐一核对。
+
+### 9.1 router 输入的真实公式（含 "h_in 存的是什么" 的答案）
+
+K3 层 forward（标准残差路径，`kimi_k3.py:2458-2467`）：
+```
+hidden_states = input_layernorm(h, residual)
+hidden_states = _run_self_attn(...)                    # 完整注意力
+hidden_states = post_attention_layernorm(attn_out, residual)
+re = self.mlp(hidden_states)   # → 内部 self.gate(hidden_states) 算 router
+```
+
+AttnRes 层 forward（`kimi_k3.py:2588` → `attn_residual.py:339 aggregate_stream`）：
+```python
+rows = [bank[0..nvb-1], prefix_sum]     # [T, nvb+1, H]: 之前 block 摘要 + 当前 prefix
+normed = score_norm(rows)               # RMSNorm 每行
+scores = score_proj(normed)[0]          # rank-1 [H→1] 每块一个标量分数
+probs  = softmax(scores)                # 8 个块(摘要)的注意力权重
+h_in   = Σ_probs * rows                 # = 跨全部历史 block 的 softmax 混合
+```
+
+**"h_in 存的是什么" 的源码级答案：**
+- **不是单个向量**，而是 **「跨全部前驱 block 摘要的 softmax 加权混合」**
+- 每行 = 一个 **block 级 summary**（该 block 输出的 7168 维残差，整块只存 1 个代表向量）
+- 混合权重来自 rank-1 `score_proj`（7168→1）+ softmax —— 本质是一个**几十维的小注意力**
+- AttnRes 总状态 ≈ 8 块 × 56KB（`~288MB` over 93 层按块存）—— 这就是 K3 跨层信息流
+
+### 9.2 这如何改变了「能否简单取代」的判断
+
+- **h_in 本身的计算极轻**：~9 行 × 7168-d，rank-1 打分 + softmax + 加权和，
+  没有大矩阵 —— 这**不是**「算 h_in 贵」
+- **真正贵的是「产生 block summary」**：每个 block 的 summary 是**该 block 3×KDA+1×MLA
+  完整跑完的输出残差** —— 要得到 summary，必须先完整算注意力（QKV/O 稠密墙）
+- **结论**：想「绕开注意力直接算 h_in」，等价于想「不跑 KDA/MLA 就得 block summary」——
+  但 summary 正是注意力的产物。**这是闭环：h_in 依赖 summary，summary 依赖注意力。**
+
+### 9.3 对蒸馏替身方向的终审（结合源码）
+
+- **替身能替代的**：h_in 的**用途①（选专家 top16）**——可用进层/layer-N 的 summary 预测，
+  只影响搬运/预取，不影响正确性（§6.5 仍成立，且现在有源码级 h_in 公式佐证）
+- **替身替代不了的**：h_in 的**用途②（喂专家前向）**——专家吃的就是这个混合向量，
+  替身若给出错误的 h_in，专家计算就错
+- **可落地窗口（源码指出）**：因为 h_in = Σ probs×summary_k 是「跨 block 混合」，
+  而每个 block 内部是 3 层 KDA + 1 MLA，**同一 block 内的 h_in 主要受该 block 自己
+  的 summary 主导** → 可用「上一个 block 的 summary + 轻量预测当前 block 内的增量」
+  近似（这是"小小替身"最合理的切入点）
+- **下一斧数据需求不变**：要量化「替身近似 summary → 命中率」必须真实 activation
+  （h 前 / block summary / 真实 top16），本机无权重源，仍待数据
+
 ## 七、T9 实测：专家侧已到理论下限（expert_extractor.py）
 
 用真实 100K 条 (layer,expert) 轨迹 + K3 实测参数（17.55MB/专家）量化：
