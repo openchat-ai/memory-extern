@@ -1,5 +1,5 @@
 // ============================================================================
-// board_top.v — Tang Mega 138K 综合顶层（冒烟测试版）
+// board_top.v — Tang Mega 138K Pro 综合顶层（冒烟测试版）
 //
 // 目标：
 //   1. 验证时钟/复位/LED 引脚约束正确
@@ -12,25 +12,29 @@
 `timescale 1ns/1ps
 
 module board_top (
-    input  wire sys_clk_p,        // LVDS 正端（V22），Gowin 自动配对负端
-    input  wire rst_n_btn,        // 用户按键 AB13
-    output wire [3:0] led
+    input  wire sys_clk,          // P16 板载 50MHz 振荡器，单端
+    input  wire rst_n,            // 复位按键 S0（K16）
+    output wire [3:0] led,
+    // ---- LCD（800x480 RGB666 Dock 屏）----
+    output wire        lcd_clk,
+    output wire        lcd_en,
+    output wire        lcd_hs,
+    output wire        lcd_vs,
+    output wire [5:0]  lcd_r,
+    output wire [5:0]  lcd_g,
+    output wire [5:0]  lcd_b
 );
 
-    // ------------------------------------------------------------------
-    // 差分时钟缓冲（Gowin 原语；Verilator lint 用 stub 替代）
-    // ------------------------------------------------------------------
-    wire clk_int;
-    TLVDS_IBUF u_ibuf (.I(sys_clk_p), .O(clk_int));
+    wire clk_int = sys_clk;
 
     // ------------------------------------------------------------------
-    // 复位同步 + 按键消抖（简单两级）
+    // 复位同步 + 上电延时（按键低有效）
     // ------------------------------------------------------------------
     reg [15:0] por_cnt;
     reg        rst_meta;
     reg        rst_sync;
     wire       por_done = (por_cnt == 16'd0);
-    wire       rst_n = rst_sync;
+    wire       rst_n_int = rst_sync;
 
     // FPGA 上电初值由 bitstream 提供（Gowin 支持 reg 初值）
     initial begin
@@ -42,16 +46,16 @@ module board_top (
     always @(posedge clk_int) begin
         if (!por_done)
             por_cnt <= por_cnt - 16'd1;
-        rst_meta <= rst_n_btn & por_done;
+        rst_meta <= rst_n & por_done;
         rst_sync <= rst_meta;
     end
 
     // ------------------------------------------------------------------
-    // LED[0]：心跳（约 1Hz @ 100MHz 输入）
+    // LED[0]：心跳（约 1Hz @ 50MHz 输入）
     // ------------------------------------------------------------------
     reg [25:0] hb_cnt;
     always @(posedge clk_int) begin
-        if (!rst_n)                 hb_cnt <= 26'd0;
+        if (!rst_n_int)             hb_cnt <= 26'd0;
         else                        hb_cnt <= hb_cnt + 26'd1;
     end
     wire heartbeat = hb_cnt[25];
@@ -72,7 +76,7 @@ module board_top (
     integer i;
     // 突发模式：跑 16 拍停 1000 拍，循环往复
     always @(posedge clk_int) begin
-        if (!rst_n) begin
+        if (!rst_n_int) begin
             pat_wt    <= {NUM_LANES*4{1'b0}};
             pat_x     <= {NUM_LANES*8{1'b0}};
             pat_en    <= 1'b0;
@@ -109,12 +113,12 @@ module board_top (
         .ACC_WIDTH(32)
     ) u_engine (
         .clk      (clk_int),
-        .rst_n    (rst_n),
+        .rst_n    (rst_n_int),
         .wt_valid (pat_en),
         .wt_data  (pat_wt),
         .x_data   (pat_x),
         .x_valid  (pat_en),
-        .acc_clr  (~rst_n),
+        .acc_clr  (~rst_n_int),
         .sum_out  (sum_out),
         .sum_valid(sum_valid),
         .busy     (engine_busy)
@@ -123,18 +127,48 @@ module board_top (
     wire engine_busy;
     /* verilator lint_on UNUSEDSIGNAL */
 
-    // ------------------------------------------------------------------
-    // LED[3:1]：引擎活动指示（sum_valid 脉冲计数高位）
-    // ------------------------------------------------------------------
+    // 引擎活动计数（LED + LCD 共用）
     reg [23:0] act_cnt;
     always @(posedge clk_int) begin
-        if (!rst_n)              act_cnt <= 24'd0;
+        if (!rst_n_int)             act_cnt <= 24'd0;
         else if (sum_valid)      act_cnt <= act_cnt + 24'd1;
     end
 
-    assign led[0] = heartbeat;
-    assign led[1] = sum_valid | act_cnt[22];
-    assign led[2] = act_cnt[21];
-    assign led[3] = act_cnt[20] ^ (^sum_low);   // XOR 折叠全部 8 位
+    // ------------------------------------------------------------------
+    // LCD 显示：PLL 50M→35M 像素时钟，engine 状态实时上屏
+    // ------------------------------------------------------------------
+    wire        lcd_clk_35;
+    wire        pll_lock;
+
+    Gowin_PLL u_pll (
+        .clkout0 (lcd_clk_35),
+        .lock    (pll_lock),
+        .clkin   (sys_clk)
+    );
+
+    lcd_display u_lcd (
+        .lcd_clk     (lcd_clk_35),
+        .rst_n       (pll_lock),
+        .act_cnt     (act_cnt),
+        .sum_out     (sum_out),
+        .engine_busy (engine_busy),
+        .lcd_clk_o   (lcd_clk),
+        .lcd_en      (lcd_en),
+        .lcd_hs      (lcd_hs),
+        .lcd_vs      (lcd_vs),
+        .lcd_r       (lcd_r),
+        .lcd_g       (lcd_g),
+        .lcd_b       (lcd_b)
+    );
+
+    // ------------------------------------------------------------------
+    // LED[3:1]：引擎活动指示（sum_valid 脉冲计数高位）
+    // ------------------------------------------------------------------
+
+    // LED 共阳极：IO 拉低点亮，故取反驱动
+    assign led[0] = ~heartbeat;
+    assign led[1] = ~(sum_valid | act_cnt[22]);
+    assign led[2] = ~act_cnt[21];
+    assign led[3] = ~(act_cnt[20] ^ (^sum_low));   // XOR 折叠全部 8 位
 
 endmodule

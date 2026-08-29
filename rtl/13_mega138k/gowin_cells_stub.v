@@ -3,14 +3,9 @@
 //
 // 真实综合时由高云 IDE 的原语库提供这些模块，
 // 本文件必须从 Gowin 工程的源文件列表中排除！
+//
+// 注：board_top.v 已改用单端时钟（P16 50MHz），不再需要 TLVDS_IBUF；
+// 后续若引入 Gowin PLL / SERDES / PCIe 原语，可在此补对应 stub。
 // ============================================================================
 
 `timescale 1ns/1ps
-
-// 差分输入缓冲（LVDS）
-module TLVDS_IBUF (
-    input  wire I,
-    output wire O
-);
-    assign O = I;
-endmodule
