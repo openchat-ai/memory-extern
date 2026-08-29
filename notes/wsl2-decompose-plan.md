@@ -3,19 +3,20 @@
 **目标**: 在有权重 + torch 的机器上, 判定「张量分解能否无损压缩 KDA qkv」
         → 直接决定走 §15 路径2(成功) 还是路径3(失败, 训router)。
 
-**前置**: WSL2/Ubuntu + GPU(CUDA), 磁盘 >50GB。
-本机(Termux)无 torch/numpy/磁盘满, 无法跑真权重, 必须在此执行。
+**前置**: WSL2/Ubuntu + 纯 CPU torch, 磁盘 >50GB。
+(本机 Termux 无 torch/numpy/磁盘满; 21 的判定是矩阵谱运算, CPU 足够, 不需要 GPU)
+本机无法跑真权重, 判定须在 PC/WSL2 执行。
 
 ---
 
-## Phase 1 — 环境
+## Phase 1 — 环境(纯 CPU)
 
 ```bash
 sudo apt update && sudo apt install -y python3-pip git
-python3 -m pip install torch --index-url https://download.pytorch.org/whl/cu126
+python3 -m pip install torch            # CPU 版即可, 判定无需 GPU
 python3 -m pip install safetensors numpy tqdm
-python3 -c "import torch; print(torch.__version__, torch.cuda.is_available())"
-# 期望: 2.x True
+python3 -c "import torch; print(torch.__version__)"
+# 期望: 2.x (CPU 版也能跑 SVD/谱分析)
 ```
 
 ---
@@ -55,8 +56,9 @@ python3 /path/to/sram/tools/kda_tensor_decompose.py \
   (形如 `layers.N.<attn>.q_proj.weight`)。
 - 关键先看 **q_proj / k_proj / v_proj** 的 `head_err_R4`——这是整条线核心。
 
-**2c (可选) 端到端验证**: 若 2b 判定可行, 用 kda_tensor_decompose 给出的
+**2c (可选) 模型级验证**: 若 2b 判定可行, 用 kda_tensor_decompose 给出的
 低秩因子替换原 qkv, 在 smol generate.py 上跑, 对比生成质量是否掉。
+(纯 CPU 可跑, 慢而已; 判定本身 2b 已足够)
 
 ---
 
