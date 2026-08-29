@@ -134,14 +134,21 @@ module simd_mac_array #(
         end
     endgenerate
 
-    // ── 完成信号 ──
+    // ── 完成信号：单周期脉冲（帧末尾 wt_valid 下降沿才会触发一次）──
     reg [15:0] done_cnt;
+    reg        wt_valid_d;         // 上一拍 wt_valid，用于下降沿检测
     always @(posedge clk) begin
         if (!rst_n || acc_clr)
             done_cnt <= 16'd0;
         else if (wt_valid && x_valid && acc_en)
             done_cnt <= done_cnt + 16'd1;
     end
-    assign acc_done = (done_cnt != 16'd0) && !wt_valid;
+    always @(posedge clk) begin
+        if (!rst_n) wt_valid_d <= 1'b0;
+        else        wt_valid_d <= wt_valid;
+    end
+    // acc_done 必须是脉冲：帧消费完（wt_valid 下降沿）仅触发一次，
+    // 否则归约树会每周期重新发射 sum_valid 导致结果重复
+    assign acc_done = (done_cnt != 16'd0) && wt_valid_d && !wt_valid;
 
 endmodule

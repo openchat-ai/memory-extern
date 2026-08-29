@@ -123,19 +123,24 @@ activated_gb 再乘层数。若 52 本意是 per-token 总量，则公式存在�
 未执行：权重机 RAM 27GB ≪ 1.45TB，且无 SparkMoE fork 运行环境。如需路由 trace
 需在 ≥ 模型体积内存的机器上进行（或由 kimi-k3-in-c 的 LRU 路径改造采集）。
 
-## 八、Trunk MXFP4 量化实测（T5）
+## 八、Trunk 精度定案（T5 修订 · 2026-08-29）
 
-trunk（attention/shared/dense/embed/vision）原始 ~110GB → MXFP4 量化后实测 **36 GB**。
-量化方式：与专家同款 mxfp4-pack（group=64，scale 共享，2bit 索引编码）。
-质量待验：需跑 "Hello" 起手 + 长文续写确认无胡言（shared expert 和 attention 每 token 过）。
+**owner 拍板：trunk 不量化，保留 fp16。** MXFP4 压 trunk 质量验证失败（Hu值/长文续写不达标），
+弃用。trunk（attention/shared/dense/embed/vision）以 **fp16 原始字节 108.8 GB/pass** 全量前向。
 
-每 token 带宽账（最终版）：
-- 专家：25.83 GB（top-16 × 92 层 × 17.55MB）
-- trunk：36 GB（量化后，全量前向必经）
-- 总计：**61.83 GB/token**（全在盘上流时）
+> 历史记录（作废）：MXFP4 量化 trunk 曾实测压缩到 36 GB（group=64，scale 共享）。
+> 现因质量不达标废弃；36 GB 口径只在量化恢复时才可用。
+
+每 token 带宽账（最终版，trunk fp16 保留）：
+- 专家：25.83 GB（top-16 × 92 层 × 17.55MB，mxfp4 落盘实搬字节）
+- trunk：**108.8 GB/pass（fp16，每 token 全读）** ← 修正④
+- 总计（全流式）：**134.63 GB/token**
 - 若 trunk 常驻内存（≥40GB RAM）：每 token 仅流专家 25.83 GB
 
-吞吐模型见 `tools/batch_traffic_model.py`（并集曲线 + trunk 常量可推翻重标）。
+**对 SIMD/资源的影响（修正②）**：
+- 专家层 mxfp4 可查表 SIMD（256 组合 ROM）✅
+- trunk fp16 是实数乘累加 → **SIMD 查表失灵**，必须走 bf16 通道（DSP 或 150LUT/MAC）
+- 138K 资源裂解与链路瓶颈量化见 `pim/calc_fpga_occupancy.py`（v2）
 
 ## 九、存档文件位置（权重机）
 
