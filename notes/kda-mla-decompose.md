@@ -713,3 +713,25 @@ MXFP4 量化，蒸馏损失同时含「容量逼近」+「量化可容错」，�
 - 别把产品定位成"张量分解工具"(无壁垒, 官方随手做)
 - 定位成"特定硬件的KDA/MoE部署压缩方案"(有护城河)
 - 故事讲"垂直系统", 不是"算法"
+
+## 十八、WSL2 执行清单就绪 + 补实证: router 是小矩阵(2026-08-29)
+
+### 18.1 交付物(本机可照做)
+- notes/wsl2-decompose-plan.md : 完整执行清单(3 Phase)
+- tools/wsl2_decompose_plan.sh : 命令版
+- tools/kda_tensor_decompose.py : torch全模型映射器(判哪些矩阵无损可压)
+- tools/kda_tensor_decompose_demo.py : 纯Python闭环(本机已跑通)
+
+### 18.2 Phase 编排
+- P1 环境(torch+cuda)
+- P2 smol-kimi-k3(49M已训练)快速判定 — 先跑通, 几分钟出结论
+- P3 真K3(只加载前~20层)全量测绘 — 最终
+- 总判据: qkv head_err_R4<0.1 且 rank90<50% => 张量分解成功(路径2->1)
+              否则 => 路径3 训router
+
+### 18.3 补实证: smol 的 router 是 [d, num_experts]=[320,32] 小矩阵
+- smol/k3/model.py:297 self.router = nn.Linear(d, self.num_experts)
+- 即 route 打分来源是一个 d->32 的小稠密(1280参数), 不是 qkv
+- ⇒ 印证 §15 第三行: 独立router打分矩阵很小, 与 qkv 无关
+- 真K3的 router gate 是 d->896(logits), 虽更大, 但仍是'打分小矩阵'而非
+  'h_in产生' —— 两者物理分离, 佐证'route可单独做成小替身'
