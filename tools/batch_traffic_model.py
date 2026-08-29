@@ -3,7 +3,7 @@
 batch_traffic_model.py — MoE 批处理有效流量模型（终结"吞吐到底多少"之争）
 
 物理事实（全部来自实测，不再拍脑袋）：
-  trunk      = 36 GB/pass     （MXFP4 重打包后实测，所有 token 共享）
+  trunk      = 108.8 GB/pass  （fp16 保留定案 2026-08-29；曾量化 36GB 因质量废弃）
   专家切片   = 17.55 MB × 92层 × 896池
   单 token   = top16 → 1,472 切片 = 25.83 GB
   轨迹实证   : 68 位置累计触及 10,010 片（175.7GB）→ 并集增长远慢于线性
@@ -30,7 +30,7 @@ N_EXPERTS    = 896
 POOL_SLICES  = N_LAYERS * N_EXPERTS            # 82,432
 TOPK         = 16
 EXPERT_G_TOK = TOPK * SLICE_MB * N_LAYERS / 1024    # 25.83
-TRUNK_GB     = 36.0                            # 用户量化后实测
+TRUNK_GB     = 108.8                           # fp16 保留（2026-08-29 定案）
 COMPUTE_TPS  = 78.0                             # ACC16@150MHz 算力墙
 
 BW = {
