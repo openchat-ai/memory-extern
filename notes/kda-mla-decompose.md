@@ -723,7 +723,7 @@ MXFP4 量化，蒸馏损失同时含「容量逼近」+「量化可容错」，�
 - tools/kda_tensor_decompose_demo.py : 纯Python闭环(本机已跑通)
 
 ### 18.2 Phase 编排
-- P1 环境(torch+cuda)
+- P1 环境(纯 CPU torch)
 - P2 smol-kimi-k3(49M已训练)快速判定 — 先跑通, 几分钟出结论
 - P3 真K3(只加载前~20层)全量测绘 — 最终
 - 总判据: qkv head_err_R4<0.1 且 rank90<50% => 张量分解成功(路径2->1)

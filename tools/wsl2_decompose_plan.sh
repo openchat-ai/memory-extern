@@ -7,13 +7,12 @@ PHASE="${1:-1}"
 echo "== Phase $PHASE: WSL2 张量分解实测 =="
 
 PH1() {
-  echo "[1/3] 安装环境 (WSL2/Ubuntu)"
-  echo '  请确认: 有 GPU + CUDA, 磁盘 >50GB 空闲'
+  echo "[1/3] 安装环境 (WSL2/Ubuntu, 纯 CPU torch)"
+  echo '  # 判定是矩阵谱运算, CPU 足够, 不需要 GPU'
   echo '  sudo apt update && sudo apt install -y python3-pip git'
-  echo '  python3 -m pip install torch --index-url https://download.pytorch.org/whl/cu126'
+  echo '  python3 -m pip install torch'
   echo '  python3 -m pip install safetensors numpy tqdm'
-  echo '  (若做蒸馏再用: pip install -e ./distillkit)'
-  echo '  验证: python3 -c "import torch;print(torch.__version__, torch.cuda.is_available())"'
+  echo '  验证: python3 -c "import torch;print(torch.__version__)"'
 }
 
 PH2() {
@@ -32,8 +31,8 @@ PH2() {
   echo '  #   判定: rank90率<50% 且 head_err_R4<0.1 => 头共享/低秩 => 张量分解可行(§13)'
   echo '  #         rank90率≈100% 且 head_err_R4大    => 满秩墙(§12) => 走路径3'
   echo ''
-  echo '  ## 2c. (可选)用蒸馏验证端到端不掉点'
-  echo '  #   若 2b 判定可行, 用 kimi-k3-tiny/自蒸馏小替身看选路精度'
+  echo '  ## 2c. (可选)模型级验证'
+  echo '  #   若 2b 判定可行, 替换 qkv 后在 smol generate.py 跑, 看掉不掉点'
 }
 
 PH3() {

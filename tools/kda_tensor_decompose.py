@@ -73,7 +73,7 @@ def main():
         import torch
         from safetensors.torch import load_file
     except Exception as e:
-        print(f"需要 torch+safetensors (WSL2/GPU机可用): {e}")
+        print(f"需要 torch+safetensors (判定位矩阵谱运算, CPU 即可): {e}")
         return
 
     H, HD = (96, 128) if o.arch == "k3" else (5, 64)
