@@ -160,11 +160,44 @@ rtl/14_serdes_proto/
     axis_pcie/                ← 路径2(实例 B): PCIe 风格
       axis_pcie_adapter.v, tb_axis_pcie.v
       gw_pcie_bridge.v, tb_gw_pcie_bridge.v   (Gowin PCIe IP ↔ proto_core 桥)
+    path_cache/               ← SSD 双路径自动识别 + 统一权重流
+      links_detect.v          (复位探测 SerDes对齐 vs PCIe link-up, 先到先得锁定)
+      path_mux.v              (按锁定路径选通统一权重流 -> GEMV)
+      cachectl_top.v          (缓存控制器骨架: 权重通路 + 命令来源可切)
+      tb_path_cache.v
   tb/ proto_core_tb.v
-  sim.sh                      ← 一键回归(现 13 测试全绿,见 §9)
+  sim.sh                      ← 一键回归(现 14 测试全绿,见 §9)
 ```
 
-## 9. 验证现状(sim.sh 一键回归 13/13 ALL GREEN)
+## 8a. SSD 双路径自动识别(L2缓存场景, path_cache)
+
+场景: 冷存储(HDD, 全量权重) + L2缓存(SSD, trunk+每层激活专家,**专家动态更新**)。
+同一块 SSD 可物理插在 **FPGA 板上 M.2**(路径1/SerDes) 或 **PC 主板 M.2**(路径2/PCIe)。
+
+关键结论(与用户对齐): 不做"运行时不停重切",而是**复位后一次性探测 + 先到先得锁定,
+不复切**。理由: 一块盘只能在一个 M.2 槽(两路物理互斥),无需仲裁歧义。
+
+### 自动识别机制
+- 就绪信号(被动采样,不驱动链路):
+  - 路径1 = `serdes_phy_sfp` 的 `rx_ip_aligned`(本地盘在 → SFP 对齐)
+  - 路径2 = PCIe 硬核 link status(主机盘在 → PCIe link-up)
+- `links_detect`: 复位后第一个就绪边沿锁定 `sel`,之后不再变(两路都就绪时默认本地)。
+
+### 统一出口(核心契约)
+- `path_mux`: 按 `sel` 选通一路作为**唯一权重流** `wt_valid/wt_data/wt_ready`。
+  GEMV(`engine_core`)只认这一对握手 → **无论 SSD 在哪条路径,GEMV 全程无感知**。
+- 未锁定(`locked=0`)时强制不输出,防止识别期权重混入。
+
+### 命令来源可切
+- `CMD_UPDATE_EXPERT`(0x40)帧: 帧头 `[7:0]=cmd [15:8]=seq [23:16]=len`,
+  载荷 `[7:0]=expert_id`。命令流独立窄通道(避免与权重块混帧)。
+- 本地(A) / 主机(B) 任一来源进入,均收敛到同一命令处理点,`last_src` 记录真实来源
+  → 证明"专家动态更新"动作出处可切。
+
+> 简化(仿真范围): 真实 NVMe/M.2 读盘需 NVMe 协议栈,本骨架用"外部字流桩"模拟磁盘块;
+> 缓存目录 trunk 视为永久驻留(冷数据由 HDD 提供),专家 LRU 以计数+末值观测呈现。
+
+## 9. 验证现状(sim.sh 一键回归 14/14 ALL GREEN)
 
 | # | 测试 | 覆盖 |
 |---|------|------|
@@ -181,6 +214,7 @@ rtl/14_serdes_proto/
 | 11 | load | 满载边界 N=1/4/8/16 |
 | 12 | sfp_load | 路径1 SFP+/SerDes 满载 N=1/4/8 |
 | 13 | gw_pcie_bridge | 路径2 PCIe 桥 3 帧背压回程 |
+| 14 | path_cache | SSD 双路径自动识别+统一权重流+命令来源可切 |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据
