@@ -13,6 +13,10 @@
 //   命令通道 CMD_UPDATE_EXPERT 更新某专家权重(动态更新)。
 //
 // TRUNK: trunk_id 对应专家永不替换, 恒命中(目录槽0)。
+//
+// 文件->LBA 接口(file2lba): 真机落地用。每字 tag 视为"文件逻辑块号", 当拍
+//   组合给出对应物理 LBA(分区起始+extent 表)伴随在 wt_lba 上, 供 NVMe 读引擎
+//   按地址读盘。CMD_CFG_LBA(0x50) 帧共用命令流配置 extent 表。
 // ============================================================================
 
 `timescale 1ns/1ps
@@ -21,7 +25,9 @@ module cachectl_pipeline #(
     parameter DW              = 32,
     parameter CW              = 32,
     parameter EXPERT_SLOTS    = 8,          // 目录总槽 = 1(trunk)+专家
-    parameter CMD_UPDATE_EXPERT = 8'h40
+    parameter CMD_UPDATE_EXPERT = 8'h40,
+    parameter FILE_BLKW       = 8,          // 文件逻辑块号位宽(每字 tag 宽度)
+    parameter CMD_CFG_LBA     = 8'h50
 )(
     input  wire clk,
     input  wire rst_n,
@@ -48,6 +54,10 @@ module cachectl_pipeline #(
     output wire [DW-1:0]  wt_data,
     output wire           wt_valid,
     input  wire           wt_ready,
+
+    // ---- 文件->LBA (真机按地址读盘; 与 wt 流同拍) ----
+    output wire [47:0]    wt_lba,
+    output wire           lba_fault,
 
     // ---- 状态 ----
     output wire           path_locked,
@@ -116,6 +126,19 @@ module cachectl_pipeline #(
     assign wt_valid = src_valid & src_ready;
     assign wt_data  = req_is_trunk ? trunk_data : (req_hit ? req_data : src_data);
     assign src_ready = wt_ready & locked;
+
+    // ---- 文件->LBA 接口: 每字 tag 即文件逻辑块号, 组合给物理 LBA ----
+    wire [47:0] cur_lba;
+    wire        cur_fault;
+    wire [FILE_BLKW-1:0] blk_no = src_data[FILE_BLKW-1:0];
+    file2lba #(.BLKW(FILE_BLKW)) u_f2l (
+        .clk(clk), .rst_n(rst_n),
+        .cmd_data(cmd_any_data), .cmd_valid(cmd_any_valid), .cmd_ready(),
+        .req_blk(blk_no),
+        .phys_lba(cur_lba), .lba_fault(cur_fault)
+    );
+    assign wt_lba    = cur_lba;
+    assign lba_fault = cur_fault;
 
     // ---- 命令: CMD_UPDATE_EXPERT 动态更新(来源可切) ----
     reg [1:0] cmd_state;
