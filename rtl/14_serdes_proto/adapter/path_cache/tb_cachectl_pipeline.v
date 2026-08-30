@@ -33,6 +33,8 @@ module tb_cachectl_pipeline;
     wire pl, ps;
     wire [31:0] loads, hits, misses, trun_hits;
     wire [7:0]  trunk_id;
+    wire [47:0] wt_lba;
+    wire        lba_fault;
 
     integer err=0;
 
@@ -46,13 +48,16 @@ module tb_cachectl_pipeline;
         .cmd_a_data(ca),.cmd_a_valid(ca_v),.cmd_a_ready(ca_r),
         .cmd_b_data(cb),.cmd_b_valid(cb_v),.cmd_b_ready(cb_r),
         .wt_data(wt),.wt_valid(wt_v),.wt_ready(wt_r),
+        .wt_lba(wt_lba),.lba_fault(lba_fault),
         .path_locked(pl),.path_sel(ps),
         .loads(loads),.hits(hits),.misses(misses),.trun_hits(trun_hits),
         .trunk_id_out(trunk_id)
     );
 
+    reg [47:0] g_lba; reg g_fault;
     always @(posedge clk) if (wt_v && wt_r) begin
         $display("t=%0t OUT wt=%h", $time, wt);
+        g_lba = wt_lba; g_fault = lba_fault;
     end
 
     // 发送 A/B 桩一字: valid 保持直到 ready, 接受边沿(单拍)后立即撤下 valid
@@ -83,6 +88,13 @@ module tb_cachectl_pipeline;
         @(posedge clk); ca_v<=0; ca<=0;
     end endtask
 
+    // file2lba 配置帧(A 通道): 帧头(cmd 0x50 + [15:8]=reg_addr) + 载荷 data
+    task lba_cfg(input [7:0] rega, input [31:0] d); begin
+        @(posedge clk); ca<= {16'b0, rega, 8'h50}; ca_v<=1;
+        @(posedge clk); ca<= d; ca_v<=1;
+        @(posedge clk); ca_v<=0; ca<=0;
+    end endtask
+
     // 等一拍出
     task settle; begin @(posedge clk); #1; end endtask
 
@@ -105,6 +117,20 @@ module tb_cachectl_pipeline;
         send_a({24'h112233, 8'd3});  settle;
         if (hits!==1 || loads!==1) begin $display("FAIL S1b: 重访应命中 hits=%0d loads=%0d",hits,loads); err=err+1; end
         else $display("S1b PASS: 重访命中(不再 load), hits=%0d",hits);
+
+        // ---- S1d 文件->LBA 伴随输出: 未配表 -> fault; 配表后每字对应物理 LBA ----
+        if (!lba_fault) begin $display("FAIL S1d: 未配表前应 lba_fault=1"); err=err+1; end
+        else $display("S1d PASS: 未配表 伴随 LBA = fault");
+        // 配表: 分区起始 0x1000_0000, ext0 base=0x0020 cnt=8 (文件块 tag 0..7 连续)
+        lba_cfg(8'h00, 32'h1000_0000);
+        lba_cfg(8'h10, 32'h0000_0020);
+        lba_cfg(8'h20, 32'h0000_0008);
+        settle;
+        // 发专家 tag=3 (文件块3) -> wt_lba = 0x1000_0000 + 0x20 + 3 = 0x1000_0023
+        send_a({24'h112233, 8'd3});  settle;
+        if (g_fault || g_lba !== 48'h1000_0023) begin
+            $display("FAIL S1d: tag=3 伴随 lba=%h fault=%b want=0x1000_0023", g_lba, g_fault); err=err+1;
+        end else $display("S1d PASS: tag=3 伴随 wt_lba=%h", g_lba);
 
         // trunk(id0) 恒命中
         send_a({24'hAABBCC, 8'd0});  settle;
