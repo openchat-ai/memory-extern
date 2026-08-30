@@ -19,7 +19,8 @@ module serdes_link #(
     parameter DATAW     = 8,
     parameter N_LANE    = 4,
     parameter BIT_DELAY = 3,
-    parameter RX_DEPTH  = 8
+    parameter RX_DEPTH  = 8,
+    parameter PHY_TYPE  = 0        // 0=逐位 LVCMOS model(serdes_phy), 1=SFP+/SerDes 硬核适配器(serdes_phy_sfp)
 )(
     input  wire        clk,
     input  wire        rst_n,
@@ -46,18 +47,34 @@ module serdes_link #(
 
     genvar g;
     generate
-        for (g = 0; g < N_LANE; g = g + 1) begin : lane_phy
-            serdes_phy #(.DATAW(DATAW), .N_LANE(1),
-                         .BIT_DELAY(BIT_DELAY), .RX_DEPTH(RX_DEPTH)) u_phy (
-                .clk(clk), .rst_n(rst_n),
-                .tx_valid(lane_tx_valid[g]),
-                .tx_ready(lane_tx_ready[g]),
-                .tx_data(lane_txd[g]),
-                .rx_valid(lane_rx_valid[g]),
-                .rx_ready(lane_rx_ready[g]),
-                .rx_data(lane_rxd[g]),
-                .rx_pending(lane_rx_pending[g])
-            );
+        if (PHY_TYPE == 0) begin : g_legacy
+            for (g = 0; g < N_LANE; g = g + 1) begin : lane_phy
+                serdes_phy #(.DATAW(DATAW), .N_LANE(1),
+                             .BIT_DELAY(BIT_DELAY), .RX_DEPTH(RX_DEPTH)) u_phy (
+                    .clk(clk), .rst_n(rst_n),
+                    .tx_valid(lane_tx_valid[g]),
+                    .tx_ready(lane_tx_ready[g]),
+                    .tx_data(lane_txd[g]),
+                    .rx_valid(lane_rx_valid[g]),
+                    .rx_ready(lane_rx_ready[g]),
+                    .rx_data(lane_rxd[g]),
+                    .rx_pending(lane_rx_pending[g])
+                );
+            end
+        end else begin : g_sfp
+            for (g = 0; g < N_LANE; g = g + 1) begin : lane_phy
+                serdes_phy_sfp #(.DATAW(DATAW), .RX_DEPTH(RX_DEPTH)) u_phy (
+                    .clk(clk), .rst_n(rst_n),
+                    .tx_valid(lane_tx_valid[g]),
+                    .tx_ready(lane_tx_ready[g]),
+                    .tx_data(lane_txd[g]),
+                    .rx_valid(lane_rx_valid[g]),
+                    .rx_ready(lane_rx_ready[g]),
+                    .rx_data(lane_rxd[g]),
+                    .rx_pending(lane_rx_pending[g]),
+                    .tx_ip_ready(), .rx_ip_aligned(), .rx_polarity(1'b0)
+                );
+            end
         end
     endgenerate
 

@@ -108,7 +108,40 @@ output [DATAW-1:0] s_axis_tdata, input tlast/...
 - 绑具体板位(138K 或用户确认的其它板),生成 bitstream,SerDes 回环自测。
 - 验证跑到真实电接口,不只在仿真里。
 
-## 7. 目录规划
+## 7. 高速路径与速度档位(物理能力映射)
+
+138K 目标板 = **GW5AST-138**,拥有 8×12.5Gbps 独立 SerDes 收发器 + 硬核 PCIe 3.0
+(板上 4 lane ×5G = 20Gbps) + 2× SFP+ 光口 + MIPI D-PHY + LVDS GPIO。
+两条高速路径均已完成仿真验证(见 §9)。
+
+### 两层速率语义(务必分清)
+- **电气层 Gbps** = 每 lane 每 clk 传 1 bit,`N_LANE × clk`。
+- **逻辑层有效吞吐**受上层 AXI/内核"每拍 1 字节"上限约束,实测稳定字节率 =
+  `min(N_LANE/8, 1)` 字节/拍(N=1→0.125, N=4→0.5, N=8→1.0 饱和)。
+
+### 路径 1: SFP+ / SerDes 10G(adapter/sfp_serdes)
+- L0 换成 `serdes_phy_sfp.v`(词级延迟管线 + RX 弹性 FIFO,`DATAW/LINE_RATE/
+  RX_DEPTH/LINK_LAT` 参数),通过 `serdes_link` 的 `PHY_TYPE` 参数切换实例化——
+  **协议层零改动**,证明"可插拔接口适配器"成立。
+- 实测: N=8 lane 聚合 1.000 字节/拍(理论 min=1.0,饱和)。
+
+### 路径 2: PCIe 20G(adapter/axis_pcie/gw_pcie_bridge.v)
+- 桥内嵌 `proto_core`,RX: gowin_pcie_ip 的 M_AXIS → 内核解码;
+  TX: 载荷 echo 回 S_AXIS。`o_payload_*` 直连 `pcie_tx_*`,`o_payload_tready =
+  pcie_tx_tready`,以内核背压保证不丢字。
+- 实测: 3 帧 PCIe 流 → 内核 → 载荷回程,随机 25% 背压下零错·保序·完整。
+
+### 吞吐档位实测表(满载荷边界)
+| N_LANE | 电气 | 逻辑吞吐(字节/拍) | 实测 | 说明 |
+|--------|------|-------------------|------|------|
+| 1      | 1×clk | 0.125            | 0.125 | 单 lane 槽位固有 2 拍气泡 |
+| 4      | 4×clk | 0.5              | 0.5   | 部分 lane 槽位气泡 |
+| 8      | 8×clk | 1.0              | 1.000 | 聚合饱和,受上层 AXI 每拍 1B 限制 |
+
+> N=1 的 `0.125` 是 `serdes_link` round-robin 槽位语义的固有气泡
+> (`lane_tx_valid` level 保持 + `tx_ready` 恒 1 时 `fire_take` 节拍),**不是错误**。
+
+## 8. 目录规划
 
 ```
 rtl/14_serdes_proto/
@@ -116,18 +149,44 @@ rtl/14_serdes_proto/
   core/                       ← L2 通用协议内核(唯一)
     proto_core.v              (从 pcie_dma_engine.v 抽离的纯流式内核)
   adapter/
-    custom_serdes/            ← 实例 A
-      serdes_loopback_phy.v
-      serdes_framer.v
-      tb_custom_serdes.v
-    axis_pcie/                ← 实例 B
-      axis_pcie_adapter.v
-      tb_axis_pcie.v
-  tb/
-    proto_core_tb.v           ← 内核直接仿真(不接适配器)
+    custom_serdes/            ← 实例 A(逐位 PHY)
+      serdes_link.v           (可插拔聚合层,PHY_TYPE 参数选 PHY)
+      serdes_phy.v            (PHY_TYPE=0 逐位 L0 模型)
+      serdes_phy_sfp.v        (PHY_TYPE=1 词级 SFP+ 适配器)
+      serdes_framer_tx/rx.v, crc16.v
+      tb_load.v / tb_link.v / tb_edge.v ...
+    sfp_serdes/               ← 路径1: SFP+/SerDes 10G
+      serdes_phy_sfp.v, tb_sfp_load.v
+    axis_pcie/                ← 路径2(实例 B): PCIe 风格
+      axis_pcie_adapter.v, tb_axis_pcie.v
+      gw_pcie_bridge.v, tb_gw_pcie_bridge.v   (Gowin PCIe IP ↔ proto_core 桥)
+  tb/ proto_core_tb.v
+  sim.sh                      ← 一键回归(现 13 测试全绿,见 §9)
 ```
 
-## 8. 与既有代码的关系
+## 9. 验证现状(sim.sh 一键回归 13/13 ALL GREEN)
+
+| # | 测试 | 覆盖 |
+|---|------|------|
+| 1  | proto_core | 内核帧解码+载荷交付 |
+| 2  | axis_pcie | 适配器 B + 内核端到端 |
+| 3  | custom_serdes | 实例 A 回环 3 包 |
+| 4  | crc_check | CRC-16 篡改检测 |
+| 5  | varlen | 可变帧长 4/16/64 + CRC |
+| 6  | phy_rx_backpressure | PHY RX FIFO 背压无丢 |
+| 7  | crc16 | CRC-16-CCITT 标准向量 |
+| 8  | multilane | 多 lane 聚合保序 |
+| 9  | multilane_e2e | 多 lane 端到端 3 帧 |
+| 10 | edge | 边界扫描 8 组 |
+| 11 | load | 满载边界 N=1/4/8/16 |
+| 12 | sfp_load | 路径1 SFP+/SerDes 满载 N=1/4/8 |
+| 13 | gw_pcie_bridge | 路径2 PCIe 桥 3 帧背压回程 |
+
+> **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
+> (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据
+> 保持 → 随机背压下**零丢字节**且不降吞吐(此前滞后一拍寄存器在随机背压下丢末帧)。
+
+## 10. 与既有代码的关系
 
 - **复用**: `pcie_dma_engine.v` 的接收 FSM(帧头+负载+tkeep+tlast+SETTLE 背压)
   抽成 `proto_core.v` 内核。其结果回传部分保持 AXI-Stream。

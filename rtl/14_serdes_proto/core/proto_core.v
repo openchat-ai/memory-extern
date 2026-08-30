@@ -38,12 +38,12 @@ module proto_core #(
     input  wire [DATAW/8-1:0]   s_axis_tkeep,
     input  wire                  s_axis_tlast,
 
-    // ---- 下游: 载荷逐拍交付(单周期 tvalid 脉冲) ----
-    output reg                   o_payload_tvalid,
+    // ---- 下游: 载荷组合直通交付(每拍在 tready 门控下交付, 不丢) ----
+    output wire                  o_payload_tvalid,
     input  wire                  o_payload_tready,
-    output reg  [DATAW-1:0]     o_payload_tdata,
-    output reg  [DATAW/8-1:0]   o_payload_tkeep,
-    output reg                   o_payload_tlast,
+    output wire [DATAW-1:0]     o_payload_tdata,
+    output wire [DATAW/8-1:0]   o_payload_tkeep,
+    output wire                  o_payload_tlast,
 
     // ---- 帧级状态 ----
     output reg  [7:0]           o_cmd,
@@ -60,13 +60,21 @@ module proto_core #(
     reg [15:0] rem_bytes;
     reg [7:0]  settle_cnt;
 
-    // 接收使能: settle 期间暂停; payload 期间需下游就绪才收
+    // ---- 组合交付: 载荷当拍直通下游, tready 门控; 背压时上游被 s_axis_tready 刹停 ----
+    wire in_payload = (rx_state == S_PAYLOAD) && s_axis_tvalid;
+    wire frame_last = (rem_bytes <= (DATAW/8)) || s_axis_tlast;
+    assign o_payload_tvalid = in_payload;
+    assign o_payload_tdata  = s_axis_tdata;
+    assign o_payload_tkeep  = s_axis_tkeep;
+    assign o_payload_tlast  = frame_last;
+
+    // 接收使能: settle 期间暂停; payload 期间需下游就绪才收,
+    // 否则 s_axis_tready=0 背压上游 => 数据保持, 背压下绝不丢。
     assign s_axis_tready = (rx_state != S_SETTLE)
                          & ((rx_state != S_PAYLOAD) | o_payload_tready);
 
     wire header_beat  = (rx_state == S_IDLE)    && s_axis_tvalid && s_axis_tready;
     wire payload_beat = (rx_state == S_PAYLOAD) && s_axis_tvalid && s_axis_tready;
-    wire frame_last   = (rem_bytes <= (DATAW/8)) || s_axis_tlast;
 
     always @(posedge clk) begin
         if (!rst_n) begin
@@ -75,17 +83,10 @@ module proto_core #(
             settle_cnt         <= 8'd0;
             o_cmd              <= 8'd0;
             o_seq              <= 8'd0;
-            o_payload_tvalid   <= 1'b0;
-            o_payload_tdata    <= {DATAW{1'b0}};
-            o_payload_tkeep    <= {(DATAW/8){1'b0}};
-            o_payload_tlast    <= 1'b0;
             o_frame_in_progress<= 1'b0;
             o_frame_done       <= 1'b0;
         end else begin
-            // 默认: 不拉 tvalid/tlast/done(每拍按需拉)
-            o_payload_tvalid <= 1'b0;
-            o_payload_tlast  <= 1'b0;
-            o_frame_done     <= 1'b0;
+            o_frame_done <= 1'b0;
 
             case (rx_state)
                 S_IDLE: begin
@@ -100,15 +101,10 @@ module proto_core #(
 
                 S_PAYLOAD: begin
                     if (payload_beat) begin
-                        // 交付一拍(单周期脉冲; 已满足下游就绪)
-                        o_payload_tdata  <= s_axis_tdata;
-                        o_payload_tkeep  <= s_axis_tkeep;
-                        o_payload_tvalid <= 1'b1;
-
+                        // 载荷已在当拍组合直通下游; 本拍只更新帧级节奏
                         if (frame_last) begin
-                            o_payload_tlast     <= 1'b1;
-                            o_frame_done        <= 1'b1;
                             o_frame_in_progress <= 1'b0;
+                            o_frame_done        <= 1'b1;
                             rem_bytes           <= 16'd0;
                             settle_cnt          <= 8'd0;
                             rx_state            <= (SETTLE_CYCLES>0) ? S_SETTLE : S_IDLE;
