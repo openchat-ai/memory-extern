@@ -160,13 +160,15 @@ rtl/14_serdes_proto/
     axis_pcie/                ← 路径2(实例 B): PCIe 风格
       axis_pcie_adapter.v, tb_axis_pcie.v
       gw_pcie_bridge.v, tb_gw_pcie_bridge.v   (Gowin PCIe IP ↔ proto_core 桥)
-    path_cache/               ← SSD 双路径自动识别 + 统一权重流
+    path_cache/               ← SSD 双路径自动识别 + 统一权重流(缓存控制器做实)
       links_detect.v          (复位探测 SerDes对齐 vs PCIe link-up, 先到先得锁定)
       path_mux.v              (按锁定路径选通统一权重流 -> GEMV)
-      cachectl_top.v          (缓存控制器骨架: 权重通路 + 命令来源可切)
-      tb_path_cache.v
+      expert_dir.v            (专家 LRU 缓存目录: trunk 恒驻留 + LRU 替换 + 动态更新)
+      cachectl_pipeline.v     (端到端: 探测+选通+LRU目录+GEMV, 冷首访单拍装入)
+      cachectl_top.v          (骨架版: 权重通路 + 命令来源可切)
+      tb_path_cache.v, tb_expert_dir.v, tb_cachectl_pipeline.v
   tb/ proto_core_tb.v
-  sim.sh                      ← 一键回归(现 14 测试全绿,见 §9)
+  sim.sh                      ← 一键回归(现 16 测试全绿,见 §9)
 ```
 
 ## 8a. SSD 双路径自动识别(L2缓存场景, path_cache)
@@ -194,10 +196,21 @@ rtl/14_serdes_proto/
 - 本地(A) / 主机(B) 任一来源进入,均收敛到同一命令处理点,`last_src` 记录真实来源
   → 证明"专家动态更新"动作出处可切。
 
-> 简化(仿真范围): 真实 NVMe/M.2 读盘需 NVMe 协议栈,本骨架用"外部字流桩"模拟磁盘块;
-> 缓存目录 trunk 视为永久驻留(冷数据由 HDD 提供),专家 LRU 以计数+末值观测呈现。
+### 缓存目录做实(expert_dir + cachectl_pipeline)
+- `expert_dir`: 槽0=trunk(永久驻留,恒命中), 槽1..S-1=专家 LRU 槽。
+  - 每槽 rcnt 相对旧度计数(命中/装入/更新即置 0=MRU, 其余 +1); rcnt 最大者=LRU。
+  - 未命中 → `req_way` 给出待替换 LRU 槽; `load` 装入后该专家命中。
+  - `req_*` 为**组合输出**(读稳定目录快照), 与源桩同拍对齐 → 无寄存器滞后错位。
+  - 存储(槽数组)时序非阻塞更新, 无 delta 竞态。
+- `cachectl_pipeline`: 端到端链路 `links_detect → path_mux → expert_dir → GEMV`。
+  - **每字单拍完成**: trunk→出 trunk 权重; 命中→出目录权重; 冷首访→出源桩原字并
+    **同拍自动装入目录**(miss 即 load, 无恢复拍、无 valid 多拍重复问题)。
+  - 统计: 每拍 `src_valid` 按 trunk/hit/miss 计数; miss 同拍 `misses++`+`loads++`。
 
-## 9. 验证现状(sim.sh 一键回归 14/14 ALL GREEN)
+> 简化(仿真范围): 真实 NVMe/M.2 读盘需 NVMe 协议栈,本实现用"外部字流桩"模拟磁盘块;
+> trunk 视为永久驻留(冷数据由 HDD 提供),专家 LRU 部门已做实(命中/替换/动态更新/统计)。
+
+## 9. 验证现状(sim.sh 一键回归 16/16 ALL GREEN)
 
 | # | 测试 | 覆盖 |
 |---|------|------|
@@ -215,6 +228,8 @@ rtl/14_serdes_proto/
 | 12 | sfp_load | 路径1 SFP+/SerDes 满载 N=1/4/8 |
 | 13 | gw_pcie_bridge | 路径2 PCIe 桥 3 帧背压回程 |
 | 14 | path_cache | SSD 双路径自动识别+统一权重流+命令来源可切 |
+| 15 | expert_dir | 专家 LRU 缓存目录: trunk 恒命中+LRU替换+动态更新 |
+| 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV(冷首访/重访/trunk/更新/主机路径) |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据

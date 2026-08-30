@@ -16,6 +16,8 @@
 #                        N=1/4/8 满载零丢失保序 (验证可插拔接口适配器, 10G/背板)
 #  13. gw_pcie_bridge   PCIe 20G 桥: gowin_pcie_ip <-> proto_core, 3 帧背压回程
 #  14. path_cache       SSD 双路径(M.2本地/主机PCIe)自动识别+统一权重流+命令来源可切
+#  15. expert_dir       专家 LRU 缓存目录: trunk 恒驻留 + LRU 替换 + 动态更新
+#  16. cachectl_pipe    端到端: 探测+选通+专家LRU目录+GEMV(冷首访/重访/trunk/更新/主机)
 # 依赖: iverilog 12 (g2012). 全部 PASS 则 exit 0。
 # ============================================================================
 set -u
@@ -98,6 +100,14 @@ run gw_pcie_bridge \
 run path_cache \
     adapter/path_cache/tb_path_cache.v \
     adapter/path_cache/cachectl_top.v adapter/path_cache/links_detect.v adapter/path_cache/path_mux.v
+
+run expert_dir \
+    adapter/path_cache/tb_expert_dir.v adapter/path_cache/expert_dir.v
+
+run cachectl_pipe \
+    adapter/path_cache/tb_cachectl_pipeline.v \
+    adapter/path_cache/cachectl_pipeline.v adapter/path_cache/links_detect.v \
+    adapter/path_cache/path_mux.v adapter/path_cache/expert_dir.v
 
 echo "------------------------------------------"
 echo "结果: PASS=$pass FAIL=$fail"
