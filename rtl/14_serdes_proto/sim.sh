@@ -14,6 +14,8 @@
 #  11. load             满载边界:N=1/4/8/16/24 满灌, 零丢失+保序+速度边界 min(N/8,1)
 #  12. sfp_load         SFP+/SerDes 高速档: 换 phy(serdes_phy_sfp) 不换协议层,
 #                        N=1/4/8 满载零丢失保序 (验证可插拔接口适配器, 10G/背板)
+#  13. gw_pcie_bridge   PCIe 20G 桥: gowin_pcie_ip <-> proto_core, 3 帧背压回程
+#  14. path_cache       SSD 双路径(M.2本地/主机PCIe)自动识别+统一权重流+命令来源可切
 # 依赖: iverilog 12 (g2012). 全部 PASS 则 exit 0。
 # ============================================================================
 set -u
@@ -92,6 +94,10 @@ run sfp_load \
 
 run gw_pcie_bridge \
     adapter/axis_pcie/tb_gw_pcie_bridge.v adapter/axis_pcie/gw_pcie_bridge.v core/proto_core.v
+
+run path_cache \
+    adapter/path_cache/tb_path_cache.v \
+    adapter/path_cache/cachectl_top.v adapter/path_cache/links_detect.v adapter/path_cache/path_mux.v
 
 echo "------------------------------------------"
 echo "结果: PASS=$pass FAIL=$fail"
