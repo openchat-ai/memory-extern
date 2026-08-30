@@ -12,6 +12,8 @@
 #   9. multilane_e2e    多 lane 端到端(framer<->link 4lane<->framer) 3 帧
 #  10. edge             边界扫描 8 组(N=1/2/4/8, BIT_DELAY, RX_DEPTH, 背压抖动)
 #  11. load             满载边界:N=1/4/8/16/24 满灌, 零丢失+保序+速度边界 min(N/8,1)
+#  12. sfp_load         SFP+/SerDes 高速档: 换 phy(serdes_phy_sfp) 不换协议层,
+#                        N=1/4/8 满载零丢失保序 (验证可插拔接口适配器, 10G/背板)
 # 依赖: iverilog 12 (g2012). 全部 PASS 则 exit 0。
 # ============================================================================
 set -u
@@ -82,6 +84,14 @@ run edge \
 run load \
     adapter/custom_serdes/tb_load.v \
     adapter/custom_serdes/serdes_link.v adapter/custom_serdes/serdes_phy.v
+
+run sfp_load \
+    adapter/sfp_serdes/tb_sfp_load.v \
+    adapter/custom_serdes/serdes_link.v adapter/custom_serdes/serdes_phy.v \
+    adapter/sfp_serdes/serdes_phy_sfp.v
+
+run gw_pcie_bridge \
+    adapter/axis_pcie/tb_gw_pcie_bridge.v adapter/axis_pcie/gw_pcie_bridge.v core/proto_core.v
 
 echo "------------------------------------------"
 echo "结果: PASS=$pass FAIL=$fail"
