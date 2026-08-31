@@ -98,6 +98,7 @@ module ext4_scan_core #(
                S_DBRQ=37, S_DBWAIT=38, S_DBFILL=39, S_DBFILLP=40, S_DBLOOP=41,
                S_DMREQ2=42, S_DMWAIT2=43, S_DMFILL2=44, S_DMFILLP2=45, S_DMEXT=46,
                S_SIREQ=47, S_SIWAIT=48, S_SIFILL=49, S_SIP=50,
+               S_GDT_REQ=52, S_GDT_WAIT=53, S_GDT_FILL=54, S_GDT_P=55,
                S_DONE=51;
     reg [5:0] st;
 
@@ -111,6 +112,11 @@ module ext4_scan_core #(
     reg [NB-1:0] itbl_r;
     reg [15:0] isz_r;
     reg [NB-1:0] dir_blk_r;
+    // 阶段14: 多组 — 每组 inode 数 / 多组 inode 表 (GDT 取 bg_inode_table_lo)
+    reg [15:0] ipg_r;
+    reg [NB-1:0] gdt_itbl [0:3];
+    reg [NB-1:0] curi_blk_r;      // 当前灌入 wbuf 的 inode 表块(跨组重读判定)
+    reg [3:0] grp_r;              // 当前文件所在组号
     // 阶段6: 索引子 extent 块号
     reg [NB-1:0] subblk_r;
     // 阶段7: 全文件收集游标/表号
@@ -154,6 +160,7 @@ module ext4_scan_core #(
             cur_ino_r<=0; sleaf<=0; sentries<=0; cdepth<=0;
             si<=0; sientries<=0; sinidx<=0; sidx_blk_r<=0;
             subdir_ino_r<=0; subd_blk_r<=0; subd_cnt<=0; sdcur<=0; sdpos<=0;
+            ipg_r<=0; curi_blk_r<=0; grp_r<=0;
             qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
             qebe<=0; qelen<=0; qestart<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
@@ -211,6 +218,7 @@ module ext4_scan_core #(
                     inodes_per_grp_o <= wbuf[267];
                     inode_size_o     <= wbuf[278][15:0];
                     isz_r            <= wbuf[278][15:0];
+                    ipg_r            <= wbuf[267];
                     st <= S_GD_REQ;
                 end
 
@@ -320,7 +328,7 @@ module ext4_scan_core #(
                     if (dpos>=1024 || idx>=MAXENT ||
                         wbuf[dpos>>2]==0) begin
                         out_count <= idx;
-                        st <= S_EXT_REQ;
+                        st <= S_GDT_REQ;
                     end else begin
                         out_ino[idx]   <= wbuf[dpos>>2];
                         out_ftype[idx] <= wbuf[(dpos>>2)+1][31:24];
@@ -490,10 +498,35 @@ module ext4_scan_core #(
                     end
                 end
 
-                // 阶段7: 读 inode 表块一次, 遍历结果表全部文件 → 收集 depth=0 内联叶
+                // 阶段14: 读 GDT(块1) 存多组 inode 表(bg_inode_table_lo @ 组域 word 组号*16+2)
+                S_GDT_REQ: begin
+                    blk_fd_blk <= 1; req_blk <= 1; blk_fd_req <= 1;
+                    st <= S_GDT_WAIT;
+                end
+                S_GDT_WAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0; beat <= 0; st <= S_GDT_FILL;
+                    end
+                end
+                S_GDT_FILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) st<=S_GDT_P; else beat<=beat+1;
+                    end
+                end
+                S_GDT_P: begin
+                    gdt_itbl[0] <= wbuf[0*16+2];
+                    gdt_itbl[1] <= wbuf[1*16+2];
+                    gdt_itbl[2] <= wbuf[2*16+2];
+                    gdt_itbl[3] <= wbuf[3*16+2];
+                    fidx <= 0; ext_count_o <= 0;
+                    curi_blk_r <= itbl_r;      // 默认组0 inode 表
+                    st <= S_EXT_REQ;           // 先读首个 inode 表块
+                end
+
                 S_EXT_REQ: begin
-                    blk_fd_blk <= itbl_r;
-                    req_blk    <= itbl_r;
+                    blk_fd_blk <= curi_blk_r;
+                    req_blk    <= curi_blk_r;
                     blk_fd_req <= 1;
                     st <= S_EXT_WAIT;
                 end
@@ -508,38 +541,43 @@ module ext4_scan_core #(
                     if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
                         wbuf[beat] <= blk_fd_data;
                         if (beat==NBEAT-1) begin
-                            fidx<=0; ext_count_o<=0; st<=S_EXT_LOOP;
+                            st<=S_EXT_LOOP;
                         end else beat<=beat+1;
                     end
                 end
-                // 逐文件: word_base=((ino-1)%16)*64 (isz=256, per_block=16)
-                //   depth=0 内联叶 → ext_*[fidx]   (depth>0 索引文件跳过)
+                // 阶段14: 逐文件按组定位 inode: grp=(ino-1)/ipg_r →
+                //   inode 物理块 = gdt_itbl[grp] + (((ino-1)%ipg_r)>>4)
+                //   块内 word   = (((ino-1)%ipg_r)&15)*64  (per_block=16, isz=256)
+                //   当前 wbuf 不是该块 → 重读(curi_blk_r 跟踪), 否则收集/下钻
                 S_EXT_LOOP: begin
                     if (fidx>=out_count) begin
                         st <= S_DMETCH;
                     end else if (out_ftype[fidx]==8'd2) begin
                         fidx <= fidx + 1;          // 跳过子目录条目(阶段11 单独递归)
                         st <= S_EXT_LOOP;
+                    end else if (gdt_itbl[(out_ino[fidx]-1)/ipg_r] +
+                                 ((((out_ino[fidx]-1)%ipg_r))>>4) != curi_blk_r) begin
+                        curi_blk_r <= gdt_itbl[(out_ino[fidx]-1)/ipg_r] +
+                                      ((((out_ino[fidx]-1)%ipg_r))>>4);
+                        st <= S_EXT_REQ;           // 跨组/跨块 → 重读 inode 表块
+                    end else if (wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+11][31:16]==0) begin
+                        ext_ino_o[ext_count_o]    <= out_ino[fidx];
+                        ext_ebe_o[ext_count_o]    <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+13];
+                        ext_elen_o[ext_count_o]   <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                        ext_estart_o[ext_count_o] <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+15];
+                        // 阶段8: 同步落外置表 RAM
+                        ram_ino[ext_count_o]      <= out_ino[fidx];
+                        ram_ebe[ext_count_o]      <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+13];
+                        ram_elen[ext_count_o]     <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                        ram_estart[ext_count_o]   <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+15];
+                        ext_count_o               <= ext_count_o + 1;
+                        fidx <= fidx + 1;
                     end else begin
-                        if (wbuf[(((out_ino[fidx]-1)&15)*64)+11][31:16]==0) begin
-                            ext_ino_o[ext_count_o]    <= out_ino[fidx];
-                            ext_ebe_o[ext_count_o]    <= wbuf[(((out_ino[fidx]-1)&15)*64)+13];
-                            ext_elen_o[ext_count_o]   <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
-                            ext_estart_o[ext_count_o] <= wbuf[(((out_ino[fidx]-1)&15)*64)+15];
-                            // 阶段8: 同步落外置表 RAM
-                            ram_ino[ext_count_o]      <= out_ino[fidx];
-                            ram_ebe[ext_count_o]      <= wbuf[(((out_ino[fidx]-1)&15)*64)+13];
-                            ram_elen[ext_count_o]     <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
-                            ram_estart[ext_count_o]   <= wbuf[(((out_ino[fidx]-1)&15)*64)+15];
-                            ext_count_o               <= ext_count_o + 1;
-                            fidx <= fidx + 1;
-                        end else begin
-                            // 阶段9/10: depth>0 索引文件 — 递归下钻 ei_leaf 子块
-                            cur_ino_r <= out_ino[fidx];
-                            subblk_r  <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
-                            cdepth <= 0;
-                            st <= S_SUBREQ;
-                        end
+                        // 阶段9/10: depth>0 索引文件 — 递归下钻 ei_leaf 子块
+                        cur_ino_r <= out_ino[fidx];
+                        subblk_r  <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                        cdepth <= 0;
+                        st <= S_SUBREQ;
                     end
                 end
 
@@ -562,7 +600,10 @@ module ext4_scan_core #(
                     end
                 end
                 S_DMREQ: begin
-                    blk_fd_blk <= itbl_r; req_blk <= itbl_r;
+                    blk_fd_blk <= gdt_itbl[(subdir_ino_r-1)/ipg_r] +
+                                  ((((subdir_ino_r-1)%ipg_r))>>4);
+                    req_blk    <= gdt_itbl[(subdir_ino_r-1)/ipg_r] +
+                                  ((((subdir_ino_r-1)%ipg_r))>>4);
                     blk_fd_req <= 1;
                     st <= S_DMWAIT;
                 end
@@ -582,7 +623,7 @@ module ext4_scan_core #(
                 end
                 S_DMFILLP: begin
                     // 子目录 inode 内联叶(depth=0) → 数据块 = ee_start(word+15)
-                    subd_blk_r <= wbuf[(((subdir_ino_r-1)&15)*64)+15];
+                    subd_blk_r <= wbuf[((((subdir_ino_r-1)%ipg_r)&15)*64)+15];
                     sdcur <= 0; subd_cnt <= 0;
                     st <= S_DBRQ;
                 end
@@ -623,9 +664,11 @@ module ext4_scan_core #(
                     end
                 end
                 S_DMREQ2: begin
-                    // 阶段13: 子文件 inode 可能跨块 — 读第一个子文件所在 inode 块
-                    blk_fd_blk <= itbl_r + ((subd_ino[0]-1)>>4);
-                    req_blk    <= itbl_r + ((subd_ino[0]-1)>>4);
+                    // 阶段13/14: 子文件可能跨块/跨组 — 读第一个子文件所在 inode 块
+                    blk_fd_blk <= gdt_itbl[(subd_ino[0]-1)/ipg_r] +
+                                  ((((subd_ino[0]-1)%ipg_r))>>4);
+                    req_blk    <= gdt_itbl[(subd_ino[0]-1)/ipg_r] +
+                                  ((((subd_ino[0]-1)%ipg_r))>>4);
                     blk_fd_req <= 1; sdcur <= 0;
                     st <= S_DMWAIT2;
                 end

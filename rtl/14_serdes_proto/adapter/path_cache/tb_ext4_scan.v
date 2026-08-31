@@ -5,10 +5,11 @@
 module tb_ext4_scan;
     parameter NB=16, DATAW=32, NBEAT=1024, BLKSZ=4096;
 
-    localparam INODES_PER_GRP=64;
+    localparam INODES_PER_GRP=16;    // 阶段14: 小组(每 16 inode 一组)以验证跨组 inode 定位
     localparam BLOCKS_PER_GRP=128;
     localparam INODE_SIZE=256;
-    localparam INODE_TABLE=4;
+    localparam INODE_TABLE=4;        // 组0 inode 表 = 块4
+    localparam INODE_TABLE_G1=6;     // 组1 inode 表 = 块6 (GDT 组1 域)
     localparam NWORDS=64*1024;              // 64 块 * 1024 字
 
     // 阶段2: 根 inode(2) 期望值(inode 表块 = INODE_TABLE=4, word 起点 64)
@@ -61,16 +62,15 @@ module tb_ext4_scan;
     localparam SUBDIR_BLK = 32'd45;        // 子目录数据块
     // ino20 @ word (20-1)%16*64 = 3*64 = 192; 数据块 = ee_start(word 192+15=207)
     localparam SUBDIR_WORD = 192;
-    // 子目录文件(跨块 inode 表): ino17(mouse, estart=200)@块5word0 / ino18(key, estart=220)@块5word64
+    // 子目录文件(跨组 inode 表): 组1 表=块6 — ino17(mouse, estart=200)@字0 / ino18(key, estart=220)@字64
     localparam S11_INO15 = 32'd17;
     localparam S11_EST15 = 32'h0000_00C8;  // 物理块 200
     localparam S11_EL15  = 16'd1;
     localparam S11_INO16 = 32'd18;
     localparam S11_EST16 = 32'h0000_00DC;  // 物理块 220
     localparam S11_EL16  = 16'd2;
-    // ino17 @ (17-1)/16=1 块偏移 -> 物理块 itbl+1=5, 块内 word ((17-1)&15)*64=0
-    // ino18 @ 同块5, 块内 word ((18-1)&15)*64=64
-    localparam S11_INO17_BLK = 5;
+    // 组1(ipg=16): ino17→grp1, 组内偏移(16&15)*64=0 ; ino18→同组, (17&15)*64=64
+    localparam S11_INO17_BLK = INODE_TABLE_G1;
     localparam S11_INO17_WORD = 0;
     localparam S11_INO18_WORD = 64;
 
@@ -184,7 +184,10 @@ module tb_ext4_scan;
         img[widx]=32'h0000EF53;    // magic 占位(非断言)
         // 组0 desc @块1+0x08 => 块1字索引 1024 + 2 = 1026
         widx=1024+2;
-        img[widx] = INODE_TABLE;
+        img[widx] = INODE_TABLE;                    // 组0 inode 表 = 块4
+        // 阶段14: 组1 描述符 bg_inode_table_lo @ 组域(第1域) 字 16+2=18
+        widx=1024+16+2;
+        img[widx] = INODE_TABLE_G1;                 // 组1 inode 表 = 块6
 
         // 根 inode(2) @ inode 表块(块4) word 64
         widx=4*1024+64;
@@ -220,13 +223,13 @@ module tb_ext4_scan;
         // entry4 = 块尾(ino=0)
         widx=8*1024+16; img[widx] = 0;
 
-        // ino20 子目录 inode @ word192 — depth=0 内联叶, 数据块=45
-        widx=4*1024+192; img[widx] = 16'h41ED;                      // i_mode=dir
-        widx=4*1024+202; img[widx] = (32'h0001<<16)|32'hF30A;        // extent 头
-        widx=4*1024+203; img[widx] = 0;                             // depth=0
-        widx=4*1024+205; img[widx] = 0;                             // ee_block
-        widx=4*1024+206; img[widx] = 16'd1;                         // ee_len
-        widx=4*1024+207; img[widx] = SUBDIR_BLK;                    // ee_start=45
+        // ino20 子目录 inode @ 组1 表(块6) word192 — depth=0 内联叶, 数据块=45
+        widx=INODE_TABLE_G1*1024+192; img[widx] = 16'h41ED;                      // i_mode=dir
+        widx=INODE_TABLE_G1*1024+202; img[widx] = (32'h0001<<16)|32'hF30A;        // extent 头
+        widx=INODE_TABLE_G1*1024+203; img[widx] = 0;                             // depth=0
+        widx=INODE_TABLE_G1*1024+205; img[widx] = 0;                             // ee_block
+        widx=INODE_TABLE_G1*1024+206; img[widx] = 16'd1;                         // ee_len
+        widx=INODE_TABLE_G1*1024+207; img[widx] = SUBDIR_BLK;                    // ee_start=45
 
         // 子目录数据块(块45): entry0=ino15(mouse, ftype1), entry1=ino16(key, ftype1)
         widx=45*1024+0;  img[widx] = S11_INO15;
@@ -461,7 +464,7 @@ module tb_ext4_scan;
         end else $display("PASS query 跨块 inode 表子文件 ino17 → estart=%0d len=%0d", qestart, qelen);
 
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段13 跨块 inode 表(子文件 ino17/18→物理块 itbl+1=5, 块内word0/64) + 全表/RAM/查询 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段14 多 blk_groups(ipg=16, GDT 组0表=块4/组1表=块6, ino17/18/20 跨组定位) + 全表/RAM/查询 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
