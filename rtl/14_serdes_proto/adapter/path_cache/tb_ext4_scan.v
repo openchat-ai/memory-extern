@@ -64,6 +64,13 @@ module tb_ext4_scan;
     wire [31:0] x_ino [0:3], x_ebe [0:3], x_estart [0:3];
     wire [15:0] x_elen [0:3];
     wire [2:0] x_cnt;
+    wire [31:0] r_ino [0:3], r_ebe [0:3], r_estart [0:3];
+    wire [15:0] r_elen [0:3];
+    reg qreq=0;
+    reg [NB-1:0] qino=0;
+    wire qbusy, qvalid, qdone;
+    wire [31:0] qebe, qestart;
+    wire [15:0] qelen;
 
     integer errc=0;
 
@@ -118,7 +125,12 @@ module tb_ext4_scan;
         .f_ebe_o(f_ebe), .f_elen_o(f_elen), .f_estart_o(f_estart),
         .s_ebe_o(s_ebe), .s_elen_o(s_elen), .s_estart_o(s_estart),
         .ext_ino_o(x_ino), .ext_ebe_o(x_ebe), .ext_elen_o(x_elen),
-        .ext_estart_o(x_estart), .ext_count_o(x_cnt)
+        .ext_estart_o(x_estart), .ext_count_o(x_cnt),
+        .ram_ino(r_ino), .ram_ebe(r_ebe), .ram_elen(r_elen),
+        .ram_estart(r_estart),
+        .qreq(qreq), .qino(qino),
+        .qbusy(qbusy), .qvalid(qvalid), .qdone(qdone),
+        .qebe(qebe), .qelen(qelen), .qestart(qestart)
     );
 
     integer i;
@@ -285,8 +297,35 @@ module tb_ext4_scan;
             $display("FAIL ext[1] elen"); errc=errc+1;
         end else $display("PASS ext[1] elen=%0d", x_elen[1]);
 
+        // ---- 阶段8: 外置表 RAM + 查询握手 ----
+        if (r_ino[0]!==D0_INO || r_estart[0]!==F_ESTART) begin
+            $display("FAIL ram[0]: ino=%0d estart=%0h", r_ino[0], r_estart[0]); errc=errc+1;
+        end else $display("PASS ram[0] ino=%0d estart=%0d", r_ino[0], r_estart[0]);
+        if (r_ino[1]!==E7_INO13 || r_estart[1]!==E7_EST13) begin
+            $display("FAIL ram[1]"); errc=errc+1;
+        end else $display("PASS ram[1] ino=%0d estart=%0d", r_ino[1], r_estart[1]);
+
+        // 查询 ino=13(dog) → 应返回 estart=48
+        qino=13; qreq=1;
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段7 全文件收集(ino12→块32, ino13→块48, ino14索引跳过) 全过");
+        qreq=0;
+        wait(qdone); #10;
+        if (qvalid!==1 || qestart!==E7_EST13 || qebe!==0 || qelen!==E7_ELEN13) begin
+            $display("FAIL query ino13: valid=%0d estart=%0h ebe=%0h elen=%0d",
+                     qvalid, qestart, qebe, qelen); errc=errc+1;
+        end else $display("PASS query ino13 → estart=%0d ebe=%0d elen=%0d", qestart, qebe, qelen);
+
+        // 查询不存在 ino=99 → 未找到
+        qino=99; qreq=1;
+        #20;
+        qreq=0;
+        wait(qdone); #10;
+        if (qvalid!==0) begin
+            $display("FAIL query ino99 应未找到, valid=%0d", qvalid); errc=errc+1;
+        end else $display("PASS query ino99 未找到 (qvalid=0)");
+
+        #20;
+        if (errc==0) $display("PASS: ext4_scan 阶段8 外置表RAM+查询(inode→物理块段) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
