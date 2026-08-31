@@ -19,7 +19,8 @@ module ext4_scan_core #(
     parameter NBEAT = 1024,   // 每块拍数(4096/4)
     parameter MAXENT = 4,     // 目录块可枚举的最大条目数(根目录/子目录各自)
     parameter TABN   = 8,     // 收集映射表容量(含递归展开, >MAXENT)
-    parameter MAXDEPTH = 4    // extent 索引递归最大下钻深度(防死循环)
+    parameter MAXDEPTH = 4,   // extent 索引递归最大下钻深度(防死循环)
+    parameter NDEP     = 4    // 阶段15: 目录栈深度(任意层级目录递归)
 )(
     input  wire             clk, rst_n,
     input  wire             go,
@@ -99,6 +100,7 @@ module ext4_scan_core #(
                S_DMREQ2=42, S_DMWAIT2=43, S_DMFILL2=44, S_DMFILLP2=45, S_DMEXT=46,
                S_SIREQ=47, S_SIWAIT=48, S_SIFILL=49, S_SIP=50,
                S_GDT_REQ=52, S_GDT_WAIT=53, S_GDT_FILL=54, S_GDT_P=55,
+               S_DMPOP=56, S_STKINIT=57,
                S_DONE=51;
     reg [5:0] st;
 
@@ -117,6 +119,9 @@ module ext4_scan_core #(
     reg [NB-1:0] gdt_itbl [0:3];
     reg [NB-1:0] curi_blk_r;      // 当前灌入 wbuf 的 inode 表块(跨组重读判定)
     reg [3:0] grp_r;              // 当前文件所在组号
+    // 阶段15: 任意层级目录递归 — 目录栈(存目录 ino)
+    reg [NB-1:0] dir_stk [0:NDEP-1];
+    reg [$clog2(NDEP+1)-1:0] stkp;    // 栈指针(0=空)
     // 阶段6: 索引子 extent 块号
     reg [NB-1:0] subblk_r;
     // 阶段7: 全文件收集游标/表号
@@ -161,6 +166,7 @@ module ext4_scan_core #(
             si<=0; sientries<=0; sinidx<=0; sidx_blk_r<=0;
             subdir_ino_r<=0; subd_blk_r<=0; subd_cnt<=0; sdcur<=0; sdpos<=0;
             ipg_r<=0; curi_blk_r<=0; grp_r<=0;
+            stkp<=0;
             qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
             qebe<=0; qelen<=0; qestart<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
@@ -588,15 +594,24 @@ module ext4_scan_core #(
                     st <= S_DMSCAN;
                 end
                 S_DMSCAN: begin
-                    if (sdcur>=out_count || out_ftype[sdcur]==8'd2) begin
-                        if (sdcur>=out_count) begin
-                            st <= S_DONE;                       // 无子目录
-                        end else begin
-                            subdir_ino_r <= out_ino[sdcur];
-                            st <= S_DMREQ;                      // 读块4 取子目录数据块
-                        end
+                    if (sdcur>=out_count) begin
+                        st <= S_DMPOP;                     // 根 type2 已全部压栈
+                    end else if (out_ftype[sdcur]==8'd2) begin
+                        dir_stk[stkp] <= out_ino[sdcur];   // 压入目录栈
+                        stkp <= stkp + 1;
+                        sdcur <= sdcur + 1; st <= S_DMSCAN;
                     end else begin
-                        sdcur <= sdcur + 1;
+                        sdcur <= sdcur + 1; st <= S_DMSCAN;
+                    end
+                end
+                // 阶段15: 弹栈 — 无待处理目录则结束, 否则处理栈顶目录
+                S_DMPOP: begin
+                    if (stkp==0) begin
+                        st <= S_DONE;
+                    end else begin
+                        stkp         <= stkp - 1;
+                        subdir_ino_r <= dir_stk[stkp-1];
+                        st <= S_DMREQ;
                     end
                 end
                 S_DMREQ: begin
@@ -650,16 +665,20 @@ module ext4_scan_core #(
                     sdpos <= 0;
                     st <= S_DBLOOP;
                 end
-                // 枚举子目录块内条目(同 dir_entry2 格式), 收集 ftype=1 文件
+                // 枚举子目录块内条目(同 dir_entry2 格式): type1 记录待收 extent, type2 压入目录栈
                 S_DBLOOP: begin
                     if (sdpos>=1024 || subd_cnt>=MAXENT ||
                         wbuf[sdpos>>2]==0) begin
-                        st <= S_DMREQ2;            // 去收集子文件 extent
+                        st <= S_DMREQ2;            // 去收集本层文件 extent
+                    end else if (wbuf[(sdpos>>2)+1][31:24]==8'd1) begin
+                        subd_ino[subd_cnt] <= wbuf[sdpos>>2];
+                        subd_cnt <= subd_cnt + 1;
+                        sdpos <= sdpos + wbuf[(sdpos>>2)+1][15:0];
+                    end else if (wbuf[(sdpos>>2)+1][31:24]==8'd2) begin
+                        dir_stk[stkp] <= wbuf[sdpos>>2];   // 内层子目录 → 压栈
+                        stkp <= stkp + 1;
+                        sdpos <= sdpos + wbuf[(sdpos>>2)+1][15:0];
                     end else begin
-                        if (wbuf[(sdpos>>2)+1][31:24]==8'd1) begin
-                            subd_ino[subd_cnt] <= wbuf[sdpos>>2];
-                            subd_cnt <= subd_cnt + 1;
-                        end
                         sdpos <= sdpos + wbuf[(sdpos>>2)+1][15:0];
                     end
                 end
@@ -689,19 +708,19 @@ module ext4_scan_core #(
                 S_DMFILLP2: begin
                     st <= S_DMEXT;
                 end
-                // 子目录文件: 解析内联叶(depth=0) 续写 ext/RAM 表
+                // 子目录文件: 解析内联叶(depth=0) 续写 ext/RAM 表; 收完本层 → 弹栈处理下一层
                 S_DMEXT: begin
                     if (sdcur>=subd_cnt) begin
-                        st <= S_DONE;
+                        st <= S_DMPOP;
                     end else begin
                         ext_ino_o[ext_count_o]    <= subd_ino[sdcur];
-                        ext_ebe_o[ext_count_o]    <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+13];
-                        ext_elen_o[ext_count_o]   <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+14][15:0];
-                        ext_estart_o[ext_count_o] <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+15];
+                        ext_ebe_o[ext_count_o]    <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+13];
+                        ext_elen_o[ext_count_o]   <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+14][15:0];
+                        ext_estart_o[ext_count_o] <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+15];
                         ram_ino[ext_count_o]      <= subd_ino[sdcur];
-                        ram_ebe[ext_count_o]      <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+13];
-                        ram_elen[ext_count_o]     <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+14][15:0];
-                        ram_estart[ext_count_o]   <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+15];
+                        ram_ebe[ext_count_o]      <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+13];
+                        ram_elen[ext_count_o]     <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+14][15:0];
+                        ram_estart[ext_count_o]   <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+15];
                         ext_count_o               <= ext_count_o + 1;
                         sdcur <= sdcur + 1;
                     end
