@@ -282,8 +282,9 @@ rtl/14_serdes_proto/
   即"文件 inode→物理块段"的可查询映射, 正是 `file2lba` 的"文件→LBA"查询在 RTL 的落点。
   →"文件名→inode→extent→物理块→绝对LBA"闭合链完整, 与 `file2lba`/`ext4_lba.py` 对齐。
   说明: 收集表容量用独立参数 TABN(默认8, 须 >MAXENT 以容纳递归展开), 目录枚举容量仍 MAXENT
-  (每层各自), 目录栈深度参数 NDEP; per_block 仍硬编码=16(isz=256), ipg 由 superblock 运行时读入;
-  同一目录的多个文件 inode 假设同块(额外跨块文件需独立层读)。
+(每层各自), 目录栈深度参数 NDEP; per_block 仍硬编码=16(isz=256), ipg 由 superblock 运行时读入;
+   阶段17c(件3) 起同一目录的多个文件 inode **不再假设同表块**: 每文件按 `gdt_itbl[grp]+((ino-1)%ipg_r)>>4`
+   独立定位, 跨块自动重读。
   **阶段17** 把 `ext4_scan` **实际例化接线进缓存管线** — 新建 `cache_lba_top.v` 同时例化
   `ext4_scan_core U_scan` 与 `cachectl_pipeline U_pipe`: reset 后 T_FSM 自动拉 scan_go 扫描块源,
   done 后 TSP 遍历 ext4_scan 的 RAM 表挑出 FILE_INO 目标文件的 extent 段, 转录 FSM(TF0/TF1 逐帧)
@@ -293,9 +294,27 @@ rtl/14_serdes_proto/
   `U_pipe` 的 file2lba 组合直出绝对物理 LBA(wt_lba) 供真机按地址读盘。仿真实例天然覆盖 ino14
   (多索引叶): 叶0(逻辑0,estart300,len1)+叶1(逻辑1-2,estart310,len2), tag=0→part+300、
   tag=1→part+310、tag=2→part+311 — **"扫描→索引→转录→查询→读地址"完整模块层级链路闭合**。
-  后续按序扩展: 多层索引**嵌套+多路**(当前多路只针对单层索引块)→大文件 i_extra/indirect+extent
-  混合→同一目录多文件跨 inode 块收集→多文件目录转录(当前转录固定 FILE_INO 单文件, 递推全文件
-  目录需扩展 TSP 遍历 RAM 表所有 inode)→真机绑板接线。
+后续按序扩展: 多层索引**嵌套+多路**→大文件 i_extra/indirect+extent混合→同一目录多文件跨 inode 块收集→
+   多文件目录转录(当前转录固定 FILE_INO 单文件, 递推全文件目录需扩展 TSP 遍历 RAM 表所有 inode)→真机绑板接线。
+   **阶段17b(件2)** 把索引递归升级为 **DFS 节点栈**: 新增 `node_blk/node_cnt/node_ent` 当前节点游标
+   + 祖先节点栈 `estk_blk/estk_cnt/estk_ent` + `estkp` 栈指针, 取代原单索引块 `sinidx/si/sientries`
+   单层多路逻辑。`S_IDXENT` 每次下钻索引项前压栈当前节点, 叶收集完(S_SUBLF)或节点耗尽(S_IDXENT
+   弹栈)统一回溯重读父节点块; 支持任意深度嵌套索引(MAXDEPTH=4 防护)+每层多路。仿真实例新增 ino22
+   深度3 嵌套大文件: 根(索引,depth3) → 块60(depth2) → 块61(depth1,2索引项) → 叶块62(estart900)/63
+   (estart910), 2 叶全部收集; TABN 默认 8→16 容纳递归展开。
+   **阶段17c(件3)** 把根/子目录文件收集统一进 S_EXT_LOOP 两分支, 新增 `sel_dm`(0=根 out_ino,
+   1=子目录 subd_ino)与统一游标 `fidx`; 取消"同目录文件须同 inode 表块"假设 — 每个文件按
+   `gdt_itbl[grp]+((ino-1)%ipg_r)>>4` 独立重定位, 跨块自动重读(S_EXT_REQ)。仿真实例子目录 sub1
+   同时含组1 文件 ino17/18(表块6)与组0 文件 ino12(表块4), 跨 inode 表块收集验证。
+   **件1** cache_lba_top 转录升级为**多文件全目录**: TSP 遍历 RAM 表全部 extent, 按 ino 分组
+   (每组=一个文件句柄 F[f]), 全局逻辑块号拼接: 同 ino 多段连续写全局 EXT[k], 每组边界封
+   F[f].base(累计 base)/size(本组块数)。仿真实例 RAM 共 6 文件(ino12/13/14×2/17/18/19)
+   → file2lba 目录 F[0..5] base/size 全部正确, extent 段(estart32/48/300/310/400)拼接正确;
+   管线按 file0=ino12 查询: tag0→part+32、tag1→part+33、tag2(越界)→fault。
+   **件4** cache_lba_top 从"TD 自动回 TI 无限重扫"改为 **TIDLE 保持态**: 转录完成后 lba_ready=1
+   恒置、tst 停在 TIDLE 不再自动循环; 新增 `rescan` 输入, 拉高才回 TI 触发重扫, 重扫后目录
+   与查询结果保持正确(可重复)。
+   后续待办: 大文件 i_extra/indirect+extent 混合、真机绑板接线(NVMe 读引擎)。
 - 字段抽取用**32 位字数组 wbuf** + 顶取字组合读(规避这版 iverilog 对 `always@(*)` 内数组读的
   组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组); 遍历用 `wbuf[dpos>>2]`
   位移索引(iverilog 验证可行); 阶段7 动态 inode word 用 `((ino-1)&15)*64` 求模定位(迭代读
