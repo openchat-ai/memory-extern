@@ -19,7 +19,7 @@
 #  15. expert_dir       专家 LRU 缓存目录: trunk 恒驻留 + LRU 替换 + 动态更新
 #  16. cachectl_pipe    端到端: 探测+选通+专家LRU目录+GEMV(冷首访/重访/trunk/更新/主机)
 #  17. file2lba         文件→LBA 映射: 多文件句柄(分区起始+全局extent表+文件目录+越界)
-#  18. ext4_scan        RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode → 阶段3/4 目录rec_len枚举→结果表 → 阶段7 全文件收集 → 阶段9/10 索引多层递归下钻多叶 → 阶段12 索引块多路遍历(全部ei_leaf) → 阶段11 一级子目录递归 → 阶段13 跨多块 inode 表 → 阶段14 多 blk_groups 定位 → 阶段15 任意层级目录递归(目录栈) → 阶段8 落表RAM+查询FSM(合成镜像闭环)
+#  18. ext4_scan        RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode → 阶段3/4 目录rec_len枚举→结果表 → 阶段7 全文件收集 → 阶段9/10 索引多层递归下钻多叶 → 阶段12 索引块多路遍历(全部ei_leaf) → 阶段11 一级子目录递归 → 阶段13 跨多块 inode 表 → 阶段14 多 blk_groups 定位 → 阶段15 任意层级目录递归(目录栈) → 阶段16 查询闭环(qblk跨extent累积→绝对LBA) → 阶段8 落表RAM+查询FSM(合成镜像闭环)
 # 依赖: iverilog 12 (g2012). 全部 PASS 则 exit 0。
 # ============================================================================
 set -u
