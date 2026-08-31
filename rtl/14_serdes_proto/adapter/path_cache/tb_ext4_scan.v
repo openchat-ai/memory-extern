@@ -26,19 +26,20 @@ module tb_ext4_scan;
     localparam D2_INO=32'h0000000E, D2_FTYPE=8'h01, D2_NLEN=8'h03, D2_NAME=24'h676970; // pig
     localparam D_RECLEN = 16'd16;
 
-    // 阶段5: 文件 inode(12) extent 期望值(@ inode 表块 word 704)
+    // 阶段5: 文件 inode(12) extent 期望值(@ inode 表块 word 704, depth=0 内联)
     localparam F_MODE   = 16'h81A4;      // 0x8000 常规文件
     localparam F_SIZE   = 32'h0000_0800; // 文件字节数
     localparam F_EBLK   = 32'h0000_0000; // 首 extent 逻辑块号
     localparam F_ELEN   = 16'd2;         // 首 extent 长度(块)
     localparam F_ESTART = 32'h0000_0020; // 首 extent 物理起始块(32)
 
-    // 阶段6: 文件12 extent 根为索引(depth=1) → 子块(40) 叶 → 数据物理块
-    localparam F_DEPTH  = 8'h01;         // 索引深度1
-    localparam SUBBLK   = 32'd40;        // 索引项 ei_leaf = 子 extent 块号
-    localparam S_EBLK   = 32'h0000_0000; // 子块叶: 逻辑块0
-    localparam S_ELEN   = 16'd3;         // 子块叶: 长度3
-    localparam S_ESTART = 32'h0000_0040; // 子块叶: 数据物理块64
+    // 阶段7: 全文件收集 — ino13 depth0 内联(estart=48) / ino14 depth1 索引(跳过)
+    localparam E7_INO13   = 32'd13;      // 第二个文件
+    localparam E7_EST13   = 32'h0000_0030; // ino13 数据物理块 48
+    localparam E7_ELEN13  = 16'd1;
+    // ino13 @ word (13-1)%16*64 = 12*64 = 768
+    localparam INO13_WORD = 768;
+    localparam E7_INO14   = 32'd14;      // 第三个文件 = 索引, 阶段7 应跳过
 
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
@@ -60,6 +61,9 @@ module tb_ext4_scan;
     wire [2:0] o_cnt;
     wire [31:0] f_ino, f_size, f_ebe, f_estart, s_ebe, s_estart;
     wire [15:0] f_mode, f_elen, s_elen;
+    wire [31:0] x_ino [0:3], x_ebe [0:3], x_estart [0:3];
+    wire [15:0] x_elen [0:3];
+    wire [2:0] x_cnt;
 
     integer errc=0;
 
@@ -112,7 +116,9 @@ module tb_ext4_scan;
         .out_name3(o_name3), .out_count(o_cnt),
         .f_ino_o(f_ino), .f_mode_o(f_mode), .f_size_lo_o(f_size),
         .f_ebe_o(f_ebe), .f_elen_o(f_elen), .f_estart_o(f_estart),
-        .s_ebe_o(s_ebe), .s_elen_o(s_elen), .s_estart_o(s_estart)
+        .s_ebe_o(s_ebe), .s_elen_o(s_elen), .s_estart_o(s_estart),
+        .ext_ino_o(x_ino), .ext_ebe_o(x_ebe), .ext_elen_o(x_elen),
+        .ext_estart_o(x_estart), .ext_count_o(x_cnt)
     );
 
     integer i;
@@ -164,31 +170,30 @@ module tb_ext4_scan;
         widx=8*1024+10; img[widx] = D2_NAME;
         // entry3 = 块尾(ino=0)
 
-        // 文件 inode(12) @ inode 表块(块4) word 704 — extent 根=索引(depth=1)
-        widx=4*1024+704;
-        img[widx] = F_MODE;                    // i_mode (低16)
-        widx=4*1024+705;
-        img[widx] = F_SIZE;                    // i_size 低32
-        widx=4*1024+714;
-        img[widx] = (32'h0001<<16)|32'hF30A;   // extent 头: entries=1 magic=F30A
-        widx=4*1024+715;
-        img[widx] = (32'h0001<<16);            // depth=1 (高16), max=0 (低16)
-        widx=4*1024+717;
-        img[widx] = F_EBLK;                    // 索引项 ei_block=0
-        widx=4*1024+718;
-        img[widx] = SUBBLK;                    // 索引项 ei_leaf=40(子 extent 块)
+        // ino12 @ word 704 — depth=0 内联叶 (阶段5: f_*)
+        widx=4*1024+704;  img[widx] = F_MODE;
+        widx=4*1024+705;  img[widx] = F_SIZE;
+        widx=4*1024+714;  img[widx] = (32'h0001<<16)|32'hF30A; // entries=1 magic
+        widx=4*1024+715;  img[widx] = 0;                        // depth=0
+        widx=4*1024+717;  img[widx] = F_EBLK;                   // ee_block
+        widx=4*1024+718;  img[widx] = F_ELEN;                   // ee_len
+        widx=4*1024+719;  img[widx] = F_ESTART;                 // ee_start=32
 
-        // 子 extent 块(块40) — 内联叶
-        widx=40*1024+0;
-        img[widx] = (32'h0001<<16)|32'hF30A;   // entries=1 magic
-        widx=40*1024+1;
-        img[widx] = 0;                         // depth=0
-        widx=40*1024+3;
-        img[widx] = S_EBLK;                    // ee_block=0
-        widx=40*1024+4;
-        img[widx] = S_ELEN;                    // ee_len=3
-        widx=40*1024+5;
-        img[widx] = S_ESTART;                  // ee_start=64
+        // ino13 @ word 768 — depth=0 内联叶 (阶段7 收集)
+        widx=4*1024+768;  img[widx] = 16'h81A4;
+        widx=4*1024+769;  img[widx] = 32'h0000_0400;            // size=1024
+        widx=4*1024+778;  img[widx] = (32'h0001<<16)|32'hF30A;  // extent 头
+        widx=4*1024+779;  img[widx] = 0;                        // depth=0
+        widx=4*1024+781;  img[widx] = 0;                        // ee_block
+        widx=4*1024+782;  img[widx] = E7_ELEN13;                // ee_len
+        widx=4*1024+783;  img[widx] = E7_EST13;                 // ee_start=48
+
+        // ino14 @ word 832 — depth=1 索引 (阶段7 应跳过)
+        widx=4*1024+832;  img[widx] = 16'h81A4;
+        widx=4*1024+842;  img[widx] = (32'h0001<<16)|32'hF30A;  // extent 头
+        widx=4*1024+843;  img[widx] = (32'h0001<<16);           // depth=1 (索引)
+        widx=4*1024+845;  img[widx] = 0;                        // ei_block
+        widx=4*1024+846;  img[widx] = 32'd44;                   // ei_leaf=44(跳过, 不读)
 
         #30 rst_n=1; #10;
         blk_fd_ready=1;
@@ -259,39 +264,29 @@ module tb_ext4_scan;
             $display("FAIL e2 name"); errc=errc+1;
         end else $display("PASS e2 name=%0h", o_name3[2]);
 
-        // ---- 阶段5: 文件 inode → extent(物理块) ----
-        if (f_ino!==D0_INO) begin
-            $display("FAIL f_ino: got %0d want %0d", f_ino, D0_INO); errc=errc+1;
-        end else $display("PASS f_ino=%0d", f_ino);
-        if (f_mode!==F_MODE) begin
-            $display("FAIL f_mode: got %0h want %0h", f_mode, F_MODE); errc=errc+1;
-        end else $display("PASS f_mode=%0h", f_mode);
-        if (f_size!==F_SIZE) begin
-            $display("FAIL f_size: got %0h want %0h", f_size, F_SIZE); errc=errc+1;
-        end else $display("PASS f_size=%0d", f_size);
-        if (f_ebe!==0) begin
-            $display("FAIL f_ebe: depth=1 不应走内联, got %0h", f_ebe); errc=errc+1;
-        end else $display("PASS f_ebe=0 (depth=1 内联旁路)");
-        if (f_elen!==0) begin
-            $display("FAIL f_elen"); errc=errc+1;
-        end else $display("PASS f_elen=0 (depth=1 内联旁路)");
-        if (f_estart!==0) begin
-            $display("FAIL f_estart"); errc=errc+1;
-        end else $display("PASS f_estart=0 (depth=1 内联旁路)");
-
-        // ---- 阶段6: extent 索引(depth=1)递归 → 子块叶(数据物理块) ----
-        if (s_ebe!==S_EBLK) begin
-            $display("FAIL s_ebe: got %0h want %0h", s_ebe, S_EBLK); errc=errc+1;
-        end else $display("PASS s_ebe=%0d", s_ebe);
-        if (s_elen!==S_ELEN) begin
-            $display("FAIL s_elen: got %0d want %0d", s_elen, S_ELEN); errc=errc+1;
-        end else $display("PASS s_elen=%0d", s_elen);
-        if (s_estart!==S_ESTART) begin
-            $display("FAIL s_estart: got %0h want %0h", s_estart, S_ESTART); errc=errc+1;
-        end else $display("PASS s_estart=%0d", s_estart);
+        // ---- 阶段7: 全文件收集 → "文件→物理块"映射表 ----
+        // (阶段5 的单文件 ino12 映射已被阶段7 的全文件收集取代并遍历覆盖)
+        if (x_cnt!==2) begin
+            $display("FAIL ext_count: got %0d want 2 (ino14=depth1 应跳过)", x_cnt); errc=errc+1;
+        end else $display("PASS ext_count=%0d (跳过 ino14 索引)", x_cnt);
+        if (x_ino[0]!==D0_INO) begin
+            $display("FAIL ext[0] ino"); errc=errc+1;
+        end else $display("PASS ext[0] ino=%0d", x_ino[0]);
+        if (x_estart[0]!==F_ESTART) begin
+            $display("FAIL ext[0] estart: got %0h want %0h", x_estart[0], F_ESTART); errc=errc+1;
+        end else $display("PASS ext[0] estart=%0d", x_estart[0]);
+        if (x_ino[1]!==E7_INO13) begin
+            $display("FAIL ext[1] ino: got %0d want %0d", x_ino[1], E7_INO13); errc=errc+1;
+        end else $display("PASS ext[1] ino=%0d", x_ino[1]);
+        if (x_estart[1]!==E7_EST13) begin
+            $display("FAIL ext[1] estart: got %0h want %0h", x_estart[1], E7_EST13); errc=errc+1;
+        end else $display("PASS ext[1] estart=%0d", x_estart[1]);
+        if (x_elen[1]!==E7_ELEN13) begin
+            $display("FAIL ext[1] elen"); errc=errc+1;
+        end else $display("PASS ext[1] elen=%0d", x_elen[1]);
 
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段6 索引递归(depth=1) 文件12 → 子块40叶 → 数据物理块64 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段7 全文件收集(ino12→块32, ino13→块48, ino14索引跳过) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
