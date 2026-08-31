@@ -15,7 +15,8 @@
 module nvme_device_model #(
     parameter LBAW  = 48,
     parameter DATAW = 32,
-    parameter CMDW  = 32
+    parameter CMDW  = 32,
+    parameter CHECK_WDATA = 0   // 1=自校验写数据==pat+blk_cnt(验更新缓存闭环)
 )(
     input  wire clk,
     input  wire rst_n,
@@ -40,14 +41,15 @@ module nvme_device_model #(
     reg        waiting_data;
     reg        data_dir;   // 1=read, 0=write
     reg [DATAW-1:0] pat;
-    reg        cpl_pend;
+    reg              cpl_pend;
+    reg              data_err;
 
     always @(posedge clk) begin
         if (!rst_n) begin
             rx_valid <= 0; rx_data <= 0;
             tx_data_ready <= 0; rx_cpl_valid <= 0; rx_cpl <= 0;
             op <= 0; tag <= 0; blk_len <= 0; blk_cnt <= 0;
-            waiting_data <= 0; data_dir <= 0; pat <= 0; cpl_pend <= 0;
+            waiting_data <= 0; data_dir <= 0; pat <= 0; cpl_pend <= 0; data_err <= 0;
         end else begin
             // 默认
             rx_cpl_valid <= 0;
@@ -65,6 +67,7 @@ module nvme_device_model #(
                         end
                         OP_WRITE: begin
                             waiting_data <= 1; data_dir <= 0; blk_cnt <= tx_cmd[27:12];
+                            pat <= {28'h0, tx_cmd[31:28]};
                         end
                         OP_READ: begin
                             waiting_data <= 1; data_dir <= 1; blk_cnt <= tx_cmd[27:12];
@@ -86,9 +89,10 @@ module nvme_device_model #(
                     if (blk_cnt == 1) cpl_pend <= 1;
                 end
             end else begin
-                // 写: 持续就绪, 每收一拍计数
+                // 写: 持续就绪, 每收一拍计数(并自校验数据= pat+blk_cnt, 验"更新缓存"闭环)
                 tx_data_ready <= 1;
                 if (tx_data_valid) begin
+                    if (CHECK_WDATA && (tx_data !== (pat + blk_cnt))) data_err <= 1;
                     blk_cnt <= blk_cnt - 1;
                     if (blk_cnt == 1) cpl_pend <= 1;
                 end
@@ -96,10 +100,11 @@ module nvme_device_model #(
 
             // 完成脉冲(数据收/发完当下拖到下一拍送)
             if (cpl_pend) begin
-                rx_cpl <= {28'b0, 4'h0, 8'd0};
+                rx_cpl <= {28'b0, 4'h0, data_err ? 8'd1 : 8'd0};
                 rx_cpl_valid <= 1;
                 waiting_data <= 0;
                 cpl_pend <= 0;
+                data_err <= 0;
                 rx_valid <= 0;
                 tx_data_ready <= 0;
             end
