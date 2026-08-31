@@ -50,14 +50,23 @@ module ext4_scan_core #(
     output reg [7:0]   out_ftype  [0:MAXENT-1],
     output reg [7:0]   out_nlen   [0:MAXENT-1],
     output reg [23:0]  out_name3  [0:MAXENT-1],
-    output reg [$clog2(MAXENT+1)-1:0] out_count
+    output reg [$clog2(MAXENT+1)-1:0] out_count,
+    // 阶段5: 首个文件 inode → extent(物理块) 输出
+    output reg [31:0]  f_ino_o,
+    output reg [15:0]  f_mode_o,
+    output reg [31:0]  f_size_lo_o,
+    output reg [31:0]  f_ebe_o,
+    output reg [15:0]  f_elen_o,
+    output reg [31:0]  f_estart_o
 );
 
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
                S_GD_REQ=5, S_GD_WAIT=6, S_GD_FILL=7, S_GD_P=8,
                S_IT_REQ=9, S_IT_WAIT=10, S_IT_FILL=11, S_IT_P=12,
                S_DIR_REQ=13, S_DIR_WAIT=14, S_DIR_FILL=15, S_DIR_P=16,
-               S_DIR_LOOP=17, S_DONE=18;
+               S_DIR_LOOP=17,
+               S_FILEREQ=18, S_FILEWAIT=19, S_FILEFILL=20, S_FILEP=21,
+               S_DONE=22;
     reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
@@ -75,6 +84,9 @@ module ext4_scan_core #(
     reg [$clog2(MAXENT+1)-1:0] idx;
     // inode2 块内 word(固定 inode_size=256: offset=(2-1)*256=256 -> word 64)
     localparam INO2_WORD = 64;
+    // 文件 inode(取目录首个, ino=12) 块内 word:
+    //   inode号12 -> 组内下标11, per_block=16, blk偏移0, 块内偏移=(11%16)*256=2816 -> word 704
+    localparam INO12_WORD = 704;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -87,6 +99,8 @@ module ext4_scan_core #(
             root_ee_magic_o<=0; root_ee_entries_o<=0;
             root_ee_block_o<=0; root_ee_len_o<=0; root_ee_start_o<=0;
             out_count<=0;
+            f_ino_o<=0; f_mode_o<=0; f_size_lo_o<=0;
+            f_ebe_o<=0; f_elen_o<=0; f_estart_o<=0;
             for (k=0;k<MAXENT;k=k+1) begin
                 out_ino[k]<=0; out_ftype[k]<=0; out_nlen[k]<=0; out_name3[k]<=0;
             end
@@ -237,7 +251,7 @@ module ext4_scan_core #(
                     if (dpos>=1024 || idx>=MAXENT ||
                         wbuf[dpos>>2]==0) begin
                         out_count <= idx;
-                        st <= S_DONE;
+                        st <= S_FILEREQ;
                     end else begin
                         out_ino[idx]   <= wbuf[dpos>>2];
                         out_ftype[idx] <= wbuf[(dpos>>2)+1][31:24];
@@ -246,6 +260,45 @@ module ext4_scan_core #(
                         dpos <= dpos + wbuf[(dpos>>2)+1][15:0];
                         idx  <= idx + 1;
                     end
+                end
+
+                // 阶段5: 重新读 inode 表块, 解析首个文件 inode(out_ino[0]) 的 extent
+                S_FILEREQ: begin
+                    blk_fd_blk <= itbl_r;
+                    req_blk    <= itbl_r;
+                    blk_fd_req <= 1;
+                    st <= S_FILEWAIT;
+                end
+                S_FILEWAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0;
+                        beat <= 0;
+                        st <= S_FILEFILL;
+                    end
+                end
+                S_FILEFILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            st<=S_FILEP;
+                        end else beat<=beat+1;
+                    end
+                end
+                // 文件 inode12 @块内 word INO12_WORD:
+                //   i_mode   -> word INO12_WORD    低16
+                //   i_size   -> word INO12_WORD+1  低32
+                //   extent头 -> word INO12_WORD+10: magic低16/entries高16
+                //   leaf0    -> word INO12_WORD+13: ee_block
+                //              word INO12_WORD+14: ee_len低16 / ee_start_hi高16
+                //              word INO12_WORD+15: ee_start_lo
+                S_FILEP: begin
+                    f_ino_o     <= out_ino[0];
+                    f_mode_o    <= wbuf[INO12_WORD][15:0];
+                    f_size_lo_o <= wbuf[INO12_WORD+1];
+                    f_ebe_o     <= wbuf[INO12_WORD+13];
+                    f_elen_o    <= wbuf[INO12_WORD+14][15:0];
+                    f_estart_o  <= wbuf[INO12_WORD+15];
+                    st <= S_DONE;
                 end
 
                 S_DONE: begin
