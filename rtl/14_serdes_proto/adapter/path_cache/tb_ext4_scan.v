@@ -11,6 +11,15 @@ module tb_ext4_scan;
     localparam INODE_TABLE=4;
     localparam NWORDS=64*1024;              // 64 块 * 1024 字
 
+    // 阶段2: 根 inode(2) 期望值(inode 表块 = INODE_TABLE=4, word 起点 64)
+    localparam ROOT_MODE   = 16'h41ED;      // 0x4000 目录位 + 权限
+    localparam ROOT_SIZE   = 32'h0000_0200; // 目录字节数
+    localparam ROOT_EMAGIC = 16'hF30A;      // EXT4_EXT_MAGIC
+    localparam ROOT_EENT   = 16'h0001;      // extent 条目数
+    localparam ROOT_EBLK   = 32'h0000_0000; // 首 extent 逻辑块号
+    localparam ROOT_ELEN   = 16'h0001;      // 首 extent 长度(块)
+    localparam ROOT_ESTART = 32'h0000_0008; // 首 extent 物理起始块
+
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
     wire [NB-1:0] blk_fd_blk;
@@ -23,6 +32,8 @@ module tb_ext4_scan;
     wire [31:0] bpg, ipg;
     wire [15:0] isz;
     wire [NB-1:0] itbl;
+    wire [15:0] rm, re_mag, re_ent, re_len;
+    wire [31:0] rs, re_blk, re_start;
 
     integer errc=0;
 
@@ -67,7 +78,10 @@ module tb_ext4_scan;
         .blk_fd_dvalid(blk_fd_dvalid), .blk_fd_data(blk_fd_data),
         .blk_fd_dblk(blk_fd_dblk),
         .blocks_per_grp_o(bpg), .inodes_per_grp_o(ipg),
-        .inode_size_o(isz), .inode_table_blk_o(itbl)
+        .inode_size_o(isz), .inode_table_blk_o(itbl),
+        .root_mode_o(rm), .root_size_lo_o(rs),
+        .root_ee_magic_o(re_mag), .root_ee_entries_o(re_ent),
+        .root_ee_block_o(re_blk), .root_ee_len_o(re_len), .root_ee_start_o(re_start)
     );
 
     integer i;
@@ -90,6 +104,20 @@ module tb_ext4_scan;
         widx=1024+2;
         img[widx] = INODE_TABLE;
 
+        // 根 inode(2) @ inode 表块(块4) word 64
+        widx=4*1024+64;
+        img[widx] = ROOT_MODE;                 // i_mode (低16)
+        widx=4*1024+65;
+        img[widx] = ROOT_SIZE;                 // i_size 低32
+        widx=4*1024+74;
+        img[widx] = (ROOT_EENT<<16) | ROOT_EMAGIC;  // extent 头
+        widx=4*1024+77;
+        img[widx] = ROOT_EBLK;                 // ee_block
+        widx=4*1024+78;
+        img[widx] = ROOT_ELEN;                 // ee_len (低16)
+        widx=4*1024+79;
+        img[widx] = ROOT_ESTART;               // ee_start
+
         #30 rst_n=1; #10;
         blk_fd_ready=1;
         go=1; #10; go=0;
@@ -110,8 +138,31 @@ module tb_ext4_scan;
             $display("FAIL itbl: got %0h want %0h", itbl, INODE_TABLE); errc=errc+1;
         end else $display("PASS itbl=%0d", itbl);
 
+        // ---- 阶段2: 根 inode(2) ----
+        if (rm!==ROOT_MODE) begin
+            $display("FAIL root_mode: got %0h want %0h", rm, ROOT_MODE); errc=errc+1;
+        end else $display("PASS root_mode=%0h", rm);
+        if (rs!==ROOT_SIZE) begin
+            $display("FAIL root_size: got %0h want %0h", rs, ROOT_SIZE); errc=errc+1;
+        end else $display("PASS root_size=%0d", rs);
+        if (re_mag!==ROOT_EMAGIC) begin
+            $display("FAIL ee_magic: got %0h want %0h", re_mag, ROOT_EMAGIC); errc=errc+1;
+        end else $display("PASS ee_magic=%0h", re_mag);
+        if (re_ent!==ROOT_EENT) begin
+            $display("FAIL ee_entries: got %0d want %0d", re_ent, ROOT_EENT); errc=errc+1;
+        end else $display("PASS ee_entries=%0d", re_ent);
+        if (re_blk!==ROOT_EBLK) begin
+            $display("FAIL ee_block: got %0h want %0h", re_blk, ROOT_EBLK); errc=errc+1;
+        end else $display("PASS ee_block=%0d", re_blk);
+        if (re_len!==ROOT_ELEN) begin
+            $display("FAIL ee_len: got %0d want %0d", re_len, ROOT_ELEN); errc=errc+1;
+        end else $display("PASS ee_len=%0d", re_len);
+        if (re_start!==ROOT_ESTART) begin
+            $display("FAIL ee_start: got %0h want %0h", re_start, ROOT_ESTART); errc=errc+1;
+        end else $display("PASS ee_start=%0d", re_start);
+
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段1 superblock/组描述符 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段2 根 inode2(mode/size/extent头/首extent) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end

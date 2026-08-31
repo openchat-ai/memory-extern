@@ -229,13 +229,14 @@ rtl/14_serdes_proto/
   所有目录**, 收集每个文件的 extent, 汇总成文件→LBA 映射(不筛选文件)。
 
 ### RTL ext4 扫描器(ext4_scan_core, 逐级扩展中)
-- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**当前第 1
-  阶段**: 窄总线(32bit×NBEAT=1024 拍=4096B/块)从块流灌入, 解析 superblock
+- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1/2**:
+  窄总线(32bit×NBEAT=1024 拍=4096B/块)从块流灌入——阶段1 解析 superblock
   (`blocks_per_grp`/`inodes_per_grp`/`inode_size`, 块0 偏移1024=字256) 与组0 描述符
-  (`inode_table_blk`, 块1) 并输出, `done` 置位形成闭合。后续按序扩展: 根 inode(2)
-  →目录块(变长 rec_len)→文件 inode extent(深度0+索引递归)→写外置表 RAM。
-- 字段抽取用**32 位字数组 wbuf** + 顶层 `assign` 位选(规避这版 iverilog 对 `always@(*)`
-  内数组读的组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组)。
+  (`inode_table_blk`, 块1); **阶段2** 循 inode 表块读根 inode(2), 采出 `i_mode`/
+  `i_size`/extent 头(magic+F30A/entries)/首 extent(`ee_block/ee_len/ee_start`),
+  `done` 置位形成闭合。后续按序扩展: 目录块(变长 rec_len)→文件 inode extent(深度0+索引递归)→写外置表 RAM。
+- 字段抽取用**32 位字数组 wbuf** + 顶取字组合读(规避这版 iverilog 对 `always@(*)` 内数组读的
+  组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组)。
 - **仿真范围(坦诚说明)**: 真机磁盘块读(NVMe 读引擎/138K 板)是硬前置且未到手, 当前
   只对合成镜像块流仿真验证; 完整 ext4 边角(内联数据/深层索引递归/跨块目录)工作量大、
   可验证性有限, 按"每阶段先编译+仿真通过再扩展"推进。
@@ -264,7 +265,7 @@ rtl/14_serdes_proto/
 | 15 | expert_dir | 专家 LRU 缓存目录: trunk 恒命中+LRU替换+动态更新 |
 | 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV+文件→LBA(冷首访/重访/trunk/更新/主机路径) |
 | 17 | file2lba | 多文件句柄→LBA: 分区起始+全局extent表+文件目录+跨段+越界+动态重配 |
-| 18 | ext4_scan | RTL ext4 扫描 阶段1: superblock(bpg/ipg/inode_size)+组0描述符(inode_table) 合成镜像闭环 |
+| 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0描述符 + 阶段2 根inode(2)(mode/size/extent头/首extent) 合成镜像闭环 |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据
