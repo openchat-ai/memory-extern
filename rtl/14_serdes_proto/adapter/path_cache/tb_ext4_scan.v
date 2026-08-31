@@ -20,12 +20,11 @@ module tb_ext4_scan;
     localparam ROOT_ELEN   = 16'h0001;      // 首 extent 长度(块)
     localparam ROOT_ESTART = 32'h0000_0008; // 首 extent 物理起始块
 
-    // 阶段3: 目录块(块8)首条目期望值
-    localparam D_INO    = 32'h0000_000C;    // inode 号
-    localparam D_FTYPE  = 8'h01;            // 常规文件
-    localparam D_NAMELEN= 8'h03;            // "cat"
+    // 阶段4: 目录块逐条枚举(MAXENT=4)
+    localparam D0_INO=32'h0000000C, D0_FTYPE=8'h01, D0_NLEN=8'h03, D0_NAME=24'h746163; // cat
+    localparam D1_INO=32'h0000000D, D1_FTYPE=8'h01, D1_NLEN=8'h03, D1_NAME=24'h676F64; // dog
+    localparam D2_INO=32'h0000000E, D2_FTYPE=8'h01, D2_NLEN=8'h03, D2_NAME=24'h676970; // pig
     localparam D_RECLEN = 16'd16;
-    localparam D_NAME   = 24'h746163;       // 'c','a','t' (小端: 首字符在低8位)
 
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
@@ -41,9 +40,10 @@ module tb_ext4_scan;
     wire [NB-1:0] itbl;
     wire [15:0] rm, re_mag, re_ent, re_len;
     wire [31:0] rs, re_blk, re_start;
-    wire [31:0] d_ino;
-    wire [7:0] d_ftype, d_namelen;
-    wire [23:0] d_name;
+    wire [31:0] o_ino [0:3];
+    wire [7:0] o_ftype [0:3], o_nlen [0:3];
+    wire [23:0] o_name3 [0:3];
+    wire [2:0] o_cnt;
 
     integer errc=0;
 
@@ -80,7 +80,7 @@ module tb_ext4_scan;
         end
     end
 
-    ext4_scan_core #(.NB(NB), .DATAW(DATAW), .NBEAT(NBEAT)) u (
+    ext4_scan_core #(.NB(NB), .DATAW(DATAW), .NBEAT(NBEAT), .MAXENT(4)) u (
         .clk(clk), .rst_n(rst_n), .go(go),
         .busy(busy), .done(done), .err(err),
         .blk_fd_req(blk_fd_req), .blk_fd_blk(blk_fd_blk),
@@ -92,7 +92,8 @@ module tb_ext4_scan;
         .root_mode_o(rm), .root_size_lo_o(rs),
         .root_ee_magic_o(re_mag), .root_ee_entries_o(re_ent),
         .root_ee_block_o(re_blk), .root_ee_len_o(re_len), .root_ee_start_o(re_start),
-        .d_ino_o(d_ino), .d_ftype_o(d_ftype), .d_namelen_o(d_namelen), .d_name_o(d_name)
+        .out_ino(o_ino), .out_ftype(o_ftype), .out_nlen(o_nlen),
+        .out_name3(o_name3), .out_count(o_cnt)
     );
 
     integer i;
@@ -129,13 +130,20 @@ module tb_ext4_scan;
         widx=4*1024+79;
         img[widx] = ROOT_ESTART;               // ee_start
 
-        // 目录块(块8)首条目: word1 = {ftype,name_len,rec_len}
-        widx=8*1024+0;
-        img[widx] = D_INO;
-        widx=8*1024+1;
-        img[widx] = (D_FTYPE<<24) | (D_NAMELEN<<16) | D_RECLEN;
-        widx=8*1024+2;
-        img[widx] = D_NAME;                    // name 首3字符(小端)
+        // 目录块(块8) 逐条: entry k @ 字 k*4, 每条 16B
+        // entry0 = cat
+        widx=8*1024+0;  img[widx] = D0_INO;
+        widx=8*1024+1;  img[widx] = (D0_FTYPE<<24)|(D0_NLEN<<16)|D_RECLEN;
+        widx=8*1024+2;  img[widx] = D0_NAME;
+        // entry1 = dog
+        widx=8*1024+4;  img[widx] = D1_INO;
+        widx=8*1024+5;  img[widx] = (D1_FTYPE<<24)|(D1_NLEN<<16)|D_RECLEN;
+        widx=8*1024+6;  img[widx] = D1_NAME;
+        // entry2 = pig
+        widx=8*1024+8;  img[widx] = D2_INO;
+        widx=8*1024+9;  img[widx] = (D2_FTYPE<<24)|(D2_NLEN<<16)|D_RECLEN;
+        widx=8*1024+10; img[widx] = D2_NAME;
+        // entry3 = 块尾(ino=0)
 
         #30 rst_n=1; #10;
         blk_fd_ready=1;
@@ -180,22 +188,34 @@ module tb_ext4_scan;
             $display("FAIL ee_start: got %0h want %0h", re_start, ROOT_ESTART); errc=errc+1;
         end else $display("PASS ee_start=%0d", re_start);
 
-        // ---- 阶段3: 目录块首条目 ----
-        if (d_ino!==D_INO) begin
-            $display("FAIL d_ino: got %0h want %0h", d_ino, D_INO); errc=errc+1;
-        end else $display("PASS d_ino=%0d", d_ino);
-        if (d_ftype!==D_FTYPE) begin
-            $display("FAIL d_ftype: got %0h want %0h", d_ftype, D_FTYPE); errc=errc+1;
-        end else $display("PASS d_ftype=%0h", d_ftype);
-        if (d_namelen!==D_NAMELEN) begin
-            $display("FAIL d_namelen: got %0d want %0d", d_namelen, D_NAMELEN); errc=errc+1;
-        end else $display("PASS d_namelen=%0d", d_namelen);
-        if (d_name!==D_NAME) begin
-            $display("FAIL d_name: got %0h want %0h", d_name, D_NAME); errc=errc+1;
-        end else $display("PASS d_name=%0h", d_name);
+        // ---- 阶段4: 目录块逐条枚举 ----
+        if (o_cnt!==3) begin
+            $display("FAIL out_count: got %0d want %0d", o_cnt, 3); errc=errc+1;
+        end else $display("PASS out_count=%0d", o_cnt);
+        if (o_ino[0]!==D0_INO) begin
+            $display("FAIL e0 ino: %0h want %0h", o_ino[0], D0_INO); errc=errc+1;
+        end else $display("PASS e0 ino=%0d", o_ino[0]);
+        if (o_name3[0]!==D0_NAME) begin
+            $display("FAIL e0 name"); errc=errc+1;
+        end else $display("PASS e0 name=%0h", o_name3[0]);
+        if (o_ftype[0]!==D0_FTYPE) begin
+            $display("FAIL e0 ftype"); errc=errc+1;
+        end else $display("PASS e0 ftype=%0h", o_ftype[0]);
+        if (o_ino[1]!==D1_INO) begin
+            $display("FAIL e1 ino"); errc=errc+1;
+        end else $display("PASS e1 ino=%0d", o_ino[1]);
+        if (o_name3[1]!==D1_NAME) begin
+            $display("FAIL e1 name"); errc=errc+1;
+        end else $display("PASS e1 name=%0h", o_name3[1]);
+        if (o_ino[2]!==D2_INO) begin
+            $display("FAIL e2 ino"); errc=errc+1;
+        end else $display("PASS e2 ino=%0d", o_ino[2]);
+        if (o_name3[2]!==D2_NAME) begin
+            $display("FAIL e2 name"); errc=errc+1;
+        end else $display("PASS e2 name=%0h", o_name3[2]);
 
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段3 目录块首条目(ino/ftype/name_len/name) 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段4 目录块逐条枚举(3条目→结果表) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
