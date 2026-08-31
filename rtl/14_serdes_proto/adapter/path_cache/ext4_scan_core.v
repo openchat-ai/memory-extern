@@ -97,7 +97,8 @@ module ext4_scan_core #(
                S_DMETCH=31, S_DMSCAN=32, S_DMREQ=33, S_DMWAIT=34, S_DMFILL=35, S_DMFILLP=36,
                S_DBRQ=37, S_DBWAIT=38, S_DBFILL=39, S_DBFILLP=40, S_DBLOOP=41,
                S_DMREQ2=42, S_DMWAIT2=43, S_DMFILL2=44, S_DMFILLP2=45, S_DMEXT=46,
-               S_DONE=47;
+               S_SIREQ=47, S_SIWAIT=48, S_SIFILL=49, S_SIP=50,
+               S_DONE=51;
     reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
@@ -120,6 +121,11 @@ module ext4_scan_core #(
     reg [15:0] sentries;
     // 阶段10: 多层下钻深度计数
     reg [3:0] cdepth;
+    // 阶段12: 索引块多路遍历(遍历索引块全部 ei_leaf)
+    reg si;                                // 当前索引块内索引项游标
+    reg [15:0] sientries;                  // 当前索引块条目数
+    reg sinidx;                            // 是否正处索引块多路遍历中
+    reg [NB-1:0] sidx_blk_r;               // 当前索引块号(下钻返回重读用)
     // 阶段11: 一级子目录递归
     reg [31:0] subdir_ino_r;      // 子目录 inode 号
     reg [NB-1:0] subd_blk_r;      // 子目录数据块号
@@ -146,6 +152,7 @@ module ext4_scan_core #(
             itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
             fidx<=0; ext_count_o<=0;
             cur_ino_r<=0; sleaf<=0; sentries<=0; cdepth<=0;
+            si<=0; sientries<=0; sinidx<=0; sidx_blk_r<=0;
             subdir_ino_r<=0; subd_blk_r<=0; subd_cnt<=0; sdcur<=0; sdpos<=0;
             qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
             qebe<=0; qelen<=0; qestart<=0;
@@ -395,16 +402,24 @@ module ext4_scan_core #(
                 end
                 // 子块 extent 头 @word0(magic低16/entries高16) word1(depth高16)
                 // 叶 @word3 + i*3: ee_block; word4+ 低16 ee_len; word5+ ee_start
-                // 阶段10: 子块若是索引块(depth>0)则继续下钻第一索引项(ei_leaf=word4)
+                // 阶段10/12: 索引块(depth>0)首次进入 → 多路遍历全部索引项(ei_leaf)
                 S_SUBP: begin
                     if (wbuf[1][31:16]!=0) begin
-                        // 索引子块 → 下钻第一索引项 ei_leaf
-                        if (cdepth+1>=MAXDEPTH) begin
-                            err<=1; st<=S_DONE;
+                        if (sinidx==0) begin
+                            if (cdepth+1>=MAXDEPTH) begin
+                                err<=1; st<=S_DONE;
+                            end else begin
+                                sinidx <= 1;
+                                si <= 0;
+                                sientries <= wbuf[0][31:16];
+                                sidx_blk_r <= subblk_r;       // 保存索引块号(重读用)
+                                subblk_r   <= wbuf[4][15:0];  // 下钻索引项0 的 ei_leaf
+                                cdepth <= cdepth + 1;
+                                st <= S_SUBREQ;
+                            end
                         end else begin
-                            subblk_r <= wbuf[4][15:0];
-                            cdepth   <= cdepth + 1;
-                            st <= S_SUBREQ;
+                            // 遍历中再遇索引块(嵌套加深, 暂不支撑) — 防御报错
+                            err<=1; st<=S_DONE;
                         end
                     end else begin
                         // 叶子块(阶段9 原逻辑)
@@ -419,8 +434,12 @@ module ext4_scan_core #(
                 // 阶段9: 遍历子块全部叶(索引文件递归收集)
                 S_SUBLF: begin
                     if (sleaf>=sentries) begin
-                        fidx <= fidx + 1;
-                        st <= S_EXT_LOOP;
+                        if (sinidx) begin
+                            st <= S_SIREQ;           // 阶段12: 重读索引块取下一索引项
+                        end else begin
+                            fidx <= fidx + 1;
+                            st <= S_EXT_LOOP;
+                        end
                     end else begin
                         ext_ino_o[ext_count_o]    <= cur_ino_r;
                         ext_ebe_o[ext_count_o]    <= wbuf[3 + sleaf*3];
@@ -432,6 +451,42 @@ module ext4_scan_core #(
                         ram_estart[ext_count_o]   <= wbuf[5 + sleaf*3];
                         ext_count_o               <= ext_count_o + 1;
                         sleaf <= sleaf + 1;
+                    end
+                end
+
+                // 阶段12: 重读索引块, 取下一个索引项 ei_leaf 继续下钻(或直接退出)
+                S_SIREQ: begin
+                    blk_fd_blk <= sidx_blk_r;
+                    req_blk    <= sidx_blk_r;
+                    blk_fd_req <= 1;
+                    st <= S_SIWAIT;
+                end
+                S_SIWAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0;
+                        beat <= 0;
+                        st <= S_SIFILL;
+                    end
+                end
+                S_SIFILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            st <= S_SIP;
+                        end else beat<=beat+1;
+                    end
+                end
+                S_SIP: begin
+                    if (si+1>=sientries) begin
+                        // 全部索引项处理完 → 退出多路, 回主循环
+                        sinidx <= 0;
+                        fidx <= fidx + 1;
+                        st <= S_EXT_LOOP;
+                    end else begin
+                        // 下钻下一个索引项 si+1 的 ei_leaf
+                        si <= si + 1;
+                        subblk_r <= wbuf[3 + (si+1)*3 + 1][15:0];
+                        st <= S_SUBREQ;
                     end
                 end
 
