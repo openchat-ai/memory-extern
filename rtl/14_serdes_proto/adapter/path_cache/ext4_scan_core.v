@@ -17,7 +17,8 @@ module ext4_scan_core #(
     parameter NB    = 16,     // 块号位宽
     parameter DATAW = 32,     // 数据拍位宽(4 字节)
     parameter NBEAT = 1024,   // 每块拍数(4096/4)
-    parameter MAXENT = 4,     // 目录块可枚举的最大条目数
+    parameter MAXENT = 4,     // 目录块可枚举的最大条目数(根目录/子目录各自)
+    parameter TABN   = 8,     // 收集映射表容量(含递归展开, >MAXENT)
     parameter MAXDEPTH = 4    // extent 索引递归最大下钻深度(防死循环)
 )(
     input  wire             clk, rst_n,
@@ -64,17 +65,17 @@ module ext4_scan_core #(
     output reg [15:0]  s_elen_o,
     output reg [31:0]  s_estart_o,
     // 阶段7: 全文件 inode → 内联叶收集成"文件→物理块"映射表
-    output reg [31:0]  ext_ino_o    [0:MAXENT-1],
-    output reg [31:0]  ext_ebe_o    [0:MAXENT-1],
-    output reg [15:0]  ext_elen_o   [0:MAXENT-1],
-    output reg [31:0]  ext_estart_o [0:MAXENT-1],
-    output reg [$clog2(MAXENT+1)-1:0] ext_count_o,
+    output reg [31:0]  ext_ino_o    [0:TABN-1],
+    output reg [31:0]  ext_ebe_o    [0:TABN-1],
+    output reg [15:0]  ext_elen_o   [0:TABN-1],
+    output reg [31:0]  ext_estart_o [0:TABN-1],
+    output reg [$clog2(TABN+1)-1:0] ext_count_o,
 
     // ---- 阶段8: 外置表 RAM(扫描写入, 供 cache 查询) ----
-    output reg [31:0]  ram_ino    [0:MAXENT-1],
-    output reg [31:0]  ram_ebe    [0:MAXENT-1],
-    output reg [15:0]  ram_elen   [0:MAXENT-1],
-    output reg [31:0]  ram_estart [0:MAXENT-1],
+    output reg [31:0]  ram_ino    [0:TABN-1],
+    output reg [31:0]  ram_ebe    [0:TABN-1],
+    output reg [15:0]  ram_elen   [0:TABN-1],
+    output reg [31:0]  ram_estart [0:TABN-1],
     // 查询请求(扫描完成后): 按 ino 线性查找, 返回文件→物理块段
     input  wire             qreq,
     input  wire [NB-1:0]    qino,
@@ -92,7 +93,11 @@ module ext4_scan_core #(
                S_FILEREQ=18, S_FILEWAIT=19, S_FILEFILL=20, S_FILEP=21,
                S_SUBREQ=22, S_SUBWAIT=23, S_SUBFILL=24, S_SUBP=25,
                S_EXT_REQ=26, S_EXT_WAIT=27, S_EXT_FILL=28, S_EXT_LOOP=29,
-               S_SUBLF=30, S_DONE=31;
+               S_SUBLF=30,
+               S_DMETCH=31, S_DMSCAN=32, S_DMREQ=33, S_DMWAIT=34, S_DMFILL=35, S_DMFILLP=36,
+               S_DBRQ=37, S_DBWAIT=38, S_DBFILL=39, S_DBFILLP=40, S_DBLOOP=41,
+               S_DMREQ2=42, S_DMWAIT2=43, S_DMFILL2=44, S_DMFILLP2=45, S_DMEXT=46,
+               S_DONE=47;
     reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
@@ -115,9 +120,16 @@ module ext4_scan_core #(
     reg [15:0] sentries;
     // 阶段10: 多层下钻深度计数
     reg [3:0] cdepth;
+    // 阶段11: 一级子目录递归
+    reg [31:0] subdir_ino_r;      // 子目录 inode 号
+    reg [NB-1:0] subd_blk_r;      // 子目录数据块号
+    reg [31:0] subd_ino [0:MAXENT-1];  // 子目录内文件 ino 列表
+    reg [$clog2(MAXENT+1)-1:0] subd_cnt;
+    reg [$clog2(MAXENT+1)-1:0] sdcur;  // 子文件收集游标
+    reg [15:0] sdpos;             // 子目录块枚举游标
     // 阶段8: 查询 FSM(独立于扫描主 FSM)
     reg qst;
-    reg [$clog2(MAXENT+1)-1:0] qi;
+    reg [$clog2(TABN+1)-1:0] qi;
     // 阶段4: 目录块枚举游标
     reg [15:0] dpos;
     reg [$clog2(MAXENT+1)-1:0] idx;
@@ -134,6 +146,7 @@ module ext4_scan_core #(
             itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
             fidx<=0; ext_count_o<=0;
             cur_ino_r<=0; sleaf<=0; sentries<=0; cdepth<=0;
+            subdir_ino_r<=0; subd_blk_r<=0; subd_cnt<=0; sdcur<=0; sdpos<=0;
             qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
             qebe<=0; qelen<=0; qestart<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
@@ -147,8 +160,11 @@ module ext4_scan_core #(
             s_ebe_o<=0; s_elen_o<=0; s_estart_o<=0;
             for (k=0;k<MAXENT;k=k+1) begin
                 out_ino[k]<=0; out_ftype[k]<=0; out_nlen[k]<=0; out_name3[k]<=0;
+            end
+            for (k=0;k<TABN;k=k+1) begin
                 ext_ino_o[k]<=0; ext_ebe_o[k]<=0; ext_elen_o[k]<=0;
                 ext_estart_o[k]<=0;
+                ram_ino[k]<=0; ram_ebe[k]<=0; ram_elen[k]<=0; ram_estart[k]<=0;
             end
         end else begin
             case (st)
@@ -445,7 +461,10 @@ module ext4_scan_core #(
                 //   depth=0 内联叶 → ext_*[fidx]   (depth>0 索引文件跳过)
                 S_EXT_LOOP: begin
                     if (fidx>=out_count) begin
-                        st <= S_DONE;
+                        st <= S_DMETCH;
+                    end else if (out_ftype[fidx]==8'd2) begin
+                        fidx <= fidx + 1;          // 跳过子目录条目(阶段11 单独递归)
+                        st <= S_EXT_LOOP;
                     end else begin
                         if (wbuf[(((out_ino[fidx]-1)&15)*64)+11][31:16]==0) begin
                             ext_ino_o[ext_count_o]    <= out_ino[fidx];
@@ -466,6 +485,125 @@ module ext4_scan_core #(
                             cdepth <= 0;
                             st <= S_SUBREQ;
                         end
+                    end
+                end
+
+                // ===== 阶段11: 一级子目录递归 =====
+                // S_DMETCH/SCAN: 在根 out_ftype 里找第一个 type=2(目录) 条目
+                S_DMETCH: begin
+                    sdcur <= 0;
+                    st <= S_DMSCAN;
+                end
+                S_DMSCAN: begin
+                    if (sdcur>=out_count || out_ftype[sdcur]==8'd2) begin
+                        if (sdcur>=out_count) begin
+                            st <= S_DONE;                       // 无子目录
+                        end else begin
+                            subdir_ino_r <= out_ino[sdcur];
+                            st <= S_DMREQ;                      // 读块4 取子目录数据块
+                        end
+                    end else begin
+                        sdcur <= sdcur + 1;
+                    end
+                end
+                S_DMREQ: begin
+                    blk_fd_blk <= itbl_r; req_blk <= itbl_r;
+                    blk_fd_req <= 1;
+                    st <= S_DMWAIT;
+                end
+                S_DMWAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0; beat <= 0;
+                        st <= S_DMFILL;
+                    end
+                end
+                S_DMFILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            st <= S_DMFILLP;
+                        end else beat<=beat+1;
+                    end
+                end
+                S_DMFILLP: begin
+                    // 子目录 inode 内联叶(depth=0) → 数据块 = ee_start(word+15)
+                    subd_blk_r <= wbuf[(((subdir_ino_r-1)&15)*64)+15];
+                    sdcur <= 0; subd_cnt <= 0;
+                    st <= S_DBRQ;
+                end
+                S_DBRQ: begin
+                    blk_fd_blk <= subd_blk_r; req_blk <= subd_blk_r;
+                    blk_fd_req <= 1;
+                    st <= S_DBWAIT;
+                end
+                S_DBWAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0; beat <= 0;
+                        st <= S_DBFILL;
+                    end
+                end
+                S_DBFILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            st <= S_DBFILLP;
+                        end else beat<=beat+1;
+                    end
+                end
+                S_DBFILLP: begin
+                    sdpos <= 0;
+                    st <= S_DBLOOP;
+                end
+                // 枚举子目录块内条目(同 dir_entry2 格式), 收集 ftype=1 文件
+                S_DBLOOP: begin
+                    if (sdpos>=1024 || subd_cnt>=MAXENT ||
+                        wbuf[sdpos>>2]==0) begin
+                        st <= S_DMREQ2;            // 去收集子文件 extent
+                    end else begin
+                        if (wbuf[(sdpos>>2)+1][31:24]==8'd1) begin
+                            subd_ino[subd_cnt] <= wbuf[sdpos>>2];
+                            subd_cnt <= subd_cnt + 1;
+                        end
+                        sdpos <= sdpos + wbuf[(sdpos>>2)+1][15:0];
+                    end
+                end
+                S_DMREQ2: begin
+                    blk_fd_blk <= itbl_r; req_blk <= itbl_r;
+                    blk_fd_req <= 1; sdcur <= 0;
+                    st <= S_DMWAIT2;
+                end
+                S_DMWAIT2: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0; beat <= 0;
+                        st <= S_DMFILL2;
+                    end
+                end
+                S_DMFILL2: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            st <= S_DMFILLP2;
+                        end else beat<=beat+1;
+                    end
+                end
+                S_DMFILLP2: begin
+                    st <= S_DMEXT;
+                end
+                // 子目录文件: 解析内联叶(depth=0) 续写 ext/RAM 表
+                S_DMEXT: begin
+                    if (sdcur>=subd_cnt) begin
+                        st <= S_DONE;
+                    end else begin
+                        ext_ino_o[ext_count_o]    <= subd_ino[sdcur];
+                        ext_ebe_o[ext_count_o]    <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+13];
+                        ext_elen_o[ext_count_o]   <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+14][15:0];
+                        ext_estart_o[ext_count_o] <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+15];
+                        ram_ino[ext_count_o]      <= subd_ino[sdcur];
+                        ram_ebe[ext_count_o]      <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+13];
+                        ram_elen[ext_count_o]     <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+14][15:0];
+                        ram_estart[ext_count_o]   <= wbuf[(((subd_ino[sdcur]-1)&15)*64)+15];
+                        ext_count_o               <= ext_count_o + 1;
+                        sdcur <= sdcur + 1;
                     end
                 end
 
