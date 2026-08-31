@@ -229,7 +229,7 @@ rtl/14_serdes_proto/
   所有目录**, 收集每个文件的 extent, 汇总成文件→LBA 映射(不筛选文件)。
 
 ### RTL ext4 扫描器(ext4_scan_core, 逐级扩展中)
-- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-16**:
+- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-17**:
   窄总线(32bit×NBEAT=1024 拍=4096B/块)从块流灌入——阶段1 解析 superblock
   (`blocks_per_grp`/`inodes_per_grp`/`inode_size`, 块0 偏移1024=字256) 与组0 描述符
   (`inode_table_blk`, 块1); **阶段2** 循 inode 表块读根 inode(2), 采出 `i_mode`/
@@ -284,9 +284,18 @@ rtl/14_serdes_proto/
   说明: 收集表容量用独立参数 TABN(默认8, 须 >MAXENT 以容纳递归展开), 目录枚举容量仍 MAXENT
   (每层各自), 目录栈深度参数 NDEP; per_block 仍硬编码=16(isz=256), ipg 由 superblock 运行时读入;
   同一目录的多个文件 inode 假设同块(额外跨块文件需独立层读)。
+  **阶段17** 把 `ext4_scan` **实际例化接线进缓存管线** — 新建 `cache_lba_top.v` 同时例化
+  `ext4_scan_core U_scan` 与 `cachectl_pipeline U_pipe`: reset 后 T_FSM 自动拉 scan_go 扫描块源,
+  done 后 TSP 遍历 ext4_scan 的 RAM 表挑出 FILE_INO 目标文件的 extent 段, 转录 FSM(TF0/TF1 逐帧)
+  把 `{part_lba, EXT[k] base/cnt, F[0] base/size}` 写成 CMD_CFG_LBA(0x50) 双击帧打进
+  `U_pipe.cmd_b`(独占 cmd_b, 外部命令走 cmd_a 互斥) — 即把"宿主工具手动预配 file2lba"换成
+  **ext4_scan 扫描结果自动转录**, 转录完 lba_ready=1; 之后管线权重字流每字 tag=文件内块号,
+  `U_pipe` 的 file2lba 组合直出绝对物理 LBA(wt_lba) 供真机按地址读盘。仿真实例天然覆盖 ino14
+  (多索引叶): 叶0(逻辑0,estart300,len1)+叶1(逻辑1-2,estart310,len2), tag=0→part+300、
+  tag=1→part+310、tag=2→part+311 — **"扫描→索引→转录→查询→读地址"完整模块层级链路闭合**。
   后续按序扩展: 多层索引**嵌套+多路**(当前多路只针对单层索引块)→大文件 i_extra/indirect+extent
-  混合→同一目录多文件跨 inode 块收集→**cache 管线实际例化接线**(本例已验证查询闭环, 真机接线
-  待绑板)。
+  混合→同一目录多文件跨 inode 块收集→多文件目录转录(当前转录固定 FILE_INO 单文件, 递推全文件
+  目录需扩展 TSP 遍历 RAM 表所有 inode)→真机绑板接线。
 - 字段抽取用**32 位字数组 wbuf** + 顶取字组合读(规避这版 iverilog 对 `always@(*)` 内数组读的
   组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组); 遍历用 `wbuf[dpos>>2]`
   位移索引(iverilog 验证可行); 阶段7 动态 inode word 用 `((ino-1)&15)*64` 求模定位(迭代读
@@ -299,7 +308,7 @@ rtl/14_serdes_proto/
 > 简化(仿真范围): 真实 NVMe/M.2 读盘需 NVMe 协议栈,本实现用"外部字流桩"模拟磁盘块;
 > trunk 视为永久驻留(冷数据由 HDD 提供),专家 LRU 部门已做实(命中/替换/动态更新/统计)。
 
-## 9. 验证现状(sim.sh 一键回归 18/18 ALL GREEN)
+## 9. 验证现状(sim.sh 一键回归 19/19 ALL GREEN)
 
 | # | 测试 | 覆盖 |
 |---|------|------|
@@ -321,6 +330,7 @@ rtl/14_serdes_proto/
 | 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV+文件→LBA(冷首访/重访/trunk/更新/主机路径) |
 | 17 | file2lba | 多文件句柄→LBA: 分区起始+全局extent表+文件目录+跨段+越界+动态重配 |
 | 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode → 阶段3/4 目录rec_len枚举→结果表 → 阶段7 全文件收集 → 阶段9/10 索引多层递归下钻多叶(MAXDEPTH) → 阶段12 索引块多路遍历(全部 ei_leaf) → 阶段11 一级子目录递归 → 阶段13 跨多块 inode 表 → 阶段14 多 blk_groups 定位(GDT多组域+ipg) → 阶段15 任意层级目录递归(目录栈) → 阶段16 查询闭环(qblk跨extent累积→绝对LBA+越界fault) → 阶段8 落外置表RAM+查询FSM |
+| 19 | cache_lba_top | 阶段17 例化接线: ext4_scan_core+cachectl_pipeline 同层, reset 自动扫描→读 RAM 表→转录 FSM 把 FILE_INO 目标文件 extent 写成 file2lba 配置帧(打 cmd_b)→lba_ready 后管线 tag=文件块号直出绝对 LBA(ino14 多叶 0→+300/1→+310/2→+311) — 扫描→索引→转录→查询→读地址 全链路闭合 |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据
