@@ -229,23 +229,26 @@ rtl/14_serdes_proto/
   所有目录**, 收集每个文件的 extent, 汇总成文件→LBA 映射(不筛选文件)。
 
 ### RTL ext4 扫描器(ext4_scan_core, 逐级扩展中)
-- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-6**:
+- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-7**:
   窄总线(32bit×NBEAT=1024 拍=4096B/块)从块流灌入——阶段1 解析 superblock
   (`blocks_per_grp`/`inodes_per_grp`/`inode_size`, 块0 偏移1024=字256) 与组0 描述符
   (`inode_table_blk`, 块1); **阶段2** 循 inode 表块读根 inode(2), 采出 `i_mode`/
   `i_size`/extent 头(magic+F30A/entries)/首 extent(`ee_block/ee_len/ee_start`);
   **阶段3/4** 循根目录首 extent 指向的数据块, 用**字节游标(dpos)按 rec_len 逐条遍历**
   `dir_entry2`, 枚举全部有效条目(遇 `ino==0`/越界/满 MAXENT 停)写进**结果表
-  (out_ino/out_ftype/out_name/out_count, MAXENT 可配)**; **阶段5** 对枚举出的**首个文件
-  inode**(取 out_ino[0])重新读 inode 表块, 解析其 **depth=0 内联叶**, 输出
-  `f_ebe/f_elen/f_estart`(文件逻辑块→物理块段); **阶段6** 处理 **depth>0 索引根**: 取索引
-  项 `ei_leaf` 指向的**子 extent 块**(S_SUBREQ/WAIT/FILL/P), 读该子块并在其内联叶上输出
-  `s_ebe/s_elen/s_estart`(真正数据物理块), 完成"索引→子块→叶"递归的 depth-1 闭合 →
-  "文件名→inode→extent→物理块"的 RTL 落点与 `file2lba`/`ext4_lba.py` 对齐。
-  后续按序扩展: extent **多层深度递归**(>1)/整表收集→多目录递归→写外置表 RAM。
+  (out_ino/out_ftype/out_name/out_count, MAXENT 可配)**; **阶段5/6** 演示单文件 inode
+  extent 解析(depth0 内联叶 `f_*` / depth>0 索引递归 `s_*`, 见历史提交); **阶段7** 读
+  inode 表块**一次**, 以 `(ino-1)%16*64` 动态定位每个文件 inode 的块内 word, 遍历结果表
+  全部文件、**depth=0 内联叶逐个收集**成"文件→物理块"映射表 `ext_ino/ext_ebe/ext_elen/
+  ext_estart + ext_count`(depth>0 索引文件跳过)——这是最终通用路径, 取代阶段5/6 的单文件
+  演示(其端口/状态保留在 core 但不再被主流程触发)。→"文件名→inode→extent→物理块"
+  的 RTL 落点与 `file2lba`/`ext4_lba.py` 对齐。
+  后续按序扩展: 全文件 **extent 深度递归**(>0 也收集, 而非跳过)→多目录递归→写外置表 RAM 供
+  cache 管线查询。
 - 字段抽取用**32 位字数组 wbuf** + 顶取字组合读(规避这版 iverilog 对 `always@(*)` 内数组读的
   组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组); 遍历用 `wbuf[dpos>>2]`
-  位移索引(iverilog 验证可行)。**unpacked 数组端口需要 `-g2012`**(sim.sh 已用)。
+  位移索引(iverilog 验证可行); 阶段7 动态 inode word 用 `((ino-1)&15)*64` 求模定位(迭代读
+  `out_ino[fidx]` reg 数组时 `for`/时序动态索引可行)。**unpacked 数组端口需要 `-g2012`**(sim.sh 已用)。
 - **仿真范围(坦诚说明)**: 真机磁盘块读(NVMe 读引擎/138K 板)是硬前置且未到手, 当前
   只对合成镜像块流仿真验证; 完整 ext4 边角(内联数据/深层索引递归/跨块目录)工作量大、
   可验证性有限, 按"每阶段先编译+仿真通过再扩展"推进。
@@ -274,7 +277,7 @@ rtl/14_serdes_proto/
 | 15 | expert_dir | 专家 LRU 缓存目录: trunk 恒命中+LRU替换+动态更新 |
 | 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV+文件→LBA(冷首访/重访/trunk/更新/主机路径) |
 | 17 | file2lba | 多文件句柄→LBA: 分区起始+全局extent表+文件目录+跨段+越界+动态重配 |
-| 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode(2) → 阶段3/4 目录块rec_len逐条枚举→结果表 → 阶段5 文件inode内联叶 → 阶段6 索引(depth>0)递归子块→数据物理块 合成镜像闭环 |
+| 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode(2) → 阶段3/4 目录块rec_len逐条枚举→结果表 → 阶段7 全文件遍历(动态 inode word 定位)→"文件→物理块"映射表(索引文件跳过) 合成镜像闭环 |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据

@@ -61,7 +61,13 @@ module ext4_scan_core #(
     // 阶段6: depth>0 索引递归 → 子 extent 块叶输出
     output reg [31:0]  s_ebe_o,
     output reg [15:0]  s_elen_o,
-    output reg [31:0]  s_estart_o
+    output reg [31:0]  s_estart_o,
+    // 阶段7: 全文件 inode → 内联叶收集成"文件→物理块"映射表
+    output reg [31:0]  ext_ino_o    [0:MAXENT-1],
+    output reg [31:0]  ext_ebe_o    [0:MAXENT-1],
+    output reg [15:0]  ext_elen_o   [0:MAXENT-1],
+    output reg [31:0]  ext_estart_o [0:MAXENT-1],
+    output reg [$clog2(MAXENT+1)-1:0] ext_count_o
 );
 
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
@@ -71,7 +77,8 @@ module ext4_scan_core #(
                S_DIR_LOOP=17,
                S_FILEREQ=18, S_FILEWAIT=19, S_FILEFILL=20, S_FILEP=21,
                S_SUBREQ=22, S_SUBWAIT=23, S_SUBFILL=24, S_SUBP=25,
-               S_DONE=26;
+               S_EXT_REQ=26, S_EXT_WAIT=27, S_EXT_FILL=28, S_EXT_LOOP=29,
+               S_DONE=30;
     reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
@@ -86,6 +93,8 @@ module ext4_scan_core #(
     reg [NB-1:0] dir_blk_r;
     // 阶段6: 索引子 extent 块号
     reg [NB-1:0] subblk_r;
+    // 阶段7: 全文件收集游标/表号
+    reg [$clog2(MAXENT+1)-1:0] fidx;
     // 阶段4: 目录块枚举游标
     reg [15:0] dpos;
     reg [$clog2(MAXENT+1)-1:0] idx;
@@ -100,6 +109,7 @@ module ext4_scan_core #(
             st <= S_IDLE; busy<=0; done<=0; err<=0;
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
             itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
+            fidx<=0; ext_count_o<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
             inode_size_o<=0; inode_table_blk_o<=0;
             root_mode_o<=0; root_size_lo_o<=0;
@@ -111,6 +121,8 @@ module ext4_scan_core #(
             s_ebe_o<=0; s_elen_o<=0; s_estart_o<=0;
             for (k=0;k<MAXENT;k=k+1) begin
                 out_ino[k]<=0; out_ftype[k]<=0; out_nlen[k]<=0; out_name3[k]<=0;
+                ext_ino_o[k]<=0; ext_ebe_o[k]<=0; ext_elen_o[k]<=0;
+                ext_estart_o[k]<=0;
             end
         end else begin
             case (st)
@@ -259,7 +271,7 @@ module ext4_scan_core #(
                     if (dpos>=1024 || idx>=MAXENT ||
                         wbuf[dpos>>2]==0) begin
                         out_count <= idx;
-                        st <= S_FILEREQ;
+                        st <= S_EXT_REQ;
                     end else begin
                         out_ino[idx]   <= wbuf[dpos>>2];
                         out_ftype[idx] <= wbuf[(dpos>>2)+1][31:24];
@@ -346,6 +358,45 @@ module ext4_scan_core #(
                     s_elen_o   <= wbuf[4][15:0];
                     s_estart_o <= wbuf[5];
                     st <= S_DONE;
+                end
+
+                // 阶段7: 读 inode 表块一次, 遍历结果表全部文件 → 收集 depth=0 内联叶
+                S_EXT_REQ: begin
+                    blk_fd_blk <= itbl_r;
+                    req_blk    <= itbl_r;
+                    blk_fd_req <= 1;
+                    st <= S_EXT_WAIT;
+                end
+                S_EXT_WAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0;
+                        beat <= 0;
+                        st <= S_EXT_FILL;
+                    end
+                end
+                S_EXT_FILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            fidx<=0; ext_count_o<=0; st<=S_EXT_LOOP;
+                        end else beat<=beat+1;
+                    end
+                end
+                // 逐文件: word_base=((ino-1)%16)*64 (isz=256, per_block=16)
+                //   depth=0 内联叶 → ext_*[fidx]   (depth>0 索引文件跳过)
+                S_EXT_LOOP: begin
+                    if (fidx>=out_count) begin
+                        st <= S_DONE;
+                    end else begin
+                        if (wbuf[(((out_ino[fidx]-1)&15)*64)+11][31:16]==0) begin
+                            ext_ino_o[ext_count_o]    <= out_ino[fidx];
+                            ext_ebe_o[ext_count_o]    <= wbuf[(((out_ino[fidx]-1)&15)*64)+13];
+                            ext_elen_o[ext_count_o]   <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
+                            ext_estart_o[ext_count_o] <= wbuf[(((out_ino[fidx]-1)&15)*64)+15];
+                            ext_count_o               <= ext_count_o + 1;
+                        end
+                        fidx <= fidx + 1;
+                    end
                 end
 
                 S_DONE: begin
