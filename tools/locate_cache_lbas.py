@@ -204,13 +204,6 @@ def remap_file(full, rel, blksz):
     """
     size = os.path.getsize(full)
     nblocks = (size + blksz - 1) // blksz
-    dev = None
-    mount = os.path.ismount(os.path.dirname(full)) or None
-    # debugfs: 需要块设备路径, 而非挂载点。取该文件所在设备。
-    try:
-        m = re.match(r'^(\S+)', run(["stat", "-c", "%d", full]).strip())
-    except Exception:
-        m = None
     if not shutil_which("debugfs"):
         return [], False
     dev = first_device_for(full)
@@ -218,7 +211,6 @@ def remap_file(full, rel, blksz):
         return [], False
     extents = []
     try:
-        # 依次对每个逻辑块调用 bmap; 连续物理块合并为一段
         cur_start = cur_phys = None
         for blk in range(nblocks):
             out = run(["debugfs", "-R", "bmap %s %d" % (full, blk), dev])
@@ -239,6 +231,31 @@ def remap_file(full, rel, blksz):
         print("[debug] bmap 失败 %s: %s" % (rel, e), file=sys.stderr)
         return [], False
     return extents, True
+
+
+def offline_scan(blockdev, prefix_rel="", start_ino=2, blksz=4096):
+    """
+    纯 Python 离线解析块设备 ext4(不依赖挂载/debugfs)。
+    参数: blockdev 需为可读文件对象或路径。prefix_rel/start_ino 支持只扫子目录。
+    返回 "相对路径 -> [(逻辑块, 分区内物理块, 长度)]"(dict)。
+    """
+    import ext4_lba
+    close = False
+    fh = blockdev if hasattr(blockdev, "read") else None
+    if fh is None:
+        fh = open(blockdev, "rb")
+        close = True
+    try:
+        fs = ext4_lba.Ext4FS(fh)
+        fs.load()
+        results = fs.walk(start_ino, prefix_rel)
+        mapping = {}
+        for r in results:
+            mapping[r["path"]] = r["extents"]
+        return mapping, fs.blksz
+    finally:
+        if close:
+            fh.close()
 
 
 def first_device_for(full):
@@ -281,13 +298,20 @@ def build_snapshot(scan_dir, blksz, mapping, base_idx=0):
     files = {}
     gblk_cursor = 0
     for n in names:
-        size_blk = (os.path.getsize(os.path.join(scan_dir, n))
-                    + blksz - 1) // blksz
+        full = os.path.join(scan_dir, n)
+        # 文件块大小: 优先主机 stat; 离线(文件不在主机, 如纯磁盘解析)用
+        # extent 逻辑块长度总和。
+        if os.path.isfile(full):
+            size_blk = (os.path.getsize(full) + blksz - 1) // blksz
+            meta = list(file_meta(full))
+        else:
+            size_blk = sum(cnt for (_, _, cnt) in mapping[n])
+            meta = []
         files[n] = {
             "id": fids[n],
             "size": size_blk,
             "extents": [list(e) for e in mapping[n]],
-            "meta": file_meta(os.path.join(scan_dir, n)),
+            "meta": meta,
         }
         # 该文件 extents 由于块在文件内逻辑(extent 的第一项是文件内逻辑块),
         # 平移全局起点 = gblk_cursor
@@ -383,6 +407,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dev", help="磁盘设备(如 /dev/sda)")
     ap.add_argument("--scan", help="已挂载缓存目录(递归扫全部文件)")
+    ap.add_argument("--blockdev", help="离线解析块设备ext4镜像(如 /dev/nvme0n1p2; 纯Python,不需挂载)")
+    ap.add_argument("--start-ino", type=int, default=2,
+                    help="--blockdev 从哪个 inode 开始(默认2=分区根)")
     ap.add_argument("--blksz", type=int, default=DEFAULT_BLKSZ)
     ap.add_argument("--max-files", type=int, default=MAX_FILES)
     ap.add_argument("--json", default=DEFAULT_JSON, help="JSON 快照路径")
@@ -393,6 +420,31 @@ def main():
     ap.add_argument("--part-lba", type=lambda x: int(x, 0),
                     help="分区起始物理 LBA(写进快照/二进制)")
     args = ap.parse_args()
+
+    # ---- 离线解析块设备(纯 Python, 不需挂载/不需 debugfs) ----
+    if args.blockdev:
+        mapping, blksz = offline_scan(args.blockdev, prefix_rel="",
+                                      start_ino=args.start_ino,
+                                      blksz=args.blksz)
+        if not mapping:
+            print("错误: 离线解析未找到文件(检查 --blockdev 是否可读/是否为 ext4)",
+                  file=sys.stderr)
+            sys.exit(3)
+        print("[info] 离线解析到 %d 个常规文件 (blksz=%d)" %
+              (len(mapping), blksz), file=sys.stderr)
+        scan_dir = "/"            # 占位(离线无挂载点, 快照 file 相对路径来自磁盘)
+        snap = build_snapshot(scan_dir, blksz, mapping)
+        snap["part_lba"] = args.part_lba
+        if args.no_save:
+            print(json.dumps(snap, indent=2, ensure_ascii=False))
+            return
+        with open(args.json, "w") as fh:
+            json.dump(snap, fh, indent=2, ensure_ascii=False)
+        dump_binary(snap, args.bin)
+        print("[info] 快照已存: JSON=%s  BIN=%s" % (args.json, args.bin),
+              file=sys.stderr)
+        print(json.dumps(snap, indent=2, ensure_ascii=False))
+        return
 
     # 1) 定位缓存分区/扫描目录 + 分区起始 LBA
     part_lba = args.part_lba
