@@ -209,15 +209,22 @@ rtl/14_serdes_proto/
   - 统计: 每拍 `src_valid` 按 trunk/hit/miss 计数; miss 同拍 `misses++`+`loads++`。
 
 ### 文件→LBA 接口(file2lba, 真机按地址读盘)
-- 背景: 缓存磁盘多为分区, 缓存文件落在**最大的 ext4 分区**。RTL 只能按磁盘 LBA
-  读块, 需把"文件逻辑块号"翻译成物理 LBA。`pipeline` 每字 tag 作块号, 组合直出
-  伴随 `wt_lba`(与权重同拍), `lba_fault` 标越界。
+- 背景: 缓存磁盘多为分区, 缓存文件落在**最大的 ext4 分区**的多个目录下。RTL 只能
+  按磁盘 LBA 读块, 需把"(文件句柄, 文件内块号)"翻译成物理 LBA。`pipeline` 每字
+  tag 作文件内块号, 组合直出伴随 `wt_lba`(与权重同拍), `lba_fault` 标越界。
 - `file2lba` 表(宿主工具解析分区/ext4 后经命令帧写入):
   - `part_lba`: 缓存分区起始物理 LBA(高16+低32 两次配)。
-  - extent 段表: 每段 = 分区内相对 `base_lba`+`cnt`; 逻辑起点依次累加。
-  - 查询: 物理 LBA = `part_lba + 段base + (块号 - 段起点)`; 越界 fault=1。
+  - **extent 段表(全局拼接)**: 每段 = 分区内相对 `base_lba`+`cnt`; 逻辑起点依次
+    累加, 覆盖所有文件的全部 extent。
+  - **文件目录(多文件句柄)**: `F[f].base`(该文件在全局逻辑块空间中起点)+`size`
+    (文件块数判界)。
+  - 查询: `gblk = F[f].base + 文件内块号`; 物理 LBA = `part_lba + 段base +
+    (gblk - 段起点)`; 越界 fault=1(句柄越界/文件内块号超 size/未落入任何段)。
 - 命令帧: `CMD_CFG_LBA(0x50)` 共用命令流(帧头 `[15:8]=reg_addr` + 载荷 data),
-  与 `CMD_UPDATE_EXPERT(0x40)` 互不干扰(各解码器自挑帧)。
+  与 `CMD_UPDATE_EXPERT(0x40)` 互不干扰(各解码器自挑帧)。寄存器追加
+  `0x30+2f` base / `0x31+2f` base_hi / `0x40+f` size。
+- **宿主侧 `tools/locate_cache_lbas.py`**: 自动找最大 ext4 分区, **递归遍历分区下
+  所有目录**, 收集每个文件的 extent, 汇总成文件→LBA 映射(不筛选文件)。
 
 > 简化(仿真范围): 真实 NVMe/M.2 读盘需 NVMe 协议栈,本实现用"外部字流桩"模拟磁盘块;
 > trunk 视为永久驻留(冷数据由 HDD 提供),专家 LRU 部门已做实(命中/替换/动态更新/统计)。
@@ -242,7 +249,7 @@ rtl/14_serdes_proto/
 | 14 | path_cache | SSD 双路径自动识别+统一权重流+命令来源可切 |
 | 15 | expert_dir | 专家 LRU 缓存目录: trunk 恒命中+LRU替换+动态更新 |
 | 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV+文件→LBA(冷首访/重访/trunk/更新/主机路径) |
-| 17 | file2lba | 文件→LBA 映射: 分区起始+extent表+跨段+越界+动态重配 |
+| 17 | file2lba | 多文件句柄→LBA: 分区起始+全局extent表+文件目录+跨段+越界+动态重配 |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据
