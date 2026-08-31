@@ -229,7 +229,7 @@ rtl/14_serdes_proto/
   所有目录**, 收集每个文件的 extent, 汇总成文件→LBA 映射(不筛选文件)。
 
 ### RTL ext4 扫描器(ext4_scan_core, 逐级扩展中)
-- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-14**:
+- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-15**:
   窄总线(32bit×NBEAT=1024 拍=4096B/块)从块流灌入——阶段1 解析 superblock
   (`blocks_per_grp`/`inodes_per_grp`/`inode_size`, 块0 偏移1024=字256) 与组0 描述符
   (`inode_table_blk`, 块1); **阶段2** 循 inode 表块读根 inode(2), 采出 `i_mode`/
@@ -269,12 +269,17 @@ rtl/14_serdes_proto/
   `物理块 = gdt_itbl[grp] + (((ino-1)%ipg_r)>>4)`, `块内 word = (((ino-1)%ipg_r)&15)*64`;
   S_EXT_LOOP/S_DMREQ/S_DMREQ2 均按此, 并用 curi_blk_r 跟踪当前 wbuf 的 inode 表块,
   字段所需的 inode 表块不同则重读 — 支持真实分区 (inode 号动辄上万必然跨组) ——
+  **阶段15** 把"根+一级子目录"推广为 **任意层级目录递归(目录栈)**: 加入目录栈 dir_stk[]/stkp,
+  S_DMSCAN 一次把根目录所有 type2 条目**压栈**, 枚举任意目录块(S_DBLOOP)时遇 type2 内层子目录
+  也**压栈**(type1 记录待收 extent); S_DMPOP 弹栈取栈顶目录(跨组定位其数据块+枚举+收文件 extent),
+  S_DMEXT 收完一层文件后回 S_DMPOP 处理下一层, 栈空结束 — DFS 深度优先遍历任意深度目录树 ——
   即"文件 inode→物理块段"的可查询映射, 正是 `file2lba` 的"文件→LBA"查询在 RTL 的落点。
   →"文件名→inode→extent→物理块"闭合链完整, 与 `file2lba`/`ext4_lba.py` 对齐。
   说明: 收集表容量用独立参数 TABN(默认8, 须 >MAXENT 以容纳递归展开), 目录枚举容量仍 MAXENT
-  (根/子目录各自); per_block 仍硬编码=16(isz=256), ipg 由 superblock 运行时读入。
-  后续按序扩展: **任意层级目录递归**(目录栈 dirstk, 当前只一级)→多层索引**嵌套+多路**(当前
-  多路只针对单层索引块)→大文件 i_extra/indirect+extent 混合→cache 管线接入查询。
+  (每层各自), 目录栈深度参数 NDEP; per_block 仍硬编码=16(isz=256), ipg 由 superblock 运行时读入;
+  同一目录的多个文件 inode 假设同块(额外跨块文件需独立层读)。
+  后续按序扩展: 多层索引**嵌套+多路**(当前多路只针对单层索引块)→大文件 i_extra/indirect+extent
+  混合→同一目录多文件跨 inode 块收集→cache 管线接入查询。
 - 字段抽取用**32 位字数组 wbuf** + 顶取字组合读(规避这版 iverilog 对 `always@(*)` 内数组读的
   组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组); 遍历用 `wbuf[dpos>>2]`
   位移索引(iverilog 验证可行); 阶段7 动态 inode word 用 `((ino-1)&15)*64` 求模定位(迭代读
@@ -308,7 +313,7 @@ rtl/14_serdes_proto/
 | 15 | expert_dir | 专家 LRU 缓存目录: trunk 恒命中+LRU替换+动态更新 |
 | 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV+文件→LBA(冷首访/重访/trunk/更新/主机路径) |
 | 17 | file2lba | 多文件句柄→LBA: 分区起始+全局extent表+文件目录+跨段+越界+动态重配 |
-| 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode → 阶段3/4 目录rec_len枚举→结果表 → 阶段7 全文件收集 → 阶段9/10 索引多层递归下钻多叶(MAXDEPTH) → 阶段12 索引块多路遍历(全部 ei_leaf) → 阶段11 一级子目录递归 → 阶段13 跨多块 inode 表 → 阶段14 多 blk_groups 定位(GDT多组域+ipg) → 阶段8 落外置表RAM+查询FSM |
+| 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode → 阶段3/4 目录rec_len枚举→结果表 → 阶段7 全文件收集 → 阶段9/10 索引多层递归下钻多叶(MAXDEPTH) → 阶段12 索引块多路遍历(全部 ei_leaf) → 阶段11 一级子目录递归 → 阶段13 跨多块 inode 表 → 阶段14 多 blk_groups 定位(GDT多组域+ipg) → 阶段15 任意层级目录递归(目录栈) → 阶段8 落外置表RAM+查询FSM |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据

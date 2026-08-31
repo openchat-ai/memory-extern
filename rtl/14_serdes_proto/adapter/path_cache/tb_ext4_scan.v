@@ -73,6 +73,11 @@ module tb_ext4_scan;
     localparam S11_INO17_BLK = INODE_TABLE_G1;
     localparam S11_INO17_WORD = 0;
     localparam S11_INO18_WORD = 64;
+    // 阶段15: 子目录 sub1(ino20,块45) 内含内层子目录 subsub(ino21,type2,块46), 块46 含文件 ino19
+    localparam S15_INO_SS  = 32'd21;
+    localparam SUBDIR_BLK2 = 32'd46;        // sub2 数据块
+    localparam S15_INO19   = 32'd19;
+    localparam S15_EST19   = 32'h0000_0190; // 物理块 400
 
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
@@ -238,7 +243,32 @@ module tb_ext4_scan;
         widx=45*1024+4;  img[widx] = S11_INO16;
         widx=45*1024+5;  img[widx] = (32'h01<<24)|(32'h03<<16)|D_RECLEN;
         widx=45*1024+6;  img[widx] = 24'h79656B;                    // "key"
-        widx=45*1024+8;  img[widx] = 0;                             // 块尾
+        // 阶段15: 子目录 sub1(块45) 里还有内层子目录 subsub(ino21, type2)
+        widx=45*1024+8;  img[widx] = S15_INO_SS;                    // ino21
+        widx=45*1024+9;  img[widx] = (32'h02<<24)|(32'h05<<16)|D_RECLEN;  // type2
+        widx=45*1024+10; img[widx] = 24'h627573;                    // "bus"(subsub 首3字节)
+        widx=45*1024+12; img[widx] = 0;                             // 块尾
+
+        // 阶段15: 子目录 sub2(ino21) 数据块=46, 含文件 ino19(estart=400)
+        widx=46*1024+0;  img[widx] = S15_INO19;
+        widx=46*1024+1;  img[widx] = (32'h01<<24)|(32'h04<<16)|D_RECLEN;
+        widx=46*1024+2;  img[widx] = 24'h6669;                      // "fi" 前缀
+        widx=46*1024+4;  img[widx] = 0;                             // 块尾
+
+        // 阶段15: ino21(目录,数据块46) inode @ 组1 表块6 — word=((21-1)%16&15)*64=256
+        widx=INODE_TABLE_G1*1024+256; img[widx] = 16'h41ED;
+        widx=INODE_TABLE_G1*1024+266; img[widx] = (32'h0001<<16)|32'hF30A;
+        widx=INODE_TABLE_G1*1024+267; img[widx] = 0;
+        widx=INODE_TABLE_G1*1024+269; img[widx] = 0;
+        widx=INODE_TABLE_G1*1024+270; img[widx] = 16'd1;
+        widx=INODE_TABLE_G1*1024+271; img[widx] = SUBDIR_BLK2;      // ee_start=46
+        // 阶段15: ino19(文件,estart=400) inode @ 组1 表块6 — word=((19-1)%16&15)*64=128
+        widx=INODE_TABLE_G1*1024+128; img[widx] = 16'h81A4;
+        widx=INODE_TABLE_G1*1024+138; img[widx] = (32'h0001<<16)|32'hF30A;
+        widx=INODE_TABLE_G1*1024+139; img[widx] = 0;
+        widx=INODE_TABLE_G1*1024+141; img[widx] = 0;
+        widx=INODE_TABLE_G1*1024+142; img[widx] = 16'd1;
+        widx=INODE_TABLE_G1*1024+143; img[widx] = S15_EST19;        // estart=400
 
         // 阶段13: 子文件 inode 跨块 inode 表 — ino17 @ 块5 word0 (itbl+1), ino18 @ 块5 word64
         // ino17 depth=0 内联叶 → 物理块200
@@ -377,9 +407,9 @@ module tb_ext4_scan;
 
         // ---- 阶段7/9: 全文件收集 → "文件→物理块"映射表 ----
         // (阶段5 的单文件 ino12 映射已被全文件收集取代; 阶段9 对 ino14 索引递归2叶)
-        if (x_cnt!==6) begin
-            $display("FAIL ext_count: got %0d want 6 (含子目录2文件)", x_cnt); errc=errc+1;
-        end else $display("PASS ext_count=%0d (ino14 递归2叶 + 子目录2文件)", x_cnt);
+        if (x_cnt!==7) begin
+            $display("FAIL ext_count: got %0d want 7 (含2层子目录3文件)", x_cnt); errc=errc+1;
+        end else $display("PASS ext_count=%0d (ino14 递归2叶 + 两层子目录3文件)", x_cnt);
         if (x_ino[0]!==D0_INO) begin
             $display("FAIL ext[0] ino"); errc=errc+1;
         end else $display("PASS ext[0] ino=%0d", x_ino[0]);
@@ -433,6 +463,13 @@ module tb_ext4_scan;
         if (r_ino[5]!==S11_INO16 || r_estart[5]!==S11_EST16) begin
             $display("FAIL ram[5] 子文件16"); errc=errc+1;
         end else $display("PASS ram[5] 子文件16 estart=%0d", r_estart[5]);
+        // 阶段15: 内层子目录(ino21)里的文件 ino19 收进表+RAM
+        if (x_ino[6]!==S15_INO19 || x_estart[6]!==S15_EST19 || x_elen[6]!==1) begin
+            $display("FAIL ext[6] 内层文件19: ino=%0d est=%0h elen=%0d", x_ino[6], x_estart[6], x_elen[6]); errc=errc+1;
+        end else $display("PASS ext[6] 内层子目录文件 ino19 → estart=%0d len=%0d", x_estart[6], x_elen[6]);
+        if (r_ino[6]!==S15_INO19 || r_estart[6]!==S15_EST19) begin
+            $display("FAIL ram[6] 内层文件19"); errc=errc+1;
+        end else $display("PASS ram[6] 内层文件19 estart=%0d", r_estart[6]);
 
         // 查询 ino=13(dog) → 应返回 estart=48
         qino=13; qreq=1;
@@ -463,8 +500,17 @@ module tb_ext4_scan;
                      qvalid, qestart, qelen); errc=errc+1;
         end else $display("PASS query 跨块 inode 表子文件 ino17 → estart=%0d len=%0d", qestart, qelen);
 
+        // 查询内层子目录 ino=21 里的文件 ino=19 → estart=400
+        qino=S15_INO19; qreq=1;
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段14 多 blk_groups(ipg=16, GDT 组0表=块4/组1表=块6, ino17/18/20 跨组定位) + 全表/RAM/查询 全过");
+        qreq=0;
+        wait(qdone); #10;
+        if (qvalid!==1 || qestart!==S15_EST19) begin
+            $display("FAIL query ino19(内层子目录): valid=%0d est=%0h", qvalid, qestart); errc=errc+1;
+        end else $display("PASS query 内层子目录文件 ino19 → estart=%0d", qestart);
+
+        #20;
+        if (errc==0) $display("PASS: ext4_scan 阶段15 任意层级目录递归(目录栈: 根→ino20→内层ino21, 三层收集 ino12/13/14/17/18/19 全进表RAM可查询) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
