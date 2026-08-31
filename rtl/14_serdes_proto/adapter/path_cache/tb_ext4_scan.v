@@ -106,9 +106,13 @@ module tb_ext4_scan;
     wire [15:0] r_elen [0:7];
     reg qreq=0;
     reg [NB-1:0] qino=0;
+    reg [15:0] qblk=0;
     wire qbusy, qvalid, qdone;
     wire [31:0] qebe, qestart;
     wire [15:0] qelen;
+    wire [47:0] part_base = 48'h0010_0000_2334;   // 阶段16: 演示分区起始物理 LBA
+    wire [47:0] q_lba;
+    wire q_fault;
 
     integer errc=0;
 
@@ -166,9 +170,11 @@ module tb_ext4_scan;
         .ext_estart_o(x_estart), .ext_count_o(x_cnt),
         .ram_ino(r_ino), .ram_ebe(r_ebe), .ram_elen(r_elen),
         .ram_estart(r_estart),
-        .qreq(qreq), .qino(qino),
+        .qreq(qreq), .qino(qino), .qblk(qblk),
+        .part_base(part_base),
         .qbusy(qbusy), .qvalid(qvalid), .qdone(qdone),
-        .qebe(qebe), .qelen(qelen), .qestart(qestart)
+        .qebe(qebe), .qelen(qelen), .qestart(qestart),
+        .q_lba(q_lba), .q_fault(q_fault)
     );
 
     integer i;
@@ -509,8 +515,35 @@ module tb_ext4_scan;
             $display("FAIL query ino19(内层子目录): valid=%0d est=%0h", qvalid, qestart); errc=errc+1;
         end else $display("PASS query 内层子目录文件 ino19 → estart=%0d", qestart);
 
+        // ---- 阶段16: 扫描结果直接作查询源, (ino+块号)→绝对物理 LBA 闭环 ----
+        // ino14 两 extent: [逻辑0..0](len1, estart=300) + [逻辑1..2](len2, estart=310)
+        //   qblk=1 → 跨过第1段(q_off=1), 落到第2段 → LBA = part_base + 310 + (1-1)
+        qino=14; qblk=1; qreq=1;
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段15 任意层级目录递归(目录栈: 根→ino20→内层ino21, 三层收集 ino12/13/14/17/18/19 全进表RAM可查询) 全过");
+        qreq=0;
+        wait(qdone); #10;
+        if (qvalid!==1 || q_lba!==(part_base+310) || qestart!==G14_E1_ST) begin
+            $display("FAIL 阶段16 ino14 qblk=1: valid=%0d lba=%0h est=%0h", qvalid, q_lba, qestart); errc=errc+1;
+        end else $display("PASS 阶段16 ino14 qblk=1 → 绝对LBA=%0h (=part_base+310), qestart=%0d", q_lba, qestart);
+        //   qblk=0 → 第1段 → LBA = part_base + 300
+        qino=14; qblk=0; qreq=1;
+        #20;
+        qreq=0;
+        wait(qdone); #10;
+        if (qvalid!==1 || q_lba!==(part_base+300)) begin
+            $display("FAIL 阶段16 ino14 qblk=0: valid=%0d lba=%0h", qvalid, q_lba); errc=errc+1;
+        end else $display("PASS 阶段16 ino14 qblk=0 → 绝对LBA=%0h (=part_base+300)", q_lba);
+        // ino13 单 extent len1, qblk=3 超文件总长 → 越界 fault
+        qino=13; qblk=3; qreq=1;
+        #20;
+        qreq=0;
+        wait(qdone); #10;
+        if (q_fault!==1 || qvalid!==0) begin
+            $display("FAIL 阶段16 ino13 qblk=3 应越界: fault=%0d valid=%0d", q_fault, qvalid); errc=errc+1;
+        end else $display("PASS 阶段16 ino13 qblk=3 超范围 → q_fault=1 越界");
+
+        #20;
+        if (errc==0) $display("PASS: ext4_scan 阶段16 cache 查询闭环(扫描表→(ino+块号)→绝对物理LBA, 跨extent累积+越界fault) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end

@@ -77,13 +77,17 @@ module ext4_scan_core #(
     output reg [31:0]  ram_ebe    [0:TABN-1],
     output reg [15:0]  ram_elen   [0:TABN-1],
     output reg [31:0]  ram_estart [0:TABN-1],
-    // 查询请求(扫描完成后): 按 ino 线性查找, 返回文件→物理块段
+    // 查询请求(扫描完成后): 按 (qino, qblk=文件内块号) 跨 extent 累积 → 物理 LBA
     input  wire             qreq,
     input  wire [NB-1:0]    qino,
+    input  wire [15:0]      qblk,          // 阶段16: 文件内逻辑块号
+    input  wire [47:0]      part_base,     // 阶段16: 分区起始物理 LBA(绝对地址基准)
     output reg              qbusy, qvalid, qdone,
     output reg [31:0]       qebe,
     output reg [15:0]       qelen,
-    output reg [31:0]       qestart
+    output reg [31:0]       qestart,       // 命中 extent 的段起始(相对分区)
+    output reg [47:0]       q_lba,         // 阶段16: 绝对物理 LBA(part_base+estart+块内偏移)
+    output reg              q_fault        // 阶段16: 未找到 ino / 文件内块号超文件范围
 );
 
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
@@ -147,6 +151,7 @@ module ext4_scan_core #(
     // 阶段8: 查询 FSM(独立于扫描主 FSM)
     reg qst;
     reg [$clog2(TABN+1)-1:0] qi;
+    reg [31:0] q_off;        // 阶段16: 查询时文件内块号跨 extent 累积偏移
     // 阶段4: 目录块枚举游标
     reg [15:0] dpos;
     reg [$clog2(MAXENT+1)-1:0] idx;
@@ -167,8 +172,8 @@ module ext4_scan_core #(
             subdir_ino_r<=0; subd_blk_r<=0; subd_cnt<=0; sdcur<=0; sdpos<=0;
             ipg_r<=0; curi_blk_r<=0; grp_r<=0;
             stkp<=0;
-            qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
-            qebe<=0; qelen<=0; qestart<=0;
+            qst<=0; qi<=0; q_off<=0; qbusy<=0; qvalid<=0; qdone<=0;
+            qebe<=0; qelen<=0; qestart<=0; q_lba<=0; q_fault<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
             inode_size_o<=0; inode_table_blk_o<=0;
             root_mode_o<=0; root_size_lo_o<=0;
@@ -735,31 +740,40 @@ module ext4_scan_core #(
         end
     end
 
-    // ---- 阶段8: 独立查询 FSM — 按 ino 线性遍历外置表 RAM, 返回文件→物理块段 ----
+    // ---- 阶段8/16: 查询 FSM — 按 (qino, qblk) 线性遍历 RAM, 跨 extent 累积 → 绝对物理 LBA ----
     // 时序动态索引读 reg 数组(同 wbuf 模式)已验证可行; 避免组合 for 遍历(组合环 bug)。
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
-            qebe<=0; qelen<=0; qestart<=0;
+            qst<=0; qi<=0; q_off<=0; qbusy<=0; qvalid<=0; qdone<=0;
+            qebe<=0; qelen<=0; qestart<=0; q_lba<=0; q_fault<=0;
         end else begin
             case (qst)
                 0: begin
                     if (qreq && !qbusy) begin
-                        qbusy<=1; qi<=0; qvalid<=0; qdone<=0;
+                        qbusy<=1; qi<=0; q_off<=0; qvalid<=0; qdone<=0; q_fault<=0;
                         qst<=1;
                     end
                 end
                 1: begin
                     if (qi>=ext_count_o) begin
-                        qdone<=1; qbusy<=0; qst<=0;   // 未找到
+                        // 未找到 ino 或 qblk 超文件总长 → 越界
+                        q_fault<=1; qdone<=1; qbusy<=0; qst<=0;
                     end else if (ram_ino[qi]==qino) begin
-                        qvalid<=1; qdone<=1; qbusy<=0;
-                        qebe<=ram_ebe[qi];
-                        qelen<=ram_elen[qi];
-                        qestart<=ram_estart[qi];
-                        qst<=0;
+                        if (qblk < q_off + ram_elen[qi]) begin
+                            // 命中当前 extent: LBA = part_base + estart + (qblk - 本extent起点偏移)
+                            qvalid<=1; qdone<=1; qbusy<=0;
+                            qebe<=ram_ebe[qi];
+                            qelen<=ram_elen[qi];
+                            qestart<=ram_estart[qi];
+                            q_lba<=part_base + ram_estart[qi] + (qblk - q_off);
+                            qst<=0;
+                        end else begin
+                            // qblk 不在当前 extent → 跳过该段, 累积文件内偏移
+                            q_off <= q_off + ram_elen[qi];
+                            qi<=qi+1;
+                        end
                     end else begin
-                        qi<=qi+1;
+                        qi<=qi+1;                 // 其它 ino 的行, 跳过
                     end
                 end
             endcase
