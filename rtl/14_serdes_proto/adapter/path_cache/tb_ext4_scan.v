@@ -56,21 +56,23 @@ module tb_ext4_scan;
     localparam S12_LEAF0  = 32'd42;        // 索引项0 → 叶块42
     localparam S12_LEAF1  = 32'd43;        // 索引项1 → 叶块43
 
-    // 阶段11: 一级子目录 — 根目录含 ino20(subdir, ftype=2) → 数据块45
+    // 阶段11/13: 一级子目录 — 根目录含 ino20(subdir, ftype=2) → 数据块45
     localparam SUBDIR_INO = 32'd20;
     localparam SUBDIR_BLK = 32'd45;        // 子目录数据块
     // ino20 @ word (20-1)%16*64 = 3*64 = 192; 数据块 = ee_start(word 192+15=207)
     localparam SUBDIR_WORD = 192;
-    // 子目录内文件: ino15(mouse, estart=200) / ino16(key, estart=220)
-    localparam S11_INO15 = 32'd15;
+    // 子目录文件(跨块 inode 表): ino17(mouse, estart=200)@块5word0 / ino18(key, estart=220)@块5word64
+    localparam S11_INO15 = 32'd17;
     localparam S11_EST15 = 32'h0000_00C8;  // 物理块 200
     localparam S11_EL15  = 16'd1;
-    localparam S11_INO16 = 32'd16;
+    localparam S11_INO16 = 32'd18;
     localparam S11_EST16 = 32'h0000_00DC;  // 物理块 220
     localparam S11_EL16  = 16'd2;
-    // ino15 @ (15-1)%16*64=14*64=896; ino16 @ 15*64=960
-    localparam S11_INO15_WORD = 896;
-    localparam S11_INO16_WORD = 960;
+    // ino17 @ (17-1)/16=1 块偏移 -> 物理块 itbl+1=5, 块内 word ((17-1)&15)*64=0
+    // ino18 @ 同块5, 块内 word ((18-1)&15)*64=64
+    localparam S11_INO17_BLK = 5;
+    localparam S11_INO17_WORD = 0;
+    localparam S11_INO18_WORD = 64;
 
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
@@ -235,20 +237,21 @@ module tb_ext4_scan;
         widx=45*1024+6;  img[widx] = 24'h79656B;                    // "key"
         widx=45*1024+8;  img[widx] = 0;                             // 块尾
 
-        // ino15 inode @ word896 — depth=0 内联叶 → 物理块200
-        widx=4*1024+896; img[widx] = 16'h81A4;
-        widx=4*1024+906; img[widx] = (32'h0001<<16)|32'hF30A;
-        widx=4*1024+907; img[widx] = 0;
-        widx=4*1024+909; img[widx] = 0;
-        widx=4*1024+910; img[widx] = S11_EL15;
-        widx=4*1024+911; img[widx] = S11_EST15;
-        // ino16 inode @ word960 — depth=0 内联叶 → 物理块220
-        widx=4*1024+960; img[widx] = 16'h81A4;
-        widx=4*1024+970; img[widx] = (32'h0001<<16)|32'hF30A;
-        widx=4*1024+971; img[widx] = 0;
-        widx=4*1024+973; img[widx] = 0;
-        widx=4*1024+974; img[widx] = S11_EL16;
-        widx=4*1024+975; img[widx] = S11_EST16;
+        // 阶段13: 子文件 inode 跨块 inode 表 — ino17 @ 块5 word0 (itbl+1), ino18 @ 块5 word64
+        // ino17 depth=0 内联叶 → 物理块200
+        widx=S11_INO17_BLK*1024+S11_INO17_WORD;     img[widx] = 16'h81A4;
+        widx=S11_INO17_BLK*1024+S11_INO17_WORD+10;  img[widx] = (32'h0001<<16)|32'hF30A;
+        widx=S11_INO17_BLK*1024+S11_INO17_WORD+11;  img[widx] = 0;
+        widx=S11_INO17_BLK*1024+S11_INO17_WORD+13;  img[widx] = 0;
+        widx=S11_INO17_BLK*1024+S11_INO17_WORD+14;  img[widx] = S11_EL15;
+        widx=S11_INO17_BLK*1024+S11_INO17_WORD+15;  img[widx] = S11_EST15;
+        // ino18 depth=0 内联叶 → 物理块220
+        widx=S11_INO17_BLK*1024+S11_INO18_WORD;     img[widx] = 16'h81A4;
+        widx=S11_INO17_BLK*1024+S11_INO18_WORD+10;  img[widx] = (32'h0001<<16)|32'hF30A;
+        widx=S11_INO17_BLK*1024+S11_INO18_WORD+11;  img[widx] = 0;
+        widx=S11_INO17_BLK*1024+S11_INO18_WORD+13;  img[widx] = 0;
+        widx=S11_INO17_BLK*1024+S11_INO18_WORD+14;  img[widx] = S11_EL16;
+        widx=S11_INO17_BLK*1024+S11_INO18_WORD+15;  img[widx] = S11_EST16;
 
         // ino12 @ word 704 — depth=0 内联叶 (阶段5: f_*)
         widx=4*1024+704;  img[widx] = F_MODE;
@@ -447,18 +450,18 @@ module tb_ext4_scan;
             $display("FAIL query ino99 应未找到, valid=%0d", qvalid); errc=errc+1;
         end else $display("PASS query ino99 未找到 (qvalid=0)");
 
-        // 查询子目录文件 ino=15(mouse) → estart=200
-        qino=15; qreq=1;
+        // 查询跨块 inode 表子文件 ino=17(mouse) → estart=200
+        qino=S11_INO15; qreq=1;
         #20;
         qreq=0;
         wait(qdone); #10;
         if (qvalid!==1 || qestart!==S11_EST15 || qelen!==S11_EL15) begin
-            $display("FAIL query ino15(子目录): valid=%0d est=%0h elen=%0d",
+            $display("FAIL query ino17(跨块子目录): valid=%0d est=%0h elen=%0d",
                      qvalid, qestart, qelen); errc=errc+1;
-        end else $display("PASS query 子目录文件 ino15 → estart=%0d len=%0d", qestart, qelen);
+        end else $display("PASS query 跨块 inode 表子文件 ino17 → estart=%0d len=%0d", qestart, qelen);
 
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段12 索引块多路遍历(ino14索引块41→ei_leaf 全部 {块42:300,块43:310}) + 全表/RAM/查询 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段13 跨块 inode 表(子文件 ino17/18→物理块 itbl+1=5, 块内word0/64) + 全表/RAM/查询 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end

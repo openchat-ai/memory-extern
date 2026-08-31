@@ -623,7 +623,9 @@ module ext4_scan_core #(
                     end
                 end
                 S_DMREQ2: begin
-                    blk_fd_blk <= itbl_r; req_blk <= itbl_r;
+                    // 阶段13: 子文件 inode 可能跨块 — 读第一个子文件所在 inode 块
+                    blk_fd_blk <= itbl_r + ((subd_ino[0]-1)>>4);
+                    req_blk    <= itbl_r + ((subd_ino[0]-1)>>4);
                     blk_fd_req <= 1; sdcur <= 0;
                     st <= S_DMWAIT2;
                 end
