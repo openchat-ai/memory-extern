@@ -17,9 +17,8 @@ module tb_cache_lba;
     parameter NB=16, DATAW=32, NBEAT=1024, BLKSZ=4096;
     parameter DW=32, CW=32;
     parameter EXPERT_SLOTS=8;
-    parameter FILES=4, ENTRYS=8;
+    parameter FILES=8, ENTRYS=8;
     parameter TABN=8, MAXENT=4, MAXDEPTH=4, NDEP=4;
-    parameter FILE_INO=14;
 
     localparam INODES_PER_GRP=16;
     localparam BLOCKS_PER_GRP=128;
@@ -87,6 +86,7 @@ module tb_cache_lba;
 
     reg clk=0, rst_n=0;
     reg serdes_aligned=0, pcie_link_up=0;
+    reg rescan=0;
 
     // 块源桩(同 tb_ext4_scan)
     wire [NB-1:0] blk_fd_blk;
@@ -128,8 +128,7 @@ module tb_cache_lba;
     cache_lba_top #(
         .NB(NB), .DW(DW), .CW(CW), .NBEAT(NBEAT),
         .TABN(TABN), .MAXENT(MAXENT), .MAXDEPTH(MAXDEPTH), .NDEP(NDEP),
-        .EXPERT_SLOTS(EXPERT_SLOTS), .FILES(FILES), .ENTRYS(ENTRYS),
-        .FILE_INO(FILE_INO)
+        .EXPERT_SLOTS(EXPERT_SLOTS), .FILES(FILES), .ENTRYS(ENTRYS)
     ) u (
         .clk(clk), .rst_n(rst_n),
         .blk_fd_blk(blk_fd_blk), .blk_fd_req(blk_fd_req), .blk_fd_ready(blk_fd_ready),
@@ -142,6 +141,7 @@ module tb_cache_lba;
         .wt_lba(wt_lba), .lba_fault(lba_fault),
         .cmd_a_data(32'd0), .cmd_a_valid(1'b0), .cmd_a_ready(),
         .cmd_b_data(cb_dat), .cmd_b_valid(cb_v), .cmd_b_ready(cb_r),
+        .rescan(rescan),
         .scan_busy(scan_busy), .scan_done(scan_done), .lba_ready(lba_ready)
     );
 
@@ -288,16 +288,72 @@ module tb_cache_lba;
         blk_fd_ready=1;
     end
 
-    // ---- 主测试 ----
+    // ---- 主测试(件1: 多文件全目录转录) ----
+    // RAM 顺序: ino12, ino13, ino14(×2), ino17, ino18, ino19
+    // 期望 file2lba 目录:
+    //   F[0] ino12: base=0,  size=2 (estart=32,elen=2)
+    //   F[1] ino13: base=2,  size=1 (estart=48,elen=1)
+    //   F[2] ino14: base=3,  size=3 (estart=300/1 + 310/2)
+    //   F[3] ino17: base=6,  size=1 (estart=200,elen=1)
+    //   F[4] ino18: base=7,  size=2 (estart=220,elen=2)
+    //   F[5] ino19: base=9,  size=1 (estart=400,elen=1)
+    //   共 6 文件, 7 段, 10 块
     initial begin
         #30 rst_n=1; #10;
-        $display("t=%0t [cache_lba] 等待自动扫描+转录...", $time);
+        $display("t=%0t [cache_lba] 等待自动扫描+多文件转录...", $time);
 
         wait(lba_ready);
         #10;
-        $display("t=%0t [cache_lba] lba_ready=1 扫描+转录完成", $time);
+        $display("t=%0t [cache_lba] lba_ready=1 扫描+多文件转录完成", $time);
 
-        // 锁本地
+        // --- V1: file2lba 目录寄存器校验 ---
+        // nfiles
+        if (u.u_pipe.u_f2l.file_size[0] !== 16'd2) begin
+            $display("FAIL F[0] size: got=%0d want=2", u.u_pipe.u_f2l.file_size[0]); err=err+1;
+        end else $display("PASS F[0](ino12) size=2");
+        if (u.u_pipe.u_f2l.file_base_lo[0] !== 32'd0) begin
+            $display("FAIL F[0] base: got=%0d want=0", u.u_pipe.u_f2l.file_base_lo[0]); err=err+1;
+        end else $display("PASS F[0](ino12) base=0");
+
+        if (u.u_pipe.u_f2l.file_size[1] !== 16'd1) begin
+            $display("FAIL F[1] size: got=%0d want=1", u.u_pipe.u_f2l.file_size[1]); err=err+1;
+        end else $display("PASS F[1](ino13) size=1");
+        if (u.u_pipe.u_f2l.file_base_lo[1] !== 32'd2) begin
+            $display("FAIL F[1] base: got=%0d want=2", u.u_pipe.u_f2l.file_base_lo[1]); err=err+1;
+        end else $display("PASS F[1](ino13) base=2");
+
+        if (u.u_pipe.u_f2l.file_size[2] !== 16'd3) begin
+            $display("FAIL F[2] size: got=%0d want=3", u.u_pipe.u_f2l.file_size[2]); err=err+1;
+        end else $display("PASS F[2](ino14) size=3");
+        if (u.u_pipe.u_f2l.file_base_lo[2] !== 32'd3) begin
+            $display("FAIL F[2] base: got=%0d want=3", u.u_pipe.u_f2l.file_base_lo[2]); err=err+1;
+        end else $display("PASS F[2](ino14) base=3");
+
+        if (u.u_pipe.u_f2l.file_size[3] !== 16'd1) begin
+            $display("FAIL F[3] size: got=%0d want=1", u.u_pipe.u_f2l.file_size[3]); err=err+1;
+        end else $display("PASS F[3](ino17) size=1");
+        if (u.u_pipe.u_f2l.file_size[4] !== 16'd2) begin
+            $display("FAIL F[4] size: got=%0d want=2", u.u_pipe.u_f2l.file_size[4]); err=err+1;
+        end else $display("PASS F[4](ino18) size=2");
+        if (u.u_pipe.u_f2l.file_size[5] !== 16'd1) begin
+            $display("FAIL F[5] size: got=%0d want=1", u.u_pipe.u_f2l.file_size[5]); err=err+1;
+        end else $display("PASS F[5](ino19) size=1");
+
+        // EXT 段校验(关键几项)
+        if (u.u_pipe.u_f2l.ext_base_lo[0] !== 32'd32 || u.u_pipe.u_f2l.ext_cnt[0] !== 16'd2) begin
+            $display("FAIL EXT[0]: base=%0d cnt=%0d", u.u_pipe.u_f2l.ext_base_lo[0], u.u_pipe.u_f2l.ext_cnt[0]); err=err+1;
+        end else $display("PASS EXT[0](ino12) base=32 cnt=2");
+        if (u.u_pipe.u_f2l.ext_base_lo[2] !== 32'd300 || u.u_pipe.u_f2l.ext_cnt[2] !== 16'd1) begin
+            $display("FAIL EXT[2]: base=%0d cnt=%0d", u.u_pipe.u_f2l.ext_base_lo[2], u.u_pipe.u_f2l.ext_cnt[2]); err=err+1;
+        end else $display("PASS EXT[2](ino14叶0) base=300 cnt=1");
+        if (u.u_pipe.u_f2l.ext_base_lo[3] !== 32'd310 || u.u_pipe.u_f2l.ext_cnt[3] !== 16'd2) begin
+            $display("FAIL EXT[3]: base=%0d cnt=%0d", u.u_pipe.u_f2l.ext_base_lo[3], u.u_pipe.u_f2l.ext_cnt[3]); err=err+1;
+        end else $display("PASS EXT[3](ino14叶1) base=310 cnt=2");
+        if (u.u_pipe.u_f2l.ext_base_lo[6] !== 32'd400 || u.u_pipe.u_f2l.ext_cnt[6] !== 16'd1) begin
+            $display("FAIL EXT[6]: base=%0d cnt=%0d", u.u_pipe.u_f2l.ext_base_lo[6], u.u_pipe.u_f2l.ext_cnt[6]); err=err+1;
+        end else $display("PASS EXT[6](ino19) base=400 cnt=1");
+
+        // --- V2: 管线路径锁定 ---
         serdes_aligned=1; #30;
         if (!u.p_locked || u.p_sel!==0) begin
             $display("FAIL 锁本地: pl=%b ps=%b", u.p_locked, u.p_sel); err=err+1;
@@ -306,30 +362,51 @@ module tb_cache_lba;
         // trunk 恒命中(启动目录)
         send_a({24'hAB, 8'd0}); #10;
 
-        // V2: ino14
-        // tag=0(叶0逻辑块0) → part+300
+        // --- V3: 管线 LBA 查询(file 0 = ino12) ---
+        // tag=0 → gblk=F[0].base+0=0 → EXT[0](estart=32,cnt=2) → part+32
         send_a({24'hFF, 8'd0}); #10;
-        if (g_fault || g_lba !== (48'h0010_0000_2334 + 300)) begin
-            $display("FAIL tag=0: lba=%h fault=%b want=%h", g_lba, g_fault, 48'h0010_0000_2334+300);
+        if (g_fault || g_lba !== (48'h0010_0000_2334 + 32)) begin
+            $display("FAIL tag=0: lba=%h fault=%b want=%h", g_lba, g_fault, 48'h0010_0000_2334+32);
             err=err+1;
-        end else $display("PASS tag=0 → 绝对LBA=%h (part+300 叶0)", g_lba);
+        end else $display("PASS tag=0 → LBA=%h (ino12 叶0)", g_lba);
 
-        // tag=1(叶1逻辑块1) → part+310
+        // tag=1 → gblk=1 → EXT[0] → part+33
         send_a({24'hFF, 8'd1}); #10;
-        if (g_fault || g_lba !== (48'h0010_0000_2334 + 310)) begin
-            $display("FAIL tag=1: lba=%h fault=%b want=%h", g_lba, g_fault, 48'h0010_0000_2334+310);
+        if (g_fault || g_lba !== (48'h0010_0000_2334 + 33)) begin
+            $display("FAIL tag=1: lba=%h fault=%b want=%h", g_lba, g_fault, 48'h0010_0000_2334+33);
             err=err+1;
-        end else $display("PASS tag=1 → 绝对LBA=%h (part+310 叶1)", g_lba);
+        end else $display("PASS tag=1 → LBA=%h (ino12 叶1)", g_lba);
 
-        // tag=2(叶1逻辑块2) → part+311
+        // tag=2 → gblk=2 ≥ F[0].size=2 → fault
         send_a({24'hFF, 8'd2}); #10;
-        if (g_fault || g_lba !== (48'h0010_0000_2334 + 311)) begin
-            $display("FAIL tag=2: lba=%h fault=%b want=%h", g_lba, g_fault, 48'h0010_0000_2334+311);
+        if (!g_fault) begin
+            $display("FAIL tag=2 应 fault: lba=%h", g_lba); err=err+1;
+        end else $display("PASS tag=2 → fault(ino12 越界)");
+
+        // --- V4: 件4 重扫测试(rescan) ---
+        $display("t=%0t [cache_lba] 测试 rescan...", $time);
+        @(posedge clk); rescan<=1; @(posedge clk); rescan<=0;
+        // 等 lba_ready 拉低(TI)
+        repeat(5) @(posedge clk);
+        if (lba_ready !== 1'b0)
+            $display("INFO: lba_ready=%b (rescan 后预期0)", lba_ready);
+        // 等重扫完成
+        wait(lba_ready);
+        #10;
+        $display("t=%0t [cache_lba] rescan 完成, lba_ready=1", $time);
+        // 重扫后 F[0] 不变
+        if (u.u_pipe.u_f2l.file_size[0] !== 16'd2 || u.u_pipe.u_f2l.file_base_lo[0] !== 32'd0) begin
+            $display("FAIL rescan F[0]: base=%0d size=%0d", u.u_pipe.u_f2l.file_base_lo[0], u.u_pipe.u_f2l.file_size[0]);
             err=err+1;
-        end else $display("PASS tag=2 → 绝对LBA=%h (part+311 叶1第2块)", g_lba);
+        end else $display("PASS rescan → F[0] 不变(base=0,size=2)");
+        // 重扫后管线查询仍正确
+        send_a({24'hFF, 8'd0}); #10;
+        if (g_fault || g_lba !== (48'h0010_0000_2334 + 32)) begin
+            $display("FAIL rescan tag=0: lba=%h", g_lba); err=err+1;
+        end else $display("PASS rescan tag=0 → LBA=%h (仍正确)", g_lba);
 
         #20;
-        if (err==0) $display("PASS: cache_lba_top 端到端(自动扫描→转录file2lba→管线查询→绝对LBA) 全过");
+        if (err==0) $display("PASS: cache_lba_top 件1多文件转录+件4重扫+管线查询 全过");
         else         $display("FAIL: err=%0d", err);
         $finish;
     end

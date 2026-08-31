@@ -18,7 +18,7 @@ module ext4_scan_core #(
     parameter DATAW = 32,     // 数据拍位宽(4 字节)
     parameter NBEAT = 1024,   // 每块拍数(4096/4)
     parameter MAXENT = 4,     // 目录块可枚举的最大条目数(根目录/子目录各自)
-    parameter TABN   = 8,     // 收集映射表容量(含递归展开, >MAXENT)
+    parameter TABN   = 16,     // 收集映射表容量(含递归展开, >MAXENT)
     parameter MAXDEPTH = 4,   // extent 索引递归最大下钻深度(防死循环)
     parameter NDEP     = 4    // 阶段15: 目录栈深度(任意层级目录递归)
 )(
@@ -89,7 +89,6 @@ module ext4_scan_core #(
     output reg [47:0]       q_lba,         // 阶段16: 绝对物理 LBA(part_base+estart+块内偏移)
     output reg              q_fault        // 阶段16: 未找到 ino / 文件内块号超文件范围
 );
-
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
                S_GD_REQ=5, S_GD_WAIT=6, S_GD_FILL=7, S_GD_P=8,
                S_IT_REQ=9, S_IT_WAIT=10, S_IT_FILL=11, S_IT_P=12,
@@ -102,7 +101,7 @@ module ext4_scan_core #(
                S_DMETCH=31, S_DMSCAN=32, S_DMREQ=33, S_DMWAIT=34, S_DMFILL=35, S_DMFILLP=36,
                S_DBRQ=37, S_DBWAIT=38, S_DBFILL=39, S_DBFILLP=40, S_DBLOOP=41,
                S_DMREQ2=42, S_DMWAIT2=43, S_DMFILL2=44, S_DMFILLP2=45, S_DMEXT=46,
-               S_SIREQ=47, S_SIWAIT=48, S_SIFILL=49, S_SIP=50,
+               S_SIREQ=47, S_SIWAIT=48, S_SIFILL=49, S_SIP=50, S_IDXENT=58,
                S_GDT_REQ=52, S_GDT_WAIT=53, S_GDT_FILL=54, S_GDT_P=55,
                S_DMPOP=56, S_STKINIT=57,
                S_DONE=51;
@@ -130,13 +129,22 @@ module ext4_scan_core #(
     reg [NB-1:0] subblk_r;
     // 阶段7: 全文件收集游标/表号
     reg [$clog2(MAXENT+1)-1:0] fidx;
+    // 阶段17c(件3): 收集源选择 — 0=根目录文件(out_ino), 1=子目录文件(subd_ino)
+    reg sel_dm;
     // 阶段9: 索引文件递归 — 当前文件 ino 暂存 / 子块内叶游标
     reg [31:0] cur_ino_r;
     reg [15:0] sleaf;
     reg [15:0] sentries;
     // 阶段10: 多层下钻深度计数
     reg [3:0] cdepth;
-    // 阶段12: 索引块多路遍历(遍历索引块全部 ei_leaf)
+    // 阶段17b(件2): 索引块 DFS 节点栈(替代单层 sinidx) — 支持任意嵌套+多路
+    reg [NB-1:0] node_blk;                       // 当前遍历的索引节点块
+    reg [15:0] node_cnt;                         // 当前节点索引项条数
+    reg [15:0] node_ent;                         // 当前节点待处理索引项
+    reg [NB-1:0] estk_blk [0:MAXDEPTH-1];        // 祖先索引节点块栈
+    reg [15:0] estk_cnt [0:MAXDEPTH-1];
+    reg [15:0] estk_ent [0:MAXDEPTH-1];
+    reg [$clog2(MAXDEPTH+1)-1:0] estkp;          // 祖先节点数(0=无祖先, 即顶层节点)    // 阶段12: 索引块多路遍历(遍历索引块全部 ei_leaf)
     reg si;                                // 当前索引块内索引项游标
     reg [15:0] sientries;                  // 当前索引块条目数
     reg sinidx;                            // 是否正处索引块多路遍历中
@@ -166,9 +174,10 @@ module ext4_scan_core #(
             st <= S_IDLE; busy<=0; done<=0; err<=0;
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
             itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
-            fidx<=0; ext_count_o<=0;
+            fidx<=0; ext_count_o<=0; sel_dm<=0;
             cur_ino_r<=0; sleaf<=0; sentries<=0; cdepth<=0;
             si<=0; sientries<=0; sinidx<=0; sidx_blk_r<=0;
+            estkp<=0; node_blk<=0; node_cnt<=0; node_ent<=0;
             subdir_ino_r<=0; subd_blk_r<=0; subd_cnt<=0; sdcur<=0; sdpos<=0;
             ipg_r<=0; curi_blk_r<=0; grp_r<=0;
             stkp<=0;
@@ -421,43 +430,70 @@ module ext4_scan_core #(
                 end
                 // 子块 extent 头 @word0(magic低16/entries高16) word1(depth高16)
                 // 叶 @word3 + i*3: ee_block; word4+ 低16 ee_len; word5+ ee_start
-                // 阶段10/12: 索引块(depth>0)首次进入 → 多路遍历全部索引项(ei_leaf)
+                // 阶段17b(件2): DFS 节点栈 — 索引块可任意嵌套+多路
+                //   node_blk/cnt/ent = 当前索引节点; estk 栈存祖先节点;
+                //   S_IDXENT 每次下钻前压栈当前节点; 叶收集完/节点耗尽 → 弹栈重读父节点
                 S_SUBP: begin
                     if (wbuf[1][31:16]!=0) begin
-                        if (sinidx==0) begin
-                            if (cdepth+1>=MAXDEPTH) begin
-                                err<=1; st<=S_DONE;
-                            end else begin
-                                sinidx <= 1;
-                                si <= 0;
-                                sientries <= wbuf[0][31:16];
-                                sidx_blk_r <= subblk_r;       // 保存索引块号(重读用)
-                                subblk_r   <= wbuf[4][15:0];  // 下钻索引项0 的 ei_leaf
-                                cdepth <= cdepth + 1;
-                                st <= S_SUBREQ;
-                            end
-                        end else begin
-                            // 遍历中再遇索引块(嵌套加深, 暂不支撑) — 防御报错
+                        // 索引节点 → 成为当前顶层节点(父节点已由 S_IDXENT 压栈)
+                        if (cdepth+1>=MAXDEPTH) begin
                             err<=1; st<=S_DONE;
+                        end else begin
+                            cdepth <= cdepth + 1;
+                            node_blk <= subblk_r;
+                            node_cnt <= wbuf[0][31:16];
+                            node_ent <= 0;
+                            st <= S_IDXENT;
                         end
                     end else begin
-                        // 叶子块(阶段9 原逻辑)
-                        s_ebe_o    <= wbuf[3];
-                        s_elen_o   <= wbuf[4][15:0];
-                        s_estart_o <= wbuf[5];
-                        sleaf    <= 0;
+                        // 叶子块: 遍历其全部内联叶
                         sentries <= wbuf[0][31:16];
+                        sleaf    <= 0;
                         st <= S_SUBLF;
                     end
                 end
-                // 阶段9: 遍历子块全部叶(索引文件递归收集)
+                // 阶段17b: 处理当前索引节点的下一个索引项(或节点耗尽返回)
+                S_IDXENT: begin
+                    if (node_ent>=node_cnt) begin
+                        // 当前节点耗尽 → 弹栈回父节点
+                        if (estkp==0) begin
+                            fidx <= fidx + 1;          // 文件所有叶收集完
+                            st <= S_EXT_LOOP;
+                        end else begin
+                            estkp   <= estkp - 1;
+                            node_blk <= estk_blk[estkp-1];
+                            node_cnt <= estk_cnt[estkp-1];
+                            node_ent <= estk_ent[estkp-1] + 1;
+                            cdepth  <= cdepth - 1;
+                            st <= S_SIREQ;             // 重读父节点块以便继续
+                        end
+                    end else begin
+                        // 压栈当前节点, 读索引项 node_ent 的目标块(可再为索引/嵌套)
+                        if (estkp+1>MAXDEPTH-1) begin
+                            err<=1; st<=S_DONE;
+                        end else begin
+                            estk_blk[estkp] <= node_blk;
+                            estk_cnt[estkp] <= node_cnt;
+                            estk_ent[estkp] <= node_ent;
+                            estkp <= estkp + 1;
+                            subblk_r <= wbuf[3 + node_ent*3 + 1][15:0];
+                            st <= S_SUBREQ;
+                        end
+                    end
+                end
+                // 阶段9/17b: 遍历当前叶块的全部内联叶(收集), 完后弹栈回父节点
                 S_SUBLF: begin
                     if (sleaf>=sentries) begin
-                        if (sinidx) begin
-                            st <= S_SIREQ;           // 阶段12: 重读索引块取下一索引项
-                        end else begin
-                            fidx <= fidx + 1;
+                        if (estkp==0) begin
+                            fidx <= fidx + 1;          // 根即叶(不常见)或顶层叶
                             st <= S_EXT_LOOP;
+                        end else begin
+                            estkp   <= estkp - 1;
+                            node_blk <= estk_blk[estkp-1];
+                            node_cnt <= estk_cnt[estkp-1];
+                            node_ent <= estk_ent[estkp-1] + 1;
+                            cdepth  <= cdepth - 1;
+                            st <= S_SIREQ;             // 重读父节点块以取下一索引项
                         end
                     end else begin
                         ext_ino_o[ext_count_o]    <= cur_ino_r;
@@ -473,10 +509,10 @@ module ext4_scan_core #(
                     end
                 end
 
-                // 阶段12: 重读索引块, 取下一个索引项 ei_leaf 继续下钻(或直接退出)
+                // 阶段12/17b: 重读当前节点块(弹栈后), 恢复其遍历
                 S_SIREQ: begin
-                    blk_fd_blk <= sidx_blk_r;
-                    req_blk    <= sidx_blk_r;
+                    blk_fd_blk <= node_blk;
+                    req_blk    <= node_blk;
                     blk_fd_req <= 1;
                     st <= S_SIWAIT;
                 end
@@ -496,17 +532,7 @@ module ext4_scan_core #(
                     end
                 end
                 S_SIP: begin
-                    if (si+1>=sientries) begin
-                        // 全部索引项处理完 → 退出多路, 回主循环
-                        sinidx <= 0;
-                        fidx <= fidx + 1;
-                        st <= S_EXT_LOOP;
-                    end else begin
-                        // 下钻下一个索引项 si+1 的 ei_leaf
-                        si <= si + 1;
-                        subblk_r <= wbuf[3 + (si+1)*3 + 1][15:0];
-                        st <= S_SUBREQ;
-                    end
+                    st <= S_IDXENT;                 // 节点块已重读 → 继续处理
                 end
 
                 // 阶段14: 读 GDT(块1) 存多组 inode 表(bg_inode_table_lo @ 组域 word 组号*16+2)
@@ -532,6 +558,7 @@ module ext4_scan_core #(
                     gdt_itbl[3] <= wbuf[3*16+2];
                     fidx <= 0; ext_count_o <= 0;
                     curi_blk_r <= itbl_r;      // 默认组0 inode 表
+                    sel_dm <= 0;               // 阶段17c: 先收根目录文件
                     st <= S_EXT_REQ;           // 先读首个 inode 表块
                 end
 
@@ -561,34 +588,65 @@ module ext4_scan_core #(
                 //   块内 word   = (((ino-1)%ipg_r)&15)*64  (per_block=16, isz=256)
                 //   当前 wbuf 不是该块 → 重读(curi_blk_r 跟踪), 否则收集/下钻
                 S_EXT_LOOP: begin
-                    if (fidx>=out_count) begin
-                        st <= S_DMETCH;
-                    end else if (out_ftype[fidx]==8'd2) begin
-                        fidx <= fidx + 1;          // 跳过子目录条目(阶段11 单独递归)
-                        st <= S_EXT_LOOP;
-                    end else if (gdt_itbl[(out_ino[fidx]-1)/ipg_r] +
-                                 ((((out_ino[fidx]-1)%ipg_r))>>4) != curi_blk_r) begin
-                        curi_blk_r <= gdt_itbl[(out_ino[fidx]-1)/ipg_r] +
-                                      ((((out_ino[fidx]-1)%ipg_r))>>4);
-                        st <= S_EXT_REQ;           // 跨组/跨块 → 重读 inode 表块
-                    end else if (wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+11][31:16]==0) begin
-                        ext_ino_o[ext_count_o]    <= out_ino[fidx];
-                        ext_ebe_o[ext_count_o]    <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+13];
-                        ext_elen_o[ext_count_o]   <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
-                        ext_estart_o[ext_count_o] <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+15];
-                        // 阶段8: 同步落外置表 RAM
-                        ram_ino[ext_count_o]      <= out_ino[fidx];
-                        ram_ebe[ext_count_o]      <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+13];
-                        ram_elen[ext_count_o]     <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
-                        ram_estart[ext_count_o]   <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+15];
-                        ext_count_o               <= ext_count_o + 1;
-                        fidx <= fidx + 1;
+                    if (sel_dm==0) begin
+                        // ---- 根目录文件收集 ----
+                        if (fidx>=out_count) begin
+                            st <= S_DMETCH;                 // 根文件完 → 建目录栈
+                        end else if (out_ftype[fidx]==8'd2) begin
+                            fidx <= fidx + 1;               // 跳过子目录条目(栈单独处理)
+                            st <= S_EXT_LOOP;
+                        end else if (gdt_itbl[(out_ino[fidx]-1)/ipg_r] +
+                                     ((((out_ino[fidx]-1)%ipg_r))>>4) != curi_blk_r) begin
+                            curi_blk_r <= gdt_itbl[(out_ino[fidx]-1)/ipg_r] +
+                                          ((((out_ino[fidx]-1)%ipg_r))>>4);
+                            st <= S_EXT_REQ;                // 跨组/跨块 → 重读 inode 表块
+                        end else if (wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+11][31:16]==0) begin
+                            ext_ino_o[ext_count_o]    <= out_ino[fidx];
+                            ext_ebe_o[ext_count_o]    <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+13];
+                            ext_elen_o[ext_count_o]   <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                            ext_estart_o[ext_count_o] <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+15];
+                            ram_ino[ext_count_o]      <= out_ino[fidx];
+                            ram_ebe[ext_count_o]      <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+13];
+                            ram_elen[ext_count_o]     <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                            ram_estart[ext_count_o]   <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+15];
+                            ext_count_o               <= ext_count_o + 1;
+                            fidx <= fidx + 1;
+                        end else begin
+                            // 阶段9/10: depth>0 索引文件 — 递归下钻 ei_leaf 子块
+                            cur_ino_r <= out_ino[fidx];
+                            estkp <= 0;
+                            subblk_r  <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                            cdepth <= 0;
+                            st <= S_SUBREQ;
+                        end
                     end else begin
-                        // 阶段9/10: depth>0 索引文件 — 递归下钻 ei_leaf 子块
-                        cur_ino_r <= out_ino[fidx];
-                        subblk_r  <= wbuf[((((out_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
-                        cdepth <= 0;
-                        st <= S_SUBREQ;
+                        // ---- 阶段17c(件3): 子目录文件收集(可跨 inode 表块) ----
+                        if (fidx>=subd_cnt) begin
+                            st <= S_DMPOP;                  // 本层文件完 → 弹栈下一目录
+                        end else if (gdt_itbl[(subd_ino[fidx]-1)/ipg_r] +
+                                     ((((subd_ino[fidx]-1)%ipg_r))>>4) != curi_blk_r) begin
+                            curi_blk_r <= gdt_itbl[(subd_ino[fidx]-1)/ipg_r] +
+                                          ((((subd_ino[fidx]-1)%ipg_r))>>4);
+                            st <= S_EXT_REQ;                // 跨组/跨块 → 重读 inode 表块
+                        end else if (wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+11][31:16]==0) begin
+                            ext_ino_o[ext_count_o]    <= subd_ino[fidx];
+                            ext_ebe_o[ext_count_o]    <= wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+13];
+                            ext_elen_o[ext_count_o]   <= wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                            ext_estart_o[ext_count_o] <= wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+15];
+                            ram_ino[ext_count_o]      <= subd_ino[fidx];
+                            ram_ebe[ext_count_o]      <= wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+13];
+                            ram_elen[ext_count_o]     <= wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                            ram_estart[ext_count_o]   <= wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+15];
+                            ext_count_o               <= ext_count_o + 1;
+                            fidx <= fidx + 1;
+                        end else begin
+                            // 子文件索引(depth>0): 递归下钻(阶段17c 使子文件也走索引)
+                            cur_ino_r <= subd_ino[fidx];
+                            estkp <= 0;
+                            subblk_r  <= wbuf[((((subd_ino[fidx]-1)%ipg_r)&15)*64)+14][15:0];
+                            cdepth <= 0;
+                            st <= S_SUBREQ;
+                        end
                     end
                 end
 
@@ -688,12 +746,17 @@ module ext4_scan_core #(
                     end
                 end
                 S_DMREQ2: begin
-                    // 阶段13/14: 子文件可能跨块/跨组 — 读第一个子文件所在 inode 块
+                    // 阶段13/14/17c: 转子目录文件收集(S_EXT_LOOP, sel_dm=1)。
+                    // 先从 subd_ino[0] 所在 inode 块读起, 其余子文件按跨块判定逐块重读。
+                    sel_dm   <= 1;
+                    fidx     <= 0;
+                    curi_blk_r <= gdt_itbl[(subd_ino[0]-1)/ipg_r] +
+                                  ((((subd_ino[0]-1)%ipg_r))>>4);
                     blk_fd_blk <= gdt_itbl[(subd_ino[0]-1)/ipg_r] +
                                   ((((subd_ino[0]-1)%ipg_r))>>4);
                     req_blk    <= gdt_itbl[(subd_ino[0]-1)/ipg_r] +
                                   ((((subd_ino[0]-1)%ipg_r))>>4);
-                    blk_fd_req <= 1; sdcur <= 0;
+                    blk_fd_req <= 1;
                     st <= S_DMWAIT2;
                 end
                 S_DMWAIT2: begin
@@ -711,24 +774,7 @@ module ext4_scan_core #(
                     end
                 end
                 S_DMFILLP2: begin
-                    st <= S_DMEXT;
-                end
-                // 子目录文件: 解析内联叶(depth=0) 续写 ext/RAM 表; 收完本层 → 弹栈处理下一层
-                S_DMEXT: begin
-                    if (sdcur>=subd_cnt) begin
-                        st <= S_DMPOP;
-                    end else begin
-                        ext_ino_o[ext_count_o]    <= subd_ino[sdcur];
-                        ext_ebe_o[ext_count_o]    <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+13];
-                        ext_elen_o[ext_count_o]   <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+14][15:0];
-                        ext_estart_o[ext_count_o] <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+15];
-                        ram_ino[ext_count_o]      <= subd_ino[sdcur];
-                        ram_ebe[ext_count_o]      <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+13];
-                        ram_elen[ext_count_o]     <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+14][15:0];
-                        ram_estart[ext_count_o]   <= wbuf[((((subd_ino[sdcur]-1)%ipg_r)&15)*64)+15];
-                        ext_count_o               <= ext_count_o + 1;
-                        sdcur <= sdcur + 1;
-                    end
+                    st <= S_EXT_LOOP;            // 跳到统一收集(sel_dm=1, 跨块/索引全支持)
                 end
 
                 S_DONE: begin

@@ -3,9 +3,13 @@
 //
 // reset → 自动驱动 ext4_scan_core 扫描块源
 // → 扫描 done 后读其 RAM 表
-// → 转录 FSM 把目标文件(FILE_INO) extent 段写成 file2lba 配置帧
+// → 转录 FSM(多文件全目录) 把每个 ino 的 extent 段分组写成 file2lba 配置帧
 //   (CMD_CFG_LBA=0x50, 打 pipeline cmd_b)
-// → lba_ready=1 后 pipeline 每字 tag=文件块号, wt_lba 组合直出绝对物理 LBA
+// → lba_ready=1 后 pipeline 每字 tag=文件内块号, wt_lba 组合直出绝对物理 LBA
+//
+// 件1: 转录 = 遍历 RAM 表全部 extent, 按 ino 分组 → 每 ino 一个文件句柄 F[f],
+//       全局逻辑块号拼接 EXT[k] + F[f].base/size → 多文件目录(不再固定单文件)。
+// 件4: TIDLE 状态保持 lba_ready=1 不再自动循环; 外部 rescan 拉高才触发重扫。
 //
 // 仲裁: 转录帧独占 cmd_b, 外部命令走 cmd_a(转录期间外部不发)。
 // ============================================================================
@@ -18,7 +22,7 @@ module cache_lba_top #(
     parameter EXPERT_SLOTS= 8,
     parameter FILE_BLKW   = 8,
     parameter FILE_IDW    = 4,
-    parameter FILES       = 4,
+    parameter FILES       = 8,
     parameter ENTRYS      = 8,
     parameter NB          = 16,
     parameter NBEAT       = 1024,
@@ -26,7 +30,6 @@ module cache_lba_top #(
     parameter TABN        = 8,
     parameter MAXDEPTH    = 4,
     parameter NDEP        = 4,
-    parameter FILE_INO    = 14,
     parameter CMD_CFG_LBA = 8'h50
 )(
     input  wire clk,
@@ -53,6 +56,7 @@ module cache_lba_top #(
     input  wire [CW-1:0]  cmd_a_data, input wire cmd_a_valid, output wire cmd_a_ready,
     input  wire [CW-1:0]  cmd_b_data, input wire cmd_b_valid, output wire cmd_b_ready,
 
+    input  wire           rescan,
     output reg  scan_busy, scan_done, lba_ready
 );
 
@@ -118,15 +122,24 @@ module cache_lba_top #(
     assign wt_lba   = p_lba;
     assign lba_fault= p_fault;
 
-    // ================= 转录 FSM =================
-    localparam TI=0, TS=1, TW=2, TSP=3, TF0=4, TF1=5, TD=6;
+    // ================= 转录 FSM(多文件全目录) =================
+    // reset → scan → TSP 遍历 RAM 表所有 extent, 按 ino 分组 → 每组 = 一个文件
+    // → 写 file2lba: EXT[k](全局拼接) + F[f](per-file base/size)
+    localparam TI=0, TS=1, TW=2, TSP=3, TF0=4, TF1=5, TD=6, TIDLE=7;
     reg [3:0] tst;
-    reg [XTAB-1:0] sp_k;           // SPAN 遍历索引
-    reg [3:0]  xc;                  // 目标文件 extent 段计数
-    reg [15:0] xfsz;               // 目标文件总块数
-    reg [7:0]  fs;                  // 帧序号
-    reg [31:0] x_et [0:TABN-1];    // 转录缓存 estart
-    reg [15:0] x_el [0:TABN-1];    // 转录缓存 elen
+    reg [XTAB-1:0] sp_k;
+    reg [3:0]  xc;                    // 全局 extent 段计数(所有文件)
+    reg [15:0] xfsz;                  // 全局累计块数
+    reg [7:0]  fs;                    // 帧序号
+    reg [31:0] x_et [0:TABN-1];      // 全局 extent 表: estart
+    reg [15:0] x_el [0:TABN-1];      // 全局 extent 表: elen
+    reg [31:0] cur_ino_r;             // 当前正在累积的 ino
+    reg        first_ent;             // TSP 首条标记
+    reg [3:0]  nfiles;                // 已发现文件数
+    reg [15:0] xc_cur;                // 当前文件累计块数
+    reg [31:0] xf_nxt_base;           // 下一个文件的全局 base
+    reg [31:0] xf_base [0:FILES-1];   // 每文件全局 base
+    reg [15:0] xf_size [0:FILES-1];   // 每文件总块数
 
     function [31:0] hdr(input [7:0] r);
         hdr = {16'b0, r, CMD_CFG_LBA};
@@ -135,34 +148,37 @@ module cache_lba_top #(
     // 当前帧内容(由 fs 计算)
     reg [7:0]  creg;
     reg [31:0] cdat;
+    reg [7:0]  fi;
     always @(*) begin
-        creg = 0; cdat = 0;
+        creg = 0; cdat = 0; fi = 0;
         if (fs < 2) begin
             creg = fs[0] ? 8'h01 : 8'h00;
             cdat = fs[0] ? {16'b0, part_base[47:32]} : part_base[31:0];
         end else if (fs < 2 + 3*xc) begin
-            // EXT[k], k=(fs-2)/3, m=(fs-2)%3
             case ((fs-2) % 3)
                 0: begin creg = 8'h10 + 2*((fs-2)/3); cdat = x_et[(fs-2)/3]; end
                 1: begin creg = 8'h11 + 2*((fs-2)/3); cdat = 0;              end
                 2: begin creg = 8'h20 +   ((fs-2)/3); cdat = {16'b0, x_el[(fs-2)/3]}; end
             endcase
         end else begin
-            case (fs - 2 - 3*xc)
-                0: begin creg = 8'h30; cdat = 0; end
-                1: begin creg = 8'h31; cdat = 0; end
-                default: begin creg = 8'h40; cdat = {16'b0, xfsz}; end
+            fi = (fs - 2 - 3*xc) / 3;
+            case ((fs - 2 - 3*xc) % 3)
+                0: begin creg = 8'h30 + 2*fi; cdat = xf_base[fi]; end
+                1: begin creg = 8'h31 + 2*fi; cdat = 0;           end
+                2: begin creg = 8'h40 + fi;   cdat = {16'b0, xf_size[fi]}; end
             endcase
         end
     end
 
-    wire [7:0] nframes = 2 + 3*xc + 3;
+    wire [7:0] nframes = 2 + 3*xc + 3*nfiles;
 
     always @(posedge clk) begin
         if (!rst_n) begin
             tst <= TI; scan_go <= 0;
             scan_busy <= 0; scan_done <= 0; lba_ready <= 0;
             xc <= 0; xfsz <= 0; sp_k <= 0; fs <= 0;
+            nfiles <= 0; xc_cur <= 0; first_ent <= 0;
+            xf_nxt_base <= 0; cur_ino_r <= 0;
             xfer_cmd_v <= 0; xfer_cmd_d <= 0;
         end else begin
             xfer_cmd_v <= 0;
@@ -179,19 +195,42 @@ module cache_lba_top #(
                     if (s_done) begin
                         scan_busy <= 0; scan_done <= 1;
                         xc <= 0; xfsz <= 0; sp_k <= 0;
+                        nfiles <= 0; xc_cur <= 0; first_ent <= 1;
+                        xf_nxt_base <= 0;
                         tst <= TSP;
                     end
                 end
                 TSP: begin
                     if (sp_k >= s_extcnt || sp_k >= TABN) begin
+                        if (!first_ent && nfiles < FILES) begin
+                            xf_base[nfiles]  <= xf_nxt_base;
+                            xf_size[nfiles]  <= xc_cur;
+                            nfiles <= nfiles + 1;
+                        end
                         fs <= 0; tst <= TF0;
-                    end else if (s_ri[sp_k] == FILE_INO) begin
-                        x_et[xc] <= s_re[sp_k];
-                        x_el[xc] <= s_rele[sp_k];
-                        xfsz <= xfsz + s_rele[sp_k];
+                    end else if (nfiles >= FILES) begin
+                        sp_k <= sp_k + 1;
+                    end else if (first_ent || s_ri[sp_k] != cur_ino_r) begin
+                        if (!first_ent && nfiles < FILES) begin
+                            xf_base[nfiles]  <= xf_nxt_base;
+                            xf_size[nfiles]  <= xc_cur;
+                            nfiles <= nfiles + 1;
+                            xf_nxt_base <= xf_nxt_base + xc_cur;
+                        end
+                        cur_ino_r <= s_ri[sp_k];
+                        first_ent <= 0;
+                        xc_cur    <= s_rele[sp_k];
+                        x_et[xc]  <= s_re[sp_k];
+                        x_el[xc]  <= s_rele[sp_k];
+                        xfsz      <= xfsz + s_rele[sp_k];
                         xc <= xc + 1;
                         sp_k <= sp_k + 1;
                     end else begin
+                        xc_cur    <= xc_cur + s_rele[sp_k];
+                        x_et[xc]  <= s_re[sp_k];
+                        x_el[xc]  <= s_rele[sp_k];
+                        xfsz      <= xfsz + s_rele[sp_k];
+                        xc <= xc + 1;
                         sp_k <= sp_k + 1;
                     end
                 end
@@ -210,7 +249,10 @@ module cache_lba_top #(
                 end
                 TD: begin
                     lba_ready <= 1;
-                    tst <= TI;   // 复位后可重扫
+                    tst <= TIDLE;   // 保持就绪, 等待外部重扫
+                end
+                TIDLE: begin
+                    if (rescan) tst <= TI;  // 显式重扫触发
                 end
                 default: tst <= TI;
             endcase
