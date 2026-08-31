@@ -179,18 +179,204 @@ def walk_files(scan_dir):
     return found
 
 
-def file_extents(full, scan_dir, blksz):
+def file_meta(full):
+    """返回 (size, mtime_ns, inode) 用于变更检测。"""
+    st = os.stat(full)
+    return (st.st_size, int(st.st_mtime_ns), st.st_ino)
+
+
+def collect_file_meta(scan_dir):
+    """递归扫描, 返回 {rel: (size, mtime_ns, inode)}。"""
+    meta = {}
+    for root, dirs, files in os.walk(scan_dir):
+        for f in files:
+            full = os.path.join(root, f)
+            if os.path.isfile(full):
+                meta[os.path.relpath(full, scan_dir)] = file_meta(full)
+    return meta
+
+
+def remap_file(full, rel, blksz):
     """
-    对一个已挂在 scan_dir 下的文件, 用 debugfs 'bmap' 逐个逻辑块拿物理块号。
-    返回 (rel, [(phys_blk, len), ...]).
+    单文件 extent -> [(logical_blk, phys_blk_in_part, len), ...]。
+    优先 debugfs bmap(需 root 且分区挂载); 不可用则回退空表并返回 False。
+    对性能: 只对"变化过的文件"调用(增量), 未变文件沿用快照。
     """
-    rel = os.path.relpath(full, scan_dir)
     size = os.path.getsize(full)
     nblocks = (size + blksz - 1) // blksz
-    # debugfs bmap <ino> <logical_block> 输出物理块号
-    out = run(["debugfs", "-R", "bmap %s" % full, scan_dir])
-    # 上面方式依赖挂载点即设备; debugfs 用法: debugfs /dev/sdaX -R "bmap ..."
-    return rel, []
+    dev = None
+    mount = os.path.ismount(os.path.dirname(full)) or None
+    # debugfs: 需要块设备路径, 而非挂载点。取该文件所在设备。
+    try:
+        m = re.match(r'^(\S+)', run(["stat", "-c", "%d", full]).strip())
+    except Exception:
+        m = None
+    if not shutil_which("debugfs"):
+        return [], False
+    dev = first_device_for(full)
+    if dev is None:
+        return [], False
+    extents = []
+    try:
+        # 依次对每个逻辑块调用 bmap; 连续物理块合并为一段
+        cur_start = cur_phys = None
+        for blk in range(nblocks):
+            out = run(["debugfs", "-R", "bmap %s %d" % (full, blk), dev])
+            mm = re.search(r'^([0-9a-fA-F]+)', out)
+            if not mm:
+                continue
+            phys = int(mm.group(1), 16)
+            if cur_start is None:
+                cur_start = blk; cur_phys = phys
+            elif phys == cur_phys + (blk - cur_start):
+                pass
+            else:
+                extents.append((cur_start, cur_phys, blk - cur_start))
+                cur_start = blk; cur_phys = phys
+        if cur_start is not None:
+            extents.append((cur_start, cur_phys, nblocks - cur_start))
+    except Exception as e:
+        print("[debug] bmap 失败 %s: %s" % (rel, e), file=sys.stderr)
+        return [], False
+    return extents, True
+
+
+def first_device_for(full):
+    """返回文件所在块设备(如 /dev/nvme0n1p2), 找不到返回 None。"""
+    out = run(["stat", "-f", "-c", "%T", full])
+    # 从 /proc/mounts 按挂载点找设备
+    try:
+        with open("/proc/mounts") as fh:
+            for ln in fh:
+                p = ln.split()
+                if len(p) >= 2 and os.path.commonpath([full, p[1]]) == p[1]:
+                    return p[0]
+    except Exception:
+        pass
+    return None
+
+
+# ---- 快照持久化 ----
+SNAP_VERSION = 1
+DEFAULT_JSON = "cache_lba_snapshot.json"
+DEFAULT_BIN  = "cache_lba_snapshot.bin"
+
+
+def build_snapshot(scan_dir, blksz, mapping, base_idx=0):
+    """
+    组装文件->LBA 快照, 供 file2lba 配置 + 下次增量比较。
+    mapping: {rel: [(logical_blk, phys_in_part, len), ...]}
+    返回 dict(JSON 结构)。
+    """
+    # 文件句柄分配(按 name 排序), 触顶报错
+    names = sorted(mapping.keys())
+    if len(names) > MAX_FILES:
+        print("错误: %d 个文件超过 file2lba 句柄上限 %d; 增大 FILE_IDW 或筛选"
+              % (len(names), MAX_FILES), file=sys.stderr)
+        sys.exit(4)
+    fids = {n: i for i, n in enumerate(names)}
+
+    # 全局 extent 拼接: 按文件顺序把每个文件 extent 铺到全局逻辑空间
+    global_ext = []   # (logical_blk, phys_in_part, cnt) 按全局逻辑块
+    files = {}
+    gblk_cursor = 0
+    for n in names:
+        size_blk = (os.path.getsize(os.path.join(scan_dir, n))
+                    + blksz - 1) // blksz
+        files[n] = {
+            "id": fids[n],
+            "size": size_blk,
+            "extents": [list(e) for e in mapping[n]],
+            "meta": file_meta(os.path.join(scan_dir, n)),
+        }
+        # 该文件 extents 由于块在文件内逻辑(extent 的第一项是文件内逻辑块),
+        # 平移全局起点 = gblk_cursor
+        for (lblk, phys, cnt) in mapping[n]:
+            global_ext.append((gblk_cursor + lblk, phys, cnt))
+        gblk_cursor += size_blk
+
+    return {
+        "version": SNAP_VERSION,
+        "scan_dir": scan_dir,
+        "blksz": blksz,
+        "part_lba": None,          # 宿主/FPGA 侧填充分区起始 LBA
+        "file_id_base": base_idx,
+        "files": files,
+        "global_extents": [list(e) for e in global_ext],
+    }
+
+
+def _file_blocks(rel):
+    # 由调用处填(此处仅占位, 见 build_snapshot 重构)
+    return 0
+
+
+def dump_binary(snap, path):
+    """
+    生成 file2lba 可直接下发的二进制寄存器位图。
+    布局: [header][reg_image]
+      header: magic 'F2LB', version u32, file_count u32, ext_count u32,
+              part_lba u64(0 待填), blksz u32
+      reg_image: 按 reg_addr 升序, 每项 [reg u8, data u32]
+                 (0x00/0x01 part, 0x10+2k.. base, 0x20+k cnt,
+                  0x30+2f.. base, 0x40+f size)
+    """
+    import struct as _s
+    exts = snap["global_extents"]
+    files = snap["files"]
+    regs = []
+    # part_lba(占位 0, host 下发前改)
+    regs.append((0x00, 0))
+    regs.append((0x01, 0))
+    # extent: 0x10+2k base_lo, 0x11+2k base_hi, 0x20+k cnt
+    max_ext = max(len(exts), 1)
+    for k, (gblk, phys, cnt) in enumerate(exts):
+        regs.append((0x10 + 2*k, phys & 0xFFFFFFFF))
+        regs.append((0x11 + 2*k, phys >> 32))
+        regs.append((0x20 + k, cnt & 0xFFFF))
+    # 文件: 0x30+2f base_lo, 0x31+2f base_hi, 0x40+f size
+    # base 即该文件在全局逻辑空间的起点(由 global_extents 推出)
+    base_of = {}
+    cursor = 0
+    for n in sorted(files):
+        base_of[files[n]["id"]] = cursor
+        cursor += files[n]["size"]
+    for n, info in files.items():
+        fid = info["id"]
+        base = base_of[fid]
+        regs.append((0x30 + 2*fid, base & 0xFFFFFFFF))
+        regs.append((0x31 + 2*fid, base >> 32))
+        regs.append((0x40 + fid, info["size"]))
+    regs.sort(key=lambda r: r[0])
+
+    with open(path, "wb") as fh:
+        fh.write(b"F2LB")
+        fh.write(_s.pack("<IIIQH",
+                         SNAP_VERSION, len(files), max_ext,
+                         0, snap["blksz"]))
+        for (ra, rd) in regs:
+            fh.write(_s.pack("<BI", ra, rd))
+    return path
+
+
+def load_snapshot(path):
+    with open(path) as fh:
+        return json.load(fh)
+
+
+def detect_changes(scan_dir, snap):
+    """
+    对比快照, 返回 (新增, 修改, 删除)。
+    未变文件(不在增/删/改列表)将沿用快照映射。
+    """
+    cur = collect_file_meta(scan_dir)
+    old = {}
+    for n, v in snap.get("files", {}).items():
+        old[n] = tuple(v["meta"])
+    added = [n for n in cur if n not in old]
+    removed = [n for n in old if n not in cur]
+    changed = [n for n in cur if n in old and cur[n] != old[n]]
+    return added, changed, removed
 
 
 def main():
@@ -199,10 +385,17 @@ def main():
     ap.add_argument("--scan", help="已挂载缓存目录(递归扫全部文件)")
     ap.add_argument("--blksz", type=int, default=DEFAULT_BLKSZ)
     ap.add_argument("--max-files", type=int, default=MAX_FILES)
-    ap.add_argument("--out", help="输出映射表文件(.tsv)")
+    ap.add_argument("--json", default=DEFAULT_JSON, help="JSON 快照路径")
+    ap.add_argument("--bin", default=DEFAULT_BIN, help="二进制寄存器位图路径")
+    ap.add_argument("--force", action="store_true",
+                    help="强制全量重扫(忽略快照增量)")
+    ap.add_argument("--no-save", action="store_true", help="只打印不落盘")
+    ap.add_argument("--part-lba", type=lambda x: int(x, 0),
+                    help="分区起始物理 LBA(写进快照/二进制)")
     args = ap.parse_args()
 
-    # 1) 定位缓存分区
+    # 1) 定位缓存分区/扫描目录 + 分区起始 LBA
+    part_lba = args.part_lba
     if args.scan:
         scan_dir = args.scan
         print("[info] 扫描目录(挂载假设): %s" % scan_dir, file=sys.stderr)
@@ -213,8 +406,12 @@ def main():
                   file=sys.stderr)
             sys.exit(1)
         scan_dir = part.get("MOUNTPOINT") or ""
-        print("[info] 最大 ext4 分区: /dev/%s  size=%s  mount=%s" %
-              (part["NAME"], part["SIZE"], scan_dir or "(未挂载)"),
+        # 刺激: lsblk 无起始时用自定义; 有设备则尝试查起始
+        if part_lba is None and part.get("NAME"):
+            part_lba = _part_start_lba(part["NAME"])
+        print("[info] 最大 ext4 分区: /dev/%s  size=%s  mount=%s  start=%s" %
+              (part["NAME"], part["SIZE"], scan_dir or "(未挂载)",
+               part_lba if part_lba is not None else "?"),
               file=sys.stderr)
 
     if not scan_dir or not os.path.isdir(scan_dir):
@@ -222,38 +419,76 @@ def main():
               file=sys.stderr)
         sys.exit(2)
 
-    # 2) 递归收集所有文件(不筛选)
-    files = walk_files(scan_dir)
-    if not files:
-        print("分区下未找到任何文件", file=sys.stderr)
-        sys.exit(3)
-    files.sort()
-    print("[info] 递归扫描到 %d 个文件" % len(files), file=sys.stderr)
-
-    # 3) 每个文件 -> extent 映射(这里用 debugfs bmap; 若不可用给出空表并提示)
-    mapping = {}
-    mapped_ok = 0
-    nblocks_ok = 0
-    for full in files:
-        rel = os.path.relpath(full, scan_dir)
-        out = run(["debugfs", "-R", "bmap %s" % rel, scan_dir])
-        # bmap 每个引用返回形如 "00000042\t..." 或空; 简单取首个值
-        vals = re.findall(r'([0-9a-f]+)', out)
-        # 真正的物理块映射需逐个逻辑块调用: bmap <ino> <logical>; 这里用 inode
-        mapping[rel] = vals
-        if vals:
-            mapped_ok += 1
-    print("[warn] 纯 Python 未内置 ext4 树递归; 若上表为空, fallback 见 README",
-          file=sys.stderr)
-
-    # 4) 输出
-    if args.out:
-        with open(args.out, "w") as fh:
-            for rel, blks in mapping.items():
-                fh.write("%s\t%s\n" % (rel, " ".join(blks)))
-        print("[info] 映射已写出 -> %s" % args.out, file=sys.stderr)
+    # 2) 加载旧快照做增量对比(除非 --force 或旧快照不存在)
+    old_snap = None
+    if os.path.exists(args.json):
+        try:
+            old_snap = load_snapshot(args.json)
+        except Exception as e:
+            print("[warn] 快照损坏, 转全量: %s" % e, file=sys.stderr)
+    if old_snap and not args.force:
+        added, changed, removed = detect_changes(scan_dir, old_snap)
+        print("[info] 增量: 新增+%d 修改=%d 删除-%d (其余沿用快照, 性能影响可忽略)"
+              % (len(added), len(changed), len(removed)), file=sys.stderr)
+        if not (added or changed or removed):
+            print("[info] 无变化, 沿用现有快照", file=sys.stderr)
+            if part_lba is not None and old_snap.get("part_lba") is None:
+                old_snap["part_lba"] = part_lba
+            if not args.no_save:
+                dump_binary(old_snap, args.bin)
+                with open(args.json, "w") as fh:
+                    json.dump(old_snap, fh, indent=2, ensure_ascii=False)
+            print(json.dumps(old_snap, indent=2, ensure_ascii=False))
+            return
+        # 沿用快照中未变文件的 extent; 新增/修改重新映射; 删除剔除
+        mapping = {}
+        for n, v in old_snap.get("files", {}).items():
+            if n in removed:
+                continue
+            mapping[n] = [tuple(e) for e in v.get("extents", [])]
+        for rel in added + changed:
+            full = os.path.join(scan_dir, rel)
+            if not os.path.isfile(full):
+                continue
+            exts, _ = remap_file(full, rel, args.blksz)
+            mapping[rel] = exts
+        print("[info] 重映射 %d 个变化文件" % (len(added) + len(changed)),
+              file=sys.stderr)
     else:
-        print(json.dumps(mapping, indent=2))
+        mapping = {}
+        for full in walk_files(scan_dir):
+            rel = os.path.relpath(full, scan_dir)
+            exts, _ = remap_file(full, rel, args.blksz)
+            mapping[rel] = exts
+        print("[info] 全量重扫 %d 个文件" % len(mapping), file=sys.stderr)
+
+    # 3) 组装 + 落盘
+    snap = build_snapshot(scan_dir, args.blksz, mapping)
+    snap["part_lba"] = part_lba
+
+    if args.no_save:
+        print(json.dumps(snap, indent=2, ensure_ascii=False))
+        return
+
+    with open(args.json, "w") as fh:
+        json.dump(snap, fh, indent=2, ensure_ascii=False)
+    dump_binary(snap, args.bin)
+    print("[info] 快照已存: JSON=%s  BIN=%s" % (args.json, args.bin),
+          file=sys.stderr)
+    print(json.dumps(snap, indent=2, ensure_ascii=False))
+
+
+def _part_start_lba(name):
+    """用 udev 属性或 sysfs 拿分区起始扇区(512B 扇区), 失败返 None。"""
+    for base in ("/sys/class/block"):
+        p = os.path.join(base, name, "start")
+        if os.path.exists(p):
+            try:
+                with open(p) as fh:
+                    return int(fh.read().strip())
+            except Exception:
+                return None
+    return None
 
 
 if __name__ == "__main__":
