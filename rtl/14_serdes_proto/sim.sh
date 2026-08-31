@@ -18,7 +18,7 @@
 #  14. path_cache       SSD 双路径(M.2本地/主机PCIe)自动识别+统一权重流+命令来源可切
 #  15. expert_dir       专家 LRU 缓存目录: trunk 恒驻留 + LRU 替换 + 动态更新
 #  16. cachectl_pipe    端到端: 探测+选通+专家LRU目录+GEMV(冷首访/重访/trunk/更新/主机)
-#  17. file2lba         文件→LBA 映射: ext4 缓存文件块级寻址(分区起始+extent表+越界)
+#  17. file2lba         文件→LBA 映射: 多文件句柄(分区起始+全局extent表+文件目录+越界)
 # 依赖: iverilog 12 (g2012). 全部 PASS 则 exit 0。
 # ============================================================================
 set -u

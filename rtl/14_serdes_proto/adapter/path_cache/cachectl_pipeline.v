@@ -27,6 +27,9 @@ module cachectl_pipeline #(
     parameter EXPERT_SLOTS    = 8,          // 目录总槽 = 1(trunk)+专家
     parameter CMD_UPDATE_EXPERT = 8'h40,
     parameter FILE_BLKW       = 8,          // 文件逻辑块号位宽(每字 tag 宽度)
+    parameter FILE_IDW        = 4,          // 文件句柄位宽
+    parameter FILES_N         = 4,          // 文件目录条目数
+    parameter FILE_ID         = 0,          // 本流使用的文件句柄(单一缓存文件场景)
     parameter CMD_CFG_LBA     = 8'h50
 )(
     input  wire clk,
@@ -127,13 +130,16 @@ module cachectl_pipeline #(
     assign wt_data  = req_is_trunk ? trunk_data : (req_hit ? req_data : src_data);
     assign src_ready = wt_ready & locked;
 
-    // ---- 文件->LBA 接口: 每字 tag 即文件逻辑块号, 组合给物理 LBA ----
+    // ---- 文件->LBA 接口: 每字 tag 即文件内逻辑块号, 组合给物理 LBA ----
+    // 文件句柄 req_file 由参数 FILE_ID 指定(单一缓存文件场景; 多文件可由上层
+    // 其它字段扩展)。FILES/FILE_IDW 交由 file2lba 参数按需配置。
     wire [47:0] cur_lba;
     wire        cur_fault;
     wire [FILE_BLKW-1:0] blk_no = src_data[FILE_BLKW-1:0];
-    file2lba #(.BLKW(FILE_BLKW)) u_f2l (
+    file2lba #(.BLKW(FILE_BLKW), .FILES(FILES_N), .FILE_IDW(FILE_IDW)) u_f2l (
         .clk(clk), .rst_n(rst_n),
         .cmd_data(cmd_any_data), .cmd_valid(cmd_any_valid), .cmd_ready(),
+        .req_file(FILE_ID),
         .req_blk(blk_no),
         .phys_lba(cur_lba), .lba_fault(cur_fault)
     );
