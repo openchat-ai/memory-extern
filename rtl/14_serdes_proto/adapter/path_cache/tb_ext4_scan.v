@@ -26,6 +26,13 @@ module tb_ext4_scan;
     localparam D2_INO=32'h0000000E, D2_FTYPE=8'h01, D2_NLEN=8'h03, D2_NAME=24'h676970; // pig
     localparam D_RECLEN = 16'd16;
 
+    // 阶段5: 文件 inode(12) extent 期望值(@ inode 表块 word 704)
+    localparam F_MODE   = 16'h81A4;      // 0x8000 常规文件
+    localparam F_SIZE   = 32'h0000_0800; // 文件字节数
+    localparam F_EBLK   = 32'h0000_0000; // 首 extent 逻辑块号
+    localparam F_ELEN   = 16'd2;         // 首 extent 长度(块)
+    localparam F_ESTART = 32'h0000_0020; // 首 extent 物理起始块(32)
+
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
     wire [NB-1:0] blk_fd_blk;
@@ -44,6 +51,8 @@ module tb_ext4_scan;
     wire [7:0] o_ftype [0:3], o_nlen [0:3];
     wire [23:0] o_name3 [0:3];
     wire [2:0] o_cnt;
+    wire [31:0] f_ino, f_size, f_ebe, f_estart;
+    wire [15:0] f_mode, f_elen;
 
     integer errc=0;
 
@@ -93,7 +102,9 @@ module tb_ext4_scan;
         .root_ee_magic_o(re_mag), .root_ee_entries_o(re_ent),
         .root_ee_block_o(re_blk), .root_ee_len_o(re_len), .root_ee_start_o(re_start),
         .out_ino(o_ino), .out_ftype(o_ftype), .out_nlen(o_nlen),
-        .out_name3(o_name3), .out_count(o_cnt)
+        .out_name3(o_name3), .out_count(o_cnt),
+        .f_ino_o(f_ino), .f_mode_o(f_mode), .f_size_lo_o(f_size),
+        .f_ebe_o(f_ebe), .f_elen_o(f_elen), .f_estart_o(f_estart)
     );
 
     integer i;
@@ -144,6 +155,20 @@ module tb_ext4_scan;
         widx=8*1024+9;  img[widx] = (D2_FTYPE<<24)|(D2_NLEN<<16)|D_RECLEN;
         widx=8*1024+10; img[widx] = D2_NAME;
         // entry3 = 块尾(ino=0)
+
+        // 文件 inode(12) @ inode 表块(块4) word 704
+        widx=4*1024+704;
+        img[widx] = F_MODE;                    // i_mode (低16)
+        widx=4*1024+705;
+        img[widx] = F_SIZE;                    // i_size 低32
+        widx=4*1024+714;
+        img[widx] = (32'h0001<<16)|32'hF30A;   // extent 头: entries=1 magic=F30A
+        widx=4*1024+717;                       // leaf0 @ 字节2868 -> word 717
+        img[widx] = F_EBLK;                    // ee_block
+        widx=4*1024+718;
+        img[widx] = F_ELEN;                    // ee_len (低16)
+        widx=4*1024+719;
+        img[widx] = F_ESTART;                  // ee_start_lo
 
         #30 rst_n=1; #10;
         blk_fd_ready=1;
@@ -214,8 +239,28 @@ module tb_ext4_scan;
             $display("FAIL e2 name"); errc=errc+1;
         end else $display("PASS e2 name=%0h", o_name3[2]);
 
+        // ---- 阶段5: 文件 inode → extent(物理块) ----
+        if (f_ino!==D0_INO) begin
+            $display("FAIL f_ino: got %0d want %0d", f_ino, D0_INO); errc=errc+1;
+        end else $display("PASS f_ino=%0d", f_ino);
+        if (f_mode!==F_MODE) begin
+            $display("FAIL f_mode: got %0h want %0h", f_mode, F_MODE); errc=errc+1;
+        end else $display("PASS f_mode=%0h", f_mode);
+        if (f_size!==F_SIZE) begin
+            $display("FAIL f_size: got %0h want %0h", f_size, F_SIZE); errc=errc+1;
+        end else $display("PASS f_size=%0d", f_size);
+        if (f_ebe!==F_EBLK) begin
+            $display("FAIL f_ebe: got %0h want %0h", f_ebe, F_EBLK); errc=errc+1;
+        end else $display("PASS f_ebe=%0d", f_ebe);
+        if (f_elen!==F_ELEN) begin
+            $display("FAIL f_elen: got %0d want %0d", f_elen, F_ELEN); errc=errc+1;
+        end else $display("PASS f_elen=%0d", f_elen);
+        if (f_estart!==F_ESTART) begin
+            $display("FAIL f_estart: got %0h want %0h", f_estart, F_ESTART); errc=errc+1;
+        end else $display("PASS f_estart=%0d", f_estart);
+
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段4 目录块逐条枚举(3条目→结果表) 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段5 文件inode→extent(文件12, 物理块32起始, len2) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
