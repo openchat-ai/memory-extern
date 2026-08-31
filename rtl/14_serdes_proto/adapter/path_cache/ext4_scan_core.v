@@ -43,13 +43,20 @@ module ext4_scan_core #(
     output reg [15:0]  root_ee_entries_o,
     output reg [31:0]  root_ee_block_o,
     output reg [15:0]  root_ee_len_o,
-    output reg [31:0]  root_ee_start_o
+    output reg [31:0]  root_ee_start_o,
+    // 阶段3: 目录块首条目解析输出
+    output reg [31:0]  d_ino_o,
+    output reg [7:0]   d_ftype_o,
+    output reg [7:0]   d_namelen_o,
+    output reg [23:0]  d_name_o
 );
 
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
                S_GD_REQ=5, S_GD_WAIT=6, S_GD_FILL=7, S_GD_P=8,
-               S_IT_REQ=9, S_IT_WAIT=10, S_IT_FILL=11, S_IT_P=12, S_DONE=13;
-    reg [4:0] st;
+               S_IT_REQ=9, S_IT_WAIT=10, S_IT_FILL=11, S_IT_P=12,
+               S_DIR_REQ=13, S_DIR_WAIT=14, S_DIR_FILL=15, S_DIR_P=16,
+               S_DONE=17;
+    reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
     reg [31:0] wbuf [0:1023];
@@ -57,9 +64,10 @@ module ext4_scan_core #(
     reg [NB-1:0] req_blk;
     integer k;
 
-    // 阶段2 内部: inode 表块号 / inode 尺寸
+    // 内部: inode 表块号 / inode 尺寸 / 目录数据块号
     reg [NB-1:0] itbl_r;
     reg [15:0] isz_r;
+    reg [NB-1:0] dir_blk_r;
     // inode2 块内 word(固定 inode_size=256: offset=(2-1)*256=256 -> word 64)
     localparam INO2_WORD = 64;
 
@@ -67,12 +75,13 @@ module ext4_scan_core #(
         if (!rst_n) begin
             st <= S_IDLE; busy<=0; done<=0; err<=0;
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
-            itbl_r<=0; isz_r<=0;
+            itbl_r<=0; isz_r<=0; dir_blk_r<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
             inode_size_o<=0; inode_table_blk_o<=0;
             root_mode_o<=0; root_size_lo_o<=0;
             root_ee_magic_o<=0; root_ee_entries_o<=0;
             root_ee_block_o<=0; root_ee_len_o<=0; root_ee_start_o<=0;
+            d_ino_o<=0; d_ftype_o<=0; d_namelen_o<=0; d_name_o<=0;
         end else begin
             case (st)
                 S_IDLE: begin
@@ -180,6 +189,41 @@ module ext4_scan_core #(
                     root_ee_block_o <= wbuf[INO2_WORD+13];
                     root_ee_len_o   <= wbuf[INO2_WORD+14][15:0];
                     root_ee_start_o <= wbuf[INO2_WORD+15];
+                    dir_blk_r       <= wbuf[INO2_WORD+15];
+                    st <= S_DIR_REQ;
+                end
+
+                // ---- 读目录数据块(根 inode 首 extent 指向 ee_start), 解析首条目 ----
+                S_DIR_REQ: begin
+                    blk_fd_blk <= dir_blk_r;
+                    req_blk    <= dir_blk_r;
+                    blk_fd_req <= 1;
+                    st <= S_DIR_WAIT;
+                end
+                S_DIR_WAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0;
+                        beat <= 0;
+                        st <= S_DIR_FILL;
+                    end
+                end
+                S_DIR_FILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            st<=S_DIR_P;
+                        end else beat<=beat+1;
+                    end
+                end
+                // 目录块首条目(dir_entry2 @ word0):
+                //   ino     -> word0  低32
+                //   rec_len -> word1  [15:0]    name_len -> word1 [23:16]  ftype -> [31:24]
+                //   name 首3字符 -> word2 [23:0](小端: 第1字符在 [7:0])
+                S_DIR_P: begin
+                    d_ino_o     <= wbuf[0];
+                    d_ftype_o   <= wbuf[1][31:24];
+                    d_namelen_o <= wbuf[1][23:16];
+                    d_name_o    <= wbuf[2][23:0];
                     st <= S_DONE;
                 end
 

@@ -20,6 +20,13 @@ module tb_ext4_scan;
     localparam ROOT_ELEN   = 16'h0001;      // 首 extent 长度(块)
     localparam ROOT_ESTART = 32'h0000_0008; // 首 extent 物理起始块
 
+    // 阶段3: 目录块(块8)首条目期望值
+    localparam D_INO    = 32'h0000_000C;    // inode 号
+    localparam D_FTYPE  = 8'h01;            // 常规文件
+    localparam D_NAMELEN= 8'h03;            // "cat"
+    localparam D_RECLEN = 16'd16;
+    localparam D_NAME   = 24'h746163;       // 'c','a','t' (小端: 首字符在低8位)
+
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
     wire [NB-1:0] blk_fd_blk;
@@ -34,6 +41,9 @@ module tb_ext4_scan;
     wire [NB-1:0] itbl;
     wire [15:0] rm, re_mag, re_ent, re_len;
     wire [31:0] rs, re_blk, re_start;
+    wire [31:0] d_ino;
+    wire [7:0] d_ftype, d_namelen;
+    wire [23:0] d_name;
 
     integer errc=0;
 
@@ -81,7 +91,8 @@ module tb_ext4_scan;
         .inode_size_o(isz), .inode_table_blk_o(itbl),
         .root_mode_o(rm), .root_size_lo_o(rs),
         .root_ee_magic_o(re_mag), .root_ee_entries_o(re_ent),
-        .root_ee_block_o(re_blk), .root_ee_len_o(re_len), .root_ee_start_o(re_start)
+        .root_ee_block_o(re_blk), .root_ee_len_o(re_len), .root_ee_start_o(re_start),
+        .d_ino_o(d_ino), .d_ftype_o(d_ftype), .d_namelen_o(d_namelen), .d_name_o(d_name)
     );
 
     integer i;
@@ -117,6 +128,14 @@ module tb_ext4_scan;
         img[widx] = ROOT_ELEN;                 // ee_len (低16)
         widx=4*1024+79;
         img[widx] = ROOT_ESTART;               // ee_start
+
+        // 目录块(块8)首条目: word1 = {ftype,name_len,rec_len}
+        widx=8*1024+0;
+        img[widx] = D_INO;
+        widx=8*1024+1;
+        img[widx] = (D_FTYPE<<24) | (D_NAMELEN<<16) | D_RECLEN;
+        widx=8*1024+2;
+        img[widx] = D_NAME;                    // name 首3字符(小端)
 
         #30 rst_n=1; #10;
         blk_fd_ready=1;
@@ -161,8 +180,22 @@ module tb_ext4_scan;
             $display("FAIL ee_start: got %0h want %0h", re_start, ROOT_ESTART); errc=errc+1;
         end else $display("PASS ee_start=%0d", re_start);
 
+        // ---- 阶段3: 目录块首条目 ----
+        if (d_ino!==D_INO) begin
+            $display("FAIL d_ino: got %0h want %0h", d_ino, D_INO); errc=errc+1;
+        end else $display("PASS d_ino=%0d", d_ino);
+        if (d_ftype!==D_FTYPE) begin
+            $display("FAIL d_ftype: got %0h want %0h", d_ftype, D_FTYPE); errc=errc+1;
+        end else $display("PASS d_ftype=%0h", d_ftype);
+        if (d_namelen!==D_NAMELEN) begin
+            $display("FAIL d_namelen: got %0d want %0d", d_namelen, D_NAMELEN); errc=errc+1;
+        end else $display("PASS d_namelen=%0d", d_namelen);
+        if (d_name!==D_NAME) begin
+            $display("FAIL d_name: got %0h want %0h", d_name, D_NAME); errc=errc+1;
+        end else $display("PASS d_name=%0h", d_name);
+
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段2 根 inode2(mode/size/extent头/首extent) 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段3 目录块首条目(ino/ftype/name_len/name) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
