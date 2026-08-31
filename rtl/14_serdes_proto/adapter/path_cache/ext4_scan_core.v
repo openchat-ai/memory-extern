@@ -17,7 +17,8 @@ module ext4_scan_core #(
     parameter NB    = 16,     // 块号位宽
     parameter DATAW = 32,     // 数据拍位宽(4 字节)
     parameter NBEAT = 1024,   // 每块拍数(4096/4)
-    parameter MAXENT = 4      // 目录块可枚举的最大条目数
+    parameter MAXENT = 4,     // 目录块可枚举的最大条目数
+    parameter MAXDEPTH = 4    // extent 索引递归最大下钻深度(防死循环)
 )(
     input  wire             clk, rst_n,
     input  wire             go,
@@ -112,6 +113,8 @@ module ext4_scan_core #(
     reg [31:0] cur_ino_r;
     reg [15:0] sleaf;
     reg [15:0] sentries;
+    // 阶段10: 多层下钻深度计数
+    reg [3:0] cdepth;
     // 阶段8: 查询 FSM(独立于扫描主 FSM)
     reg qst;
     reg [$clog2(MAXENT+1)-1:0] qi;
@@ -130,7 +133,7 @@ module ext4_scan_core #(
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
             itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
             fidx<=0; ext_count_o<=0;
-            cur_ino_r<=0; sleaf<=0; sentries<=0;
+            cur_ino_r<=0; sleaf<=0; sentries<=0; cdepth<=0;
             qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
             qebe<=0; qelen<=0; qestart<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
@@ -376,13 +379,26 @@ module ext4_scan_core #(
                 end
                 // 子块 extent 头 @word0(magic低16/entries高16) word1(depth高16)
                 // 叶 @word3 + i*3: ee_block; word4+ 低16 ee_len; word5+ ee_start
+                // 阶段10: 子块若是索引块(depth>0)则继续下钻第一索引项(ei_leaf=word4)
                 S_SUBP: begin
-                    s_ebe_o    <= wbuf[3];
-                    s_elen_o   <= wbuf[4][15:0];
-                    s_estart_o <= wbuf[5];
-                    sleaf    <= 0;
-                    sentries <= wbuf[0][31:16];
-                    st <= S_SUBLF;
+                    if (wbuf[1][31:16]!=0) begin
+                        // 索引子块 → 下钻第一索引项 ei_leaf
+                        if (cdepth+1>=MAXDEPTH) begin
+                            err<=1; st<=S_DONE;
+                        end else begin
+                            subblk_r <= wbuf[4][15:0];
+                            cdepth   <= cdepth + 1;
+                            st <= S_SUBREQ;
+                        end
+                    end else begin
+                        // 叶子块(阶段9 原逻辑)
+                        s_ebe_o    <= wbuf[3];
+                        s_elen_o   <= wbuf[4][15:0];
+                        s_estart_o <= wbuf[5];
+                        sleaf    <= 0;
+                        sentries <= wbuf[0][31:16];
+                        st <= S_SUBLF;
+                    end
                 end
                 // 阶段9: 遍历子块全部叶(索引文件递归收集)
                 S_SUBLF: begin
@@ -444,9 +460,10 @@ module ext4_scan_core #(
                             ext_count_o               <= ext_count_o + 1;
                             fidx <= fidx + 1;
                         end else begin
-                            // 阶段9: depth>0 索引文件 — 递归读 ei_leaf 子块
+                            // 阶段9/10: depth>0 索引文件 — 递归下钻 ei_leaf 子块
                             cur_ino_r <= out_ino[fidx];
                             subblk_r  <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
+                            cdepth <= 0;
                             st <= S_SUBREQ;
                         end
                     end

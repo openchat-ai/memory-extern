@@ -211,22 +211,28 @@ module tb_ext4_scan;
         widx=4*1024+782;  img[widx] = E7_ELEN13;                // ee_len
         widx=4*1024+783;  img[widx] = E7_EST13;                 // ee_start=48
 
-        // ino14 @ word 832 — depth=1 索引 (阶段9: 递归收集 → ei_leaf=块41)
+        // ino14 @ word 832 — depth=1 索引 (阶段10: 递归2层 → 块41索引 → 块42叶)
         widx=4*1024+832;  img[widx] = 16'h81A4;
         widx=4*1024+842;  img[widx] = (32'h0001<<16)|32'hF30A;  // extent 头
         widx=4*1024+843;  img[widx] = (32'h0001<<16);           // depth=1 (索引)
         widx=4*1024+845;  img[widx] = 0;                        // ei_block
-        widx=4*1024+846;  img[widx] = 32'd41;                   // ei_leaf=41(子 extent 块)
+        widx=4*1024+846;  img[widx] = 32'd41;                   // ei_leaf=41(索引块)
 
-        // 子 extent 块(块41) — 叶块 depth=0, entries=2 叶 → 收集为 ino14×2 表项
-        widx=41*1024+0;   img[widx] = (32'h0002<<16)|32'hF30A;  // entries=2 magic
-        widx=41*1024+1;   img[widx] = 0;                        // depth=0
-        widx=41*1024+3;   img[widx] = G14_E0_EB;                // 叶0 ee_block=0
-        widx=41*1024+4;   img[widx] = G14_E0_EL;                // 叶0 ee_len=1
-        widx=41*1024+5;   img[widx] = G14_E0_ST;                // 叶0 ee_start=100
-        widx=41*1024+6;   img[widx] = G14_E1_EB;                // 叶1 ee_block=1
-        widx=41*1024+7;   img[widx] = G14_E1_EL;                // 叶1 ee_len=2
-        widx=41*1024+8;   img[widx] = G14_E1_ST;                // 叶1 ee_start=120
+        // 块41 — 索引块(depth=1), 第一索引项 ei_leaf=42
+        widx=41*1024+0;   img[widx] = (32'h0001<<16)|32'hF30A;  // entries=1 magic
+        widx=41*1024+1;   img[widx] = (32'h0001<<16);           // depth=1 (索引)
+        widx=41*1024+3;   img[widx] = 0;                        // ei_block=0
+        widx=41*1024+4;   img[widx] = 32'd42;                   // ei_leaf=42(下层叶块)
+
+        // 块42 — 叶块 depth=0, entries=2 叶 → 收集为 ino14×2 表项
+        widx=42*1024+0;   img[widx] = (32'h0002<<16)|32'hF30A;  // entries=2 magic
+        widx=42*1024+1;   img[widx] = 0;                        // depth=0
+        widx=42*1024+3;   img[widx] = G14_E0_EB;                // 叶0 ee_block=0
+        widx=42*1024+4;   img[widx] = G14_E0_EL;                // 叶0 ee_len=1
+        widx=42*1024+5;   img[widx] = G14_E0_ST;                // 叶0 ee_start=100
+        widx=42*1024+6;   img[widx] = G14_E1_EB;                // 叶1 ee_block=1
+        widx=42*1024+7;   img[widx] = G14_E1_EL;                // 叶1 ee_len=2
+        widx=42*1024+8;   img[widx] = G14_E1_ST;                // 叶1 ee_start=120
 
         #30 rst_n=1; #10;
         blk_fd_ready=1;
@@ -359,7 +365,7 @@ module tb_ext4_scan;
         end else $display("PASS query ino99 未找到 (qvalid=0)");
 
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段9 索引(depth=1)递归收集 ino14→2叶(子块41) + 全表/RAM/查询 全过");
+        if (errc==0) $display("PASS: ext4_scan 阶段10 多层(2层)索引递归 ino14→块41索引→块42叶(2叶) + 全表/RAM/查询 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
