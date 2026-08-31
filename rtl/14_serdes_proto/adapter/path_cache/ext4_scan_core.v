@@ -91,7 +91,7 @@ module ext4_scan_core #(
                S_FILEREQ=18, S_FILEWAIT=19, S_FILEFILL=20, S_FILEP=21,
                S_SUBREQ=22, S_SUBWAIT=23, S_SUBFILL=24, S_SUBP=25,
                S_EXT_REQ=26, S_EXT_WAIT=27, S_EXT_FILL=28, S_EXT_LOOP=29,
-               S_DONE=30;
+               S_SUBLF=30, S_DONE=31;
     reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
@@ -108,6 +108,10 @@ module ext4_scan_core #(
     reg [NB-1:0] subblk_r;
     // 阶段7: 全文件收集游标/表号
     reg [$clog2(MAXENT+1)-1:0] fidx;
+    // 阶段9: 索引文件递归 — 当前文件 ino 暂存 / 子块内叶游标
+    reg [31:0] cur_ino_r;
+    reg [15:0] sleaf;
+    reg [15:0] sentries;
     // 阶段8: 查询 FSM(独立于扫描主 FSM)
     reg qst;
     reg [$clog2(MAXENT+1)-1:0] qi;
@@ -126,6 +130,7 @@ module ext4_scan_core #(
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
             itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
             fidx<=0; ext_count_o<=0;
+            cur_ino_r<=0; sleaf<=0; sentries<=0;
             qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
             qebe<=0; qelen<=0; qestart<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
@@ -370,12 +375,32 @@ module ext4_scan_core #(
                     end
                 end
                 // 子块 extent 头 @word0(magic低16/entries高16) word1(depth高16)
-                // 叶 @word3: ee_block; word4 低16 ee_len; word5 ee_start
+                // 叶 @word3 + i*3: ee_block; word4+ 低16 ee_len; word5+ ee_start
                 S_SUBP: begin
                     s_ebe_o    <= wbuf[3];
                     s_elen_o   <= wbuf[4][15:0];
                     s_estart_o <= wbuf[5];
-                    st <= S_DONE;
+                    sleaf    <= 0;
+                    sentries <= wbuf[0][31:16];
+                    st <= S_SUBLF;
+                end
+                // 阶段9: 遍历子块全部叶(索引文件递归收集)
+                S_SUBLF: begin
+                    if (sleaf>=sentries) begin
+                        fidx <= fidx + 1;
+                        st <= S_EXT_LOOP;
+                    end else begin
+                        ext_ino_o[ext_count_o]    <= cur_ino_r;
+                        ext_ebe_o[ext_count_o]    <= wbuf[3 + sleaf*3];
+                        ext_elen_o[ext_count_o]   <= wbuf[4 + sleaf*3][15:0];
+                        ext_estart_o[ext_count_o] <= wbuf[5 + sleaf*3];
+                        ram_ino[ext_count_o]      <= cur_ino_r;
+                        ram_ebe[ext_count_o]      <= wbuf[3 + sleaf*3];
+                        ram_elen[ext_count_o]     <= wbuf[4 + sleaf*3][15:0];
+                        ram_estart[ext_count_o]   <= wbuf[5 + sleaf*3];
+                        ext_count_o               <= ext_count_o + 1;
+                        sleaf <= sleaf + 1;
+                    end
                 end
 
                 // 阶段7: 读 inode 表块一次, 遍历结果表全部文件 → 收集 depth=0 内联叶
@@ -417,8 +442,13 @@ module ext4_scan_core #(
                             ram_elen[ext_count_o]     <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
                             ram_estart[ext_count_o]   <= wbuf[(((out_ino[fidx]-1)&15)*64)+15];
                             ext_count_o               <= ext_count_o + 1;
+                            fidx <= fidx + 1;
+                        end else begin
+                            // 阶段9: depth>0 索引文件 — 递归读 ei_leaf 子块
+                            cur_ino_r <= out_ino[fidx];
+                            subblk_r  <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
+                            st <= S_SUBREQ;
                         end
-                        fidx <= fidx + 1;
                     end
                 end
 
