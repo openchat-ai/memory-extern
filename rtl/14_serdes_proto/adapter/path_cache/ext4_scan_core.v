@@ -16,7 +16,8 @@
 module ext4_scan_core #(
     parameter NB    = 16,     // 块号位宽
     parameter DATAW = 32,     // 数据拍位宽(4 字节)
-    parameter NBEAT = 1024    // 每块拍数(4096/4)
+    parameter NBEAT = 1024,   // 每块拍数(4096/4)
+    parameter MAXENT = 4      // 目录块可枚举的最大条目数
 )(
     input  wire             clk, rst_n,
     input  wire             go,
@@ -44,18 +45,19 @@ module ext4_scan_core #(
     output reg [31:0]  root_ee_block_o,
     output reg [15:0]  root_ee_len_o,
     output reg [31:0]  root_ee_start_o,
-    // 阶段3: 目录块首条目解析输出
-    output reg [31:0]  d_ino_o,
-    output reg [7:0]   d_ftype_o,
-    output reg [7:0]   d_namelen_o,
-    output reg [23:0]  d_name_o
+    // 阶段4: 目录块逐条枚举结果表
+    output reg [31:0]  out_ino    [0:MAXENT-1],
+    output reg [7:0]   out_ftype  [0:MAXENT-1],
+    output reg [7:0]   out_nlen   [0:MAXENT-1],
+    output reg [23:0]  out_name3  [0:MAXENT-1],
+    output reg [$clog2(MAXENT+1)-1:0] out_count
 );
 
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
                S_GD_REQ=5, S_GD_WAIT=6, S_GD_FILL=7, S_GD_P=8,
                S_IT_REQ=9, S_IT_WAIT=10, S_IT_FILL=11, S_IT_P=12,
                S_DIR_REQ=13, S_DIR_WAIT=14, S_DIR_FILL=15, S_DIR_P=16,
-               S_DONE=17;
+               S_DIR_LOOP=17, S_DONE=18;
     reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
@@ -68,6 +70,9 @@ module ext4_scan_core #(
     reg [NB-1:0] itbl_r;
     reg [15:0] isz_r;
     reg [NB-1:0] dir_blk_r;
+    // 阶段4: 目录块枚举游标
+    reg [15:0] dpos;
+    reg [$clog2(MAXENT+1)-1:0] idx;
     // inode2 块内 word(固定 inode_size=256: offset=(2-1)*256=256 -> word 64)
     localparam INO2_WORD = 64;
 
@@ -75,13 +80,16 @@ module ext4_scan_core #(
         if (!rst_n) begin
             st <= S_IDLE; busy<=0; done<=0; err<=0;
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
-            itbl_r<=0; isz_r<=0; dir_blk_r<=0;
+            itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
             inode_size_o<=0; inode_table_blk_o<=0;
             root_mode_o<=0; root_size_lo_o<=0;
             root_ee_magic_o<=0; root_ee_entries_o<=0;
             root_ee_block_o<=0; root_ee_len_o<=0; root_ee_start_o<=0;
-            d_ino_o<=0; d_ftype_o<=0; d_namelen_o<=0; d_name_o<=0;
+            out_count<=0;
+            for (k=0;k<MAXENT;k=k+1) begin
+                out_ino[k]<=0; out_ftype[k]<=0; out_nlen[k]<=0; out_name3[k]<=0;
+            end
         end else begin
             case (st)
                 S_IDLE: begin
@@ -215,16 +223,29 @@ module ext4_scan_core #(
                         end else beat<=beat+1;
                     end
                 end
-                // 目录块首条目(dir_entry2 @ word0):
-                //   ino     -> word0  低32
-                //   rec_len -> word1  [15:0]    name_len -> word1 [23:16]  ftype -> [31:24]
-                //   name 首3字符 -> word2 [23:0](小端: 第1字符在 [7:0])
+                // 目录块 fill 完成, 初始化枚举游标
                 S_DIR_P: begin
-                    d_ino_o     <= wbuf[0];
-                    d_ftype_o   <= wbuf[1][31:24];
-                    d_namelen_o <= wbuf[1][23:16];
-                    d_name_o    <= wbuf[2][23:0];
-                    st <= S_DONE;
+                    dpos <= 0;
+                    idx  <= 0;
+                    st <= S_DIR_LOOP;
+                end
+                // 逐条解析 dir_entry2: ino/rec_len/name_len/ftype/名字节
+                //   ino     -> wbuf[dpos>>2]   低32
+                //   rec_len -> wbuf[(dpos>>2)+1][15:0]  name_len -> [23:16]  ftype -> [31:24]
+                //   name 首3字节 -> wbuf[(dpos>>2)+2][23:0](小端)
+                S_DIR_LOOP: begin
+                    if (dpos>=1024 || idx>=MAXENT ||
+                        wbuf[dpos>>2]==0) begin
+                        out_count <= idx;
+                        st <= S_DONE;
+                    end else begin
+                        out_ino[idx]   <= wbuf[dpos>>2];
+                        out_ftype[idx] <= wbuf[(dpos>>2)+1][31:24];
+                        out_nlen[idx]  <= wbuf[(dpos>>2)+1][23:16];
+                        out_name3[idx] <= wbuf[(dpos>>2)+2][23:0];
+                        dpos <= dpos + wbuf[(dpos>>2)+1][15:0];
+                        idx  <= idx + 1;
+                    end
                 end
 
                 S_DONE: begin
