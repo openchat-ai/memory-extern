@@ -19,6 +19,7 @@
 #  15. expert_dir       专家 LRU 缓存目录: trunk 恒驻留 + LRU 替换 + 动态更新
 #  16. cachectl_pipe    端到端: 探测+选通+专家LRU目录+GEMV(冷首访/重访/trunk/更新/主机)
 #  17. file2lba         文件→LBA 映射: 多文件句柄(分区起始+全局extent表+文件目录+越界)
+#  18. ext4_scan        RTL ext4 扫描 阶段1: superblock+组0描述符(合成镜像块流闭环)
 # 依赖: iverilog 12 (g2012). 全部 PASS 则 exit 0。
 # ============================================================================
 set -u
@@ -112,6 +113,9 @@ run cachectl_pipe \
 
 run file2lba \
     adapter/path_cache/tb_file2lba.v adapter/path_cache/file2lba.v
+
+run ext4_scan \
+    adapter/path_cache/tb_ext4_scan.v adapter/path_cache/ext4_scan_core.v
 
 echo "------------------------------------------"
 echo "结果: PASS=$pass FAIL=$fail"

@@ -166,10 +166,12 @@ rtl/14_serdes_proto/
       expert_dir.v            (专家 LRU 缓存目录: trunk 恒驻留 + LRU 替换 + 动态更新)
       cachectl_pipeline.v     (端到端: 探测+选通+LRU目录+GEMV+文件→LBA, 冷首访单拍装入)
       file2lba.v              (文件→LBA 映射: 分区起始+extent表, 真机按地址读盘接口)
+      ext4_scan_core.v        (RTL ext4 扫描: 块流→superblock/组描述符/→inode/目录树)
       cachectl_top.v          (骨架版: 权重通路 + 命令来源可切)
       tb_path_cache.v, tb_expert_dir.v, tb_cachectl_pipeline.v, tb_file2lba.v
+      tb_ext4_scan.v          (ext4 扫描 RTL 验证: 合成镜像喂块)
   tb/ proto_core_tb.v
-  sim.sh                      ← 一键回归(现 17 测试全绿,见 §9)
+  sim.sh                      ← 一键回归(现 18 测试全绿,见 §9)
 ```
 
 ## 8a. SSD 双路径自动识别(L2缓存场景, path_cache)
@@ -226,10 +228,22 @@ rtl/14_serdes_proto/
 - **宿主侧 `tools/locate_cache_lbas.py`**: 自动找最大 ext4 分区, **递归遍历分区下
   所有目录**, 收集每个文件的 extent, 汇总成文件→LBA 映射(不筛选文件)。
 
+### RTL ext4 扫描器(ext4_scan_core, 逐级扩展中)
+- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**当前第 1
+  阶段**: 窄总线(32bit×NBEAT=1024 拍=4096B/块)从块流灌入, 解析 superblock
+  (`blocks_per_grp`/`inodes_per_grp`/`inode_size`, 块0 偏移1024=字256) 与组0 描述符
+  (`inode_table_blk`, 块1) 并输出, `done` 置位形成闭合。后续按序扩展: 根 inode(2)
+  →目录块(变长 rec_len)→文件 inode extent(深度0+索引递归)→写外置表 RAM。
+- 字段抽取用**32 位字数组 wbuf** + 顶层 `assign` 位选(规避这版 iverilog 对 `always@(*)`
+  内数组读的组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组)。
+- **仿真范围(坦诚说明)**: 真机磁盘块读(NVMe 读引擎/138K 板)是硬前置且未到手, 当前
+  只对合成镜像块流仿真验证; 完整 ext4 边角(内联数据/深层索引递归/跨块目录)工作量大、
+  可验证性有限, 按"每阶段先编译+仿真通过再扩展"推进。
+
 > 简化(仿真范围): 真实 NVMe/M.2 读盘需 NVMe 协议栈,本实现用"外部字流桩"模拟磁盘块;
 > trunk 视为永久驻留(冷数据由 HDD 提供),专家 LRU 部门已做实(命中/替换/动态更新/统计)。
 
-## 9. 验证现状(sim.sh 一键回归 17/17 ALL GREEN)
+## 9. 验证现状(sim.sh 一键回归 18/18 ALL GREEN)
 
 | # | 测试 | 覆盖 |
 |---|------|------|
@@ -250,6 +264,7 @@ rtl/14_serdes_proto/
 | 15 | expert_dir | 专家 LRU 缓存目录: trunk 恒命中+LRU替换+动态更新 |
 | 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV+文件→LBA(冷首访/重访/trunk/更新/主机路径) |
 | 17 | file2lba | 多文件句柄→LBA: 分区起始+全局extent表+文件目录+跨段+越界+动态重配 |
+| 18 | ext4_scan | RTL ext4 扫描 阶段1: superblock(bpg/ipg/inode_size)+组0描述符(inode_table) 合成镜像闭环 |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据
