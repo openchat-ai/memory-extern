@@ -67,7 +67,20 @@ module ext4_scan_core #(
     output reg [31:0]  ext_ebe_o    [0:MAXENT-1],
     output reg [15:0]  ext_elen_o   [0:MAXENT-1],
     output reg [31:0]  ext_estart_o [0:MAXENT-1],
-    output reg [$clog2(MAXENT+1)-1:0] ext_count_o
+    output reg [$clog2(MAXENT+1)-1:0] ext_count_o,
+
+    // ---- 阶段8: 外置表 RAM(扫描写入, 供 cache 查询) ----
+    output reg [31:0]  ram_ino    [0:MAXENT-1],
+    output reg [31:0]  ram_ebe    [0:MAXENT-1],
+    output reg [15:0]  ram_elen   [0:MAXENT-1],
+    output reg [31:0]  ram_estart [0:MAXENT-1],
+    // 查询请求(扫描完成后): 按 ino 线性查找, 返回文件→物理块段
+    input  wire             qreq,
+    input  wire [NB-1:0]    qino,
+    output reg              qbusy, qvalid, qdone,
+    output reg [31:0]       qebe,
+    output reg [15:0]       qelen,
+    output reg [31:0]       qestart
 );
 
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
@@ -95,6 +108,9 @@ module ext4_scan_core #(
     reg [NB-1:0] subblk_r;
     // 阶段7: 全文件收集游标/表号
     reg [$clog2(MAXENT+1)-1:0] fidx;
+    // 阶段8: 查询 FSM(独立于扫描主 FSM)
+    reg qst;
+    reg [$clog2(MAXENT+1)-1:0] qi;
     // 阶段4: 目录块枚举游标
     reg [15:0] dpos;
     reg [$clog2(MAXENT+1)-1:0] idx;
@@ -110,6 +126,8 @@ module ext4_scan_core #(
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
             itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
             fidx<=0; ext_count_o<=0;
+            qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
+            qebe<=0; qelen<=0; qestart<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
             inode_size_o<=0; inode_table_blk_o<=0;
             root_mode_o<=0; root_size_lo_o<=0;
@@ -393,6 +411,11 @@ module ext4_scan_core #(
                             ext_ebe_o[ext_count_o]    <= wbuf[(((out_ino[fidx]-1)&15)*64)+13];
                             ext_elen_o[ext_count_o]   <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
                             ext_estart_o[ext_count_o] <= wbuf[(((out_ino[fidx]-1)&15)*64)+15];
+                            // 阶段8: 同步落外置表 RAM
+                            ram_ino[ext_count_o]      <= out_ino[fidx];
+                            ram_ebe[ext_count_o]      <= wbuf[(((out_ino[fidx]-1)&15)*64)+13];
+                            ram_elen[ext_count_o]     <= wbuf[(((out_ino[fidx]-1)&15)*64)+14][15:0];
+                            ram_estart[ext_count_o]   <= wbuf[(((out_ino[fidx]-1)&15)*64)+15];
                             ext_count_o               <= ext_count_o + 1;
                         end
                         fidx <= fidx + 1;
@@ -404,6 +427,37 @@ module ext4_scan_core #(
                     st<=S_IDLE;
                 end
                 default: st<=S_DONE;
+            endcase
+        end
+    end
+
+    // ---- 阶段8: 独立查询 FSM — 按 ino 线性遍历外置表 RAM, 返回文件→物理块段 ----
+    // 时序动态索引读 reg 数组(同 wbuf 模式)已验证可行; 避免组合 for 遍历(组合环 bug)。
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            qst<=0; qi<=0; qbusy<=0; qvalid<=0; qdone<=0;
+            qebe<=0; qelen<=0; qestart<=0;
+        end else begin
+            case (qst)
+                0: begin
+                    if (qreq && !qbusy) begin
+                        qbusy<=1; qi<=0; qvalid<=0; qdone<=0;
+                        qst<=1;
+                    end
+                end
+                1: begin
+                    if (qi>=ext_count_o) begin
+                        qdone<=1; qbusy<=0; qst<=0;   // 未找到
+                    end else if (ram_ino[qi]==qino) begin
+                        qvalid<=1; qdone<=1; qbusy<=0;
+                        qebe<=ram_ebe[qi];
+                        qelen<=ram_elen[qi];
+                        qestart<=ram_estart[qi];
+                        qst<=0;
+                    end else begin
+                        qi<=qi+1;
+                    end
+                end
             endcase
         end
     end
