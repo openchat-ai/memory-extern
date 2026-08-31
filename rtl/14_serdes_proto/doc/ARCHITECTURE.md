@@ -229,7 +229,7 @@ rtl/14_serdes_proto/
   所有目录**, 收集每个文件的 extent, 汇总成文件→LBA 映射(不筛选文件)。
 
 ### RTL ext4 扫描器(ext4_scan_core, 逐级扩展中)
-- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-10**:
+- 目标: 把"扫描目录/找文件→LBA"也搬进 RTL(宿主工具定位结果作参照)。**已完成阶段1-11**:
   窄总线(32bit×NBEAT=1024 拍=4096B/块)从块流灌入——阶段1 解析 superblock
   (`blocks_per_grp`/`inodes_per_grp`/`inode_size`, 块0 偏移1024=字256) 与组0 描述符
   (`inode_table_blk`, 块1); **阶段2** 循 inode 表块读根 inode(2), 采出 `i_mode`/
@@ -250,10 +250,16 @@ rtl/14_serdes_proto/
   **阶段10** 泛化为**多层深度递归**: S_SUBP 先查该子块 depth, 若子块仍是**索引块**(depth>0)
   则对第一索引项 `ei_leaf=wbuf[4]` **继续下钻**(cdepth 计数, 超 MAXDEPTH 报 err), 直到
   叶块再遍历收集 — 支持嵌套 2+ 层索引块 ——
+  **阶段11** 增加**一级子目录递归**: 收集根目录文件时**跳过 type=2 目录条目**, 完成后在
+  out_ftype 里定位子目录(S_DMSCAN), 读其 inode(w=((ino-1)&15)*64)取数据块, 枚举子目录
+  **内联叶/块内文件** S_DBLOOP 收集 subd_ino[], 重读 inode 表块逐个解析子文件 extent 续写
+  进 ext/RAM 表(S_DMEXT) — 支持"根目录 + 一级子目录"两层的全文件系统收集 ——
   即"文件 inode→物理块段"的可查询映射, 正是 `file2lba` 的"文件→LBA"查询在 RTL 的落点。
   →"文件名→inode→extent→物理块"闭合链完整, 与 `file2lba`/`ext4_lba.py` 对齐。
-  后续按序扩展: 多层索引**多路并行**(当前只跟第一索引项下钻, 未遍历兄弟索引)→多目录递归→
-  大表(多组/多块 inode 表, 非固定块4)→cache 管线接入查询。
+  说明: 收集表容量用独立参数 TABN(默认8, 须 >MAXENT 以容纳递归展开), 目录枚举容量仍 MAXENT
+  (根/子目录各自)。
+  后续按序扩展: **任意层级目录递归**(目录栈 dirstk, 当前只一级)→多层索引**多路并行**(遍历索引
+  块全部项, 当前只第一项下钻)→大表(多组/多块 inode 表, 非固定块4)→cache 管线接入查询。
 - 字段抽取用**32 位字数组 wbuf** + 顶取字组合读(规避这版 iverilog 对 `always@(*)` 内数组读的
   组合环 bug; 字节数组+拼接在时序块内同样受限, 故统一用字数组); 遍历用 `wbuf[dpos>>2]`
   位移索引(iverilog 验证可行); 阶段7 动态 inode word 用 `((ino-1)&15)*64` 求模定位(迭代读
@@ -287,7 +293,7 @@ rtl/14_serdes_proto/
 | 15 | expert_dir | 专家 LRU 缓存目录: trunk 恒命中+LRU替换+动态更新 |
 | 16 | cachectl_pipe | 端到端: 探测+选通+LRU目录+GEMV+文件→LBA(冷首访/重访/trunk/更新/主机路径) |
 | 17 | file2lba | 多文件句柄→LBA: 分区起始+全局extent表+文件目录+跨段+越界+动态重配 |
-| 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode(2) → 阶段3/4 目录块rec_len逐条枚举→结果表 → 阶段7 全文件遍历(动态 inode word) → 阶段9/10 索引多层递归下钻收集多叶(MAXDEPTH) → 阶段8 落外置表RAM+查询FSM |
+| 18 | ext4_scan | RTL ext4 扫描: 阶段1 superblock+组0desc → 阶段2 根inode → 阶段3/4 目录rec_len枚举→结果表 → 阶段7 全文件收集(动态 inode word) → 阶段9/10 索引多层递归下钻多叶(MAXDEPTH) → 阶段11 一级子目录递归收集子文件 → 阶段8 落外置表RAM+查询FSM |
 
 > **proto_core 背压修复(本版本)**: `o_payload_*` 改为组合直通 + `s_axis_tready`
 > (PAYLOAD)=`o_payload_tready` 同拍握手;背压时 `s_axis_tready=0` 刹停上游、数据

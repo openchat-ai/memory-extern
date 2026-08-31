@@ -24,6 +24,7 @@ module tb_ext4_scan;
     localparam D0_INO=32'h0000000C, D0_FTYPE=8'h01, D0_NLEN=8'h03, D0_NAME=24'h746163; // cat
     localparam D1_INO=32'h0000000D, D1_FTYPE=8'h01, D1_NLEN=8'h03, D1_NAME=24'h676F64; // dog
     localparam D2_INO=32'h0000000E, D2_FTYPE=8'h01, D2_NLEN=8'h03, D2_NAME=24'h676970; // pig
+    localparam D3_INO=32'h00000014, D3_FTYPE=8'h02, D3_NLEN=8'h03, D3_NAME=24'h737362; // sub(子目录)
     localparam D_RECLEN = 16'd16;
 
     // 阶段5: 文件 inode(12) extent 期望值(@ inode 表块 word 704, depth=0 内联)
@@ -52,6 +53,22 @@ module tb_ext4_scan;
     localparam G14_E1_EL  = 16'd2;         //       长度2
     localparam G14_E1_ST  = 32'h0000_0078; //       物理块120
 
+    // 阶段11: 一级子目录 — 根目录含 ino20(subdir, ftype=2) → 数据块45
+    localparam SUBDIR_INO = 32'd20;
+    localparam SUBDIR_BLK = 32'd45;        // 子目录数据块
+    // ino20 @ word (20-1)%16*64 = 3*64 = 192; 数据块 = ee_start(word 192+15=207)
+    localparam SUBDIR_WORD = 192;
+    // 子目录内文件: ino15(mouse, estart=200) / ino16(key, estart=220)
+    localparam S11_INO15 = 32'd15;
+    localparam S11_EST15 = 32'h0000_00C8;  // 物理块 200
+    localparam S11_EL15  = 16'd1;
+    localparam S11_INO16 = 32'd16;
+    localparam S11_EST16 = 32'h0000_00DC;  // 物理块 220
+    localparam S11_EL16  = 16'd2;
+    // ino15 @ (15-1)%16*64=14*64=896; ino16 @ 15*64=960
+    localparam S11_INO15_WORD = 896;
+    localparam S11_INO16_WORD = 960;
+
     reg clk=0, rst_n=0, go=0;
     wire busy, done, err;
     wire [NB-1:0] blk_fd_blk;
@@ -72,11 +89,11 @@ module tb_ext4_scan;
     wire [2:0] o_cnt;
     wire [31:0] f_ino, f_size, f_ebe, f_estart, s_ebe, s_estart;
     wire [15:0] f_mode, f_elen, s_elen;
-    wire [31:0] x_ino [0:3], x_ebe [0:3], x_estart [0:3];
-    wire [15:0] x_elen [0:3];
-    wire [2:0] x_cnt;
-    wire [31:0] r_ino [0:3], r_ebe [0:3], r_estart [0:3];
-    wire [15:0] r_elen [0:3];
+    wire [31:0] x_ino [0:7], x_ebe [0:7], x_estart [0:7];
+    wire [15:0] x_elen [0:7];
+    wire [3:0] x_cnt;
+    wire [31:0] r_ino [0:7], r_ebe [0:7], r_estart [0:7];
+    wire [15:0] r_elen [0:7];
     reg qreq=0;
     reg [NB-1:0] qino=0;
     wire qbusy, qvalid, qdone;
@@ -191,7 +208,44 @@ module tb_ext4_scan;
         widx=8*1024+8;  img[widx] = D2_INO;
         widx=8*1024+9;  img[widx] = (D2_FTYPE<<24)|(D2_NLEN<<16)|D_RECLEN;
         widx=8*1024+10; img[widx] = D2_NAME;
-        // entry3 = 块尾(ino=0)
+        // entry3 = sub(子目录 ino20, ftype=2)
+        widx=8*1024+12; img[widx] = D3_INO;
+        widx=8*1024+13; img[widx] = (D3_FTYPE<<24)|(D3_NLEN<<16)|D_RECLEN;
+        widx=8*1024+14; img[widx] = D3_NAME;
+        // entry4 = 块尾(ino=0)
+        widx=8*1024+16; img[widx] = 0;
+
+        // ino20 子目录 inode @ word192 — depth=0 内联叶, 数据块=45
+        widx=4*1024+192; img[widx] = 16'h41ED;                      // i_mode=dir
+        widx=4*1024+202; img[widx] = (32'h0001<<16)|32'hF30A;        // extent 头
+        widx=4*1024+203; img[widx] = 0;                             // depth=0
+        widx=4*1024+205; img[widx] = 0;                             // ee_block
+        widx=4*1024+206; img[widx] = 16'd1;                         // ee_len
+        widx=4*1024+207; img[widx] = SUBDIR_BLK;                    // ee_start=45
+
+        // 子目录数据块(块45): entry0=ino15(mouse, ftype1), entry1=ino16(key, ftype1)
+        widx=45*1024+0;  img[widx] = S11_INO15;
+        widx=45*1024+1;  img[widx] = (32'h01<<24)|(32'h05<<16)|D_RECLEN;
+        widx=45*1024+2;  img[widx] = 24'h6D6F75;                  // "mou"(name首3字节)
+        widx=45*1024+4;  img[widx] = S11_INO16;
+        widx=45*1024+5;  img[widx] = (32'h01<<24)|(32'h03<<16)|D_RECLEN;
+        widx=45*1024+6;  img[widx] = 24'h79656B;                    // "key"
+        widx=45*1024+8;  img[widx] = 0;                             // 块尾
+
+        // ino15 inode @ word896 — depth=0 内联叶 → 物理块200
+        widx=4*1024+896; img[widx] = 16'h81A4;
+        widx=4*1024+906; img[widx] = (32'h0001<<16)|32'hF30A;
+        widx=4*1024+907; img[widx] = 0;
+        widx=4*1024+909; img[widx] = 0;
+        widx=4*1024+910; img[widx] = S11_EL15;
+        widx=4*1024+911; img[widx] = S11_EST15;
+        // ino16 inode @ word960 — depth=0 内联叶 → 物理块220
+        widx=4*1024+960; img[widx] = 16'h81A4;
+        widx=4*1024+970; img[widx] = (32'h0001<<16)|32'hF30A;
+        widx=4*1024+971; img[widx] = 0;
+        widx=4*1024+973; img[widx] = 0;
+        widx=4*1024+974; img[widx] = S11_EL16;
+        widx=4*1024+975; img[widx] = S11_EST16;
 
         // ino12 @ word 704 — depth=0 内联叶 (阶段5: f_*)
         widx=4*1024+704;  img[widx] = F_MODE;
@@ -278,8 +332,8 @@ module tb_ext4_scan;
         end else $display("PASS ee_start=%0d", re_start);
 
         // ---- 阶段4: 目录块逐条枚举 ----
-        if (o_cnt!==3) begin
-            $display("FAIL out_count: got %0d want %0d", o_cnt, 3); errc=errc+1;
+        if (o_cnt!==4) begin
+            $display("FAIL out_count: got %0d want %0d", o_cnt, 4); errc=errc+1;
         end else $display("PASS out_count=%0d", o_cnt);
         if (o_ino[0]!==D0_INO) begin
             $display("FAIL e0 ino: %0h want %0h", o_ino[0], D0_INO); errc=errc+1;
@@ -302,12 +356,15 @@ module tb_ext4_scan;
         if (o_name3[2]!==D2_NAME) begin
             $display("FAIL e2 name"); errc=errc+1;
         end else $display("PASS e2 name=%0h", o_name3[2]);
+        if (o_ino[3]!==D3_INO || o_ftype[3]!==D3_FTYPE) begin
+            $display("FAIL e3 子目录: ino=%0d ftype=%0h", o_ino[3], o_ftype[3]); errc=errc+1;
+        end else $display("PASS e3 子目录 ino=%0d ftype=%0h", o_ino[3], o_ftype[3]);
 
         // ---- 阶段7/9: 全文件收集 → "文件→物理块"映射表 ----
         // (阶段5 的单文件 ino12 映射已被全文件收集取代; 阶段9 对 ino14 索引递归2叶)
-        if (x_cnt!==4) begin
-            $display("FAIL ext_count: got %0d want 4 (ino14 索引递归成2叶)", x_cnt); errc=errc+1;
-        end else $display("PASS ext_count=%0d (ino14 递归2叶)", x_cnt);
+        if (x_cnt!==6) begin
+            $display("FAIL ext_count: got %0d want 6 (含子目录2文件)", x_cnt); errc=errc+1;
+        end else $display("PASS ext_count=%0d (ino14 递归2叶 + 子目录2文件)", x_cnt);
         if (x_ino[0]!==D0_INO) begin
             $display("FAIL ext[0] ino"); errc=errc+1;
         end else $display("PASS ext[0] ino=%0d", x_ino[0]);
@@ -334,6 +391,17 @@ module tb_ext4_scan;
             $display("FAIL ext[3] ino14叶1: ebe=%0h elen=%0d est=%0h",
                      x_ebe[3], x_elen[3], x_estart[3]); errc=errc+1;
         end else $display("PASS ext[3] ino14叶1 → estart=%0d len=%0d", x_estart[3], x_elen[3]);
+
+        // ---- 阶段11: 子目录递归 → ino15/ino16 收集进表 ----
+        if (x_ino[4]!==S11_INO15 || x_estart[4]!==S11_EST15) begin
+            $display("FAIL ext[4] 子文件15: ino=%0d est=%0h", x_ino[4], x_estart[4]); errc=errc+1;
+        end else $display("PASS ext[4] 子文件15 → estart=%0d len=%0d", x_estart[4], x_elen[4]);
+        if (x_ino[5]!==S11_INO16 || x_estart[5]!==S11_EST16 ||
+            x_elen[5]!==S11_EL16) begin
+            $display("FAIL ext[5] 子文件16: ino=%0d est=%0h elen=%0d",
+                     x_ino[5], x_estart[5], x_elen[5]); errc=errc+1;
+        end else $display("PASS ext[5] 子文件16 → estart=%0d len=%0d", x_estart[5], x_elen[5]);
+
         if (r_ino[0]!==D0_INO || r_estart[0]!==F_ESTART) begin
             $display("FAIL ram[0]: ino=%0d estart=%0h", r_ino[0], r_estart[0]); errc=errc+1;
         end else $display("PASS ram[0] ino=%0d estart=%0d", r_ino[0], r_estart[0]);
@@ -344,6 +412,12 @@ module tb_ext4_scan;
             r_ino[3]!==E7_INO14 || r_estart[3]!==G14_E1_ST) begin
             $display("FAIL ram[2/3] ino14 两叶"); errc=errc+1;
         end else $display("PASS ram[2/3] ino14 两叶(st=%0d,%0d)", r_estart[2], r_estart[3]);
+        if (r_ino[4]!==S11_INO15 || r_estart[4]!==S11_EST15) begin
+            $display("FAIL ram[4] 子文件15"); errc=errc+1;
+        end else $display("PASS ram[4] 子文件15 estart=%0d", r_estart[4]);
+        if (r_ino[5]!==S11_INO16 || r_estart[5]!==S11_EST16) begin
+            $display("FAIL ram[5] 子文件16"); errc=errc+1;
+        end else $display("PASS ram[5] 子文件16 estart=%0d", r_estart[5]);
 
         // 查询 ino=13(dog) → 应返回 estart=48
         qino=13; qreq=1;
@@ -364,8 +438,18 @@ module tb_ext4_scan;
             $display("FAIL query ino99 应未找到, valid=%0d", qvalid); errc=errc+1;
         end else $display("PASS query ino99 未找到 (qvalid=0)");
 
+        // 查询子目录文件 ino=15(mouse) → estart=200
+        qino=15; qreq=1;
         #20;
-        if (errc==0) $display("PASS: ext4_scan 阶段10 多层(2层)索引递归 ino14→块41索引→块42叶(2叶) + 全表/RAM/查询 全过");
+        qreq=0;
+        wait(qdone); #10;
+        if (qvalid!==1 || qestart!==S11_EST15 || qelen!==S11_EL15) begin
+            $display("FAIL query ino15(子目录): valid=%0d est=%0h elen=%0d",
+                     qvalid, qestart, qelen); errc=errc+1;
+        end else $display("PASS query 子目录文件 ino15 → estart=%0d len=%0d", qestart, qelen);
+
+        #20;
+        if (errc==0) $display("PASS: ext4_scan 阶段11 一级子目录递归(ino20→块45: ino15/16收集进表+RAM+查询) 全过");
         else         $display("FAIL: err=%0d", errc);
         $finish;
     end
