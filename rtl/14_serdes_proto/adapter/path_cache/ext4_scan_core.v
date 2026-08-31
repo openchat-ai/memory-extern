@@ -57,7 +57,11 @@ module ext4_scan_core #(
     output reg [31:0]  f_size_lo_o,
     output reg [31:0]  f_ebe_o,
     output reg [15:0]  f_elen_o,
-    output reg [31:0]  f_estart_o
+    output reg [31:0]  f_estart_o,
+    // 阶段6: depth>0 索引递归 → 子 extent 块叶输出
+    output reg [31:0]  s_ebe_o,
+    output reg [15:0]  s_elen_o,
+    output reg [31:0]  s_estart_o
 );
 
     localparam S_IDLE=0, S_SB_REQ=1, S_SB_WAIT=2, S_SB_FILL=3, S_SB_P=4,
@@ -66,7 +70,8 @@ module ext4_scan_core #(
                S_DIR_REQ=13, S_DIR_WAIT=14, S_DIR_FILL=15, S_DIR_P=16,
                S_DIR_LOOP=17,
                S_FILEREQ=18, S_FILEWAIT=19, S_FILEFILL=20, S_FILEP=21,
-               S_DONE=22;
+               S_SUBREQ=22, S_SUBWAIT=23, S_SUBFILL=24, S_SUBP=25,
+               S_DONE=26;
     reg [5:0] st;
 
     // 块缓冲: 32 位字数组(1024 字 = 4096B)
@@ -79,6 +84,8 @@ module ext4_scan_core #(
     reg [NB-1:0] itbl_r;
     reg [15:0] isz_r;
     reg [NB-1:0] dir_blk_r;
+    // 阶段6: 索引子 extent 块号
+    reg [NB-1:0] subblk_r;
     // 阶段4: 目录块枚举游标
     reg [15:0] dpos;
     reg [$clog2(MAXENT+1)-1:0] idx;
@@ -92,7 +99,7 @@ module ext4_scan_core #(
         if (!rst_n) begin
             st <= S_IDLE; busy<=0; done<=0; err<=0;
             blk_fd_req<=0; blk_fd_blk<=0; beat<=0; req_blk<=0;
-            itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0;
+            itbl_r<=0; isz_r<=0; dir_blk_r<=0; dpos<=0; idx<=0; subblk_r<=0;
             blocks_per_grp_o<=0; inodes_per_grp_o<=0;
             inode_size_o<=0; inode_table_blk_o<=0;
             root_mode_o<=0; root_size_lo_o<=0;
@@ -101,6 +108,7 @@ module ext4_scan_core #(
             out_count<=0;
             f_ino_o<=0; f_mode_o<=0; f_size_lo_o<=0;
             f_ebe_o<=0; f_elen_o<=0; f_estart_o<=0;
+            s_ebe_o<=0; s_elen_o<=0; s_estart_o<=0;
             for (k=0;k<MAXENT;k=k+1) begin
                 out_ino[k]<=0; out_ftype[k]<=0; out_nlen[k]<=0; out_name3[k]<=0;
             end
@@ -288,16 +296,55 @@ module ext4_scan_core #(
                 //   i_mode   -> word INO12_WORD    低16
                 //   i_size   -> word INO12_WORD+1  低32
                 //   extent头 -> word INO12_WORD+10: magic低16/entries高16
-                //   leaf0    -> word INO12_WORD+13: ee_block
-                //              word INO12_WORD+14: ee_len低16 / ee_start_hi高16
+                //              word INO12_WORD+11: depth高16
+                //   leaf0/索引项 -> word INO12_WORD+13: ee_block / ei_block
+                //              word INO12_WORD+14: ee_len低16 / ei_leaf
                 //              word INO12_WORD+15: ee_start_lo
                 S_FILEP: begin
                     f_ino_o     <= out_ino[0];
                     f_mode_o    <= wbuf[INO12_WORD][15:0];
                     f_size_lo_o <= wbuf[INO12_WORD+1];
-                    f_ebe_o     <= wbuf[INO12_WORD+13];
-                    f_elen_o    <= wbuf[INO12_WORD+14][15:0];
-                    f_estart_o  <= wbuf[INO12_WORD+15];
+                    if (wbuf[INO12_WORD+11][31:16] != 0) begin
+                        // depth>0: 索引根, 递归读子 extent 块(ei_leaf)
+                        subblk_r <= wbuf[INO12_WORD+14][15:0];
+                        st <= S_SUBREQ;
+                    end else begin
+                        // depth=0: 内联叶(阶段5)
+                        f_ebe_o    <= wbuf[INO12_WORD+13];
+                        f_elen_o   <= wbuf[INO12_WORD+14][15:0];
+                        f_estart_o <= wbuf[INO12_WORD+15];
+                        st <= S_DONE;
+                    end
+                end
+
+                // 阶段6: 读子 extent 块(subblk_r), 解析其内联叶
+                S_SUBREQ: begin
+                    blk_fd_blk <= subblk_r;
+                    req_blk    <= subblk_r;
+                    blk_fd_req <= 1;
+                    st <= S_SUBWAIT;
+                end
+                S_SUBWAIT: begin
+                    if (blk_fd_ready) begin
+                        blk_fd_req <= 0;
+                        beat <= 0;
+                        st <= S_SUBFILL;
+                    end
+                end
+                S_SUBFILL: begin
+                    if (blk_fd_dvalid && blk_fd_dblk==req_blk) begin
+                        wbuf[beat] <= blk_fd_data;
+                        if (beat==NBEAT-1) begin
+                            st<=S_SUBP;
+                        end else beat<=beat+1;
+                    end
+                end
+                // 子块 extent 头 @word0(magic低16/entries高16) word1(depth高16)
+                // 叶 @word3: ee_block; word4 低16 ee_len; word5 ee_start
+                S_SUBP: begin
+                    s_ebe_o    <= wbuf[3];
+                    s_elen_o   <= wbuf[4][15:0];
+                    s_estart_o <= wbuf[5];
                     st <= S_DONE;
                 end
 
