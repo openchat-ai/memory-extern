@@ -23,6 +23,7 @@
 #  19. cache_lba_top    cache_lba_top 端到端接线(阶段17/件1/件4): 例化 ext4_scan_core + cachectl_pipeline, reset 自动扫描→读 RAM 表→转录 FSM(件1 多文件全目录: 遍历所有 extent 按 ino 分组写 F[f].base/size + 全局 EXT[k])→file2lba 多文件目录→(件4) TIDLE 保持就绪, rescan 拉高触发重扫→管线按 file0=ino12 组合直出绝对物理 LBA(分区块号0→part+32/1→+33/2→越界fault) — 完整“扫描→多文件转录→查询→读地址”模块链路
 #  20. nvme             NVMe host 阶段N1: admin握手+读写命令+队列背压 (V0 admin / V1 写 / V2 读 / V3 背压)
 #  21. nvme_n23         NVMe 阶段N2/N3: 读数据→FIFO 背压收齐 + 写路径更新缓存闭环 (源→FIFO→host→设备自校验)
+#  22. nvme_bridge      阶段N6 对接桥 (应用层块请求 <-> nvme_host <-> 设备桩): admin等待/读/读背压/写闭环/交错保序
 # 依赖: iverilog 12 (g2012). 全部 PASS 则 exit 0。
 # ============================================================================
 set -u
@@ -132,6 +133,11 @@ run nvme \
 run nvme_n23 \
     adapter/nvme/tb_nvme_n23.v adapter/nvme/nvme_host.v \
     adapter/nvme/nvme_data_fifo.v adapter/nvme/nvme_device_model.v
+
+run nvme_bridge \
+    adapter/nvme/tb_nvme_bridge.v adapter/nvme/nvme_bridge.v \
+    adapter/nvme/nvme_host.v adapter/nvme/nvme_data_fifo.v \
+    adapter/nvme/nvme_device_model.v
 
 echo "------------------------------------------"
 echo "结果: PASS=$pass FAIL=$fail"
