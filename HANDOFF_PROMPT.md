@@ -30,6 +30,7 @@
 - 手头环境 = **Termux (aarch64, Android)**：只有 iverilog -g2012 仿真 + python3 分析。
 - **真机已就位**：Tang Mega 138K Pro Dock 到货；PC 已装 Gowin IDE，**官方 key-led 示例已烧录成功**（烧录链路验证过）。
 - 我可以做的 = RTL/tcl/约束/判据/操作清单做到"用户照做即签核"；真机命令由**用户执行**，但每一步已排好，不再停留在"就绪度"。
+- **结果同步协议（重要，省流量）**：用户不做文字回传，做完直接 `git commit` + `git push`。**入仓的只有 <10KB 文本**：PnR result（`board_top_result.txt` / `sweep_<freq>m_result.txt`）+ 需要会诊时的精简诊断（`gw_sh mk_diag.tcl <OUT目录>` 生成 `diag_*.txt`）。**大日志/.fs 一律留 PC 本地，绝不 push**（手机流量）。我接手先 `git pull` 读这些 txt 判读，不催用户贴格式。
 
 ## 仓库现状（读哪个文件确认）
 - `README.md` → 全貌与两条线的真机闭环结论
@@ -40,8 +41,8 @@
 - `git log --oneline -15` → 最近节奏（当前在 13 真机冒烟）
 
 ## 待办（按优先级，真机已启动）
-1. **【当前一步】13 board_top 真硅片冒烟**：用户在 PC 改 `build_board_top.tcl` 里 SRC/PROTO/OUT 三行为真实路径 → `gw_sh build_board_top.tcl` → 烧 SRAM → 看 **LED[0](J14) ~1Hz 心跳**（PLL 200MHz + LCD 可加分）。判据：`=== PNR DONE ===` + `.fs` 生成；卡 60% 布线 = 已知会诊场景。回传格式：`board_top: PASS/FAIL LED心跳=Y/N LCD=Y/N PNR耗时=min 卡阻=有/无:卡在X%`。
-2. **13 频点签核（紧接其后）**：`gw_sh build_sweep.tcl 200` → 判读收敛 / WNS<0 / 卡60% 三结果（脚本头注释有完整判据），200 过了即签核。
+1. **【当前一步】13 board_top 真硅片冒烟**：用户在 PC 改 `build_board_top.tcl` 里 SRC/PROTO 两行为真实路径 → `gw_sh build_board_top.tcl` → 烧 SRAM → 看 **LED[0](J14) ~1Hz 心跳**。脚本自动落盘 `board_top_result.txt`（status=PNR-DONE/FAIL-EXCEPTION + 耗时）。大日志/.fs 在 PC 本地 `out/138k_pro/synth/` **不入仓**；异常时可跑 `gw_sh mk_diag.tcl <OUT>` 生成 `diag_*.txt`（<10KB）唯一需要推的取证。判读：`git pull` 读 txt；`status=PNR-DONE` + 有 `.fs` = PnR 过。
+2. **13 频点签核（紧接其后）**：`gw_sh build_sweep.tcl 200` → 判据落盘 `sweep_200m_result.txt`（status + 耗时）；卡 60% 或 WNS<0 → `mk_diag.tcl out/sweep_200m` 出精简诊断再推。200 过即签核。
 3. **三方汇合（13↔14）**：`pcie_dma_engine`（FPGA 权重流）↔ `nvme_bridge`（块请求）↔ `cachectl_pipeline`（wt_lba 落点）语义对上，加回归（仿真桩粒度自己定）。
 4. **14 PCIe 硬核真机准备**：EP(T2)/RC(T1) 适配器 = 顶层骨架 + 金手指约束 + 用户照做的 Gowin IDE 清单（`lspci -vv` 目标 Gen3 x4）。Termux 无 Gowin IP，只能到"bitstream 就绪度"。
 5. 新代码沿用各支线回归；14 追加 `sim.sh run`；12/13 按各自 tb 单跑。
