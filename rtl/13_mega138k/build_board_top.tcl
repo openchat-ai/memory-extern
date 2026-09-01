@@ -32,7 +32,23 @@ set_option -include_path "$SRC;$PROTO"
 set_option -place_option 0
 set_option -route_option 0
 
-run all
+set t0 [clock seconds]
+set run_rc [catch { run all } run_err]
+set t1 [clock seconds]
+set elapsed [expr {$t1 - $t0}]
 
-puts "=== PNR DONE ==="
+set result_file "$SRC/board_top_result.txt"
+set fp [open $result_file w]
+puts $fp "# board_top PnR 结果（脚本自动生成，提交即完成回传）"
+puts $fp "elapsed_s = ${elapsed}"
+if {$run_rc} {
+    puts $fp "status = FAIL-EXCEPTION"
+    puts $fp "detail = $run_err"
+} else {
+    puts $fp "status = PNR-DONE"
+}
+close $fp
+
+puts "=== PNR DONE (elapsed ${elapsed}s) ==="
+puts "=== 结果已落盘: $result_file ==="
 run close

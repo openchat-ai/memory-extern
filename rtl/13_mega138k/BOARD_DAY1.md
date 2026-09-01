@@ -43,11 +43,11 @@ gw_sh build_board_top.tcl
 | Dock 屏（若接）显示 engine 状态 | ✅ PASS（LCD 35MHz PLL + RGB666） |
 | 无任何 LED 运动 | 复位：按 S0（K16）重新拉起 `rst_n_int`；疑难再把现象+log 贴回 |
 
-## 5. 回传给我（一句话格式）
-跑完贴这个就够我判断：
-```
-board_top: <PASS/FAIL>  LED心跳=<Y/N>  LCD=<Y/N>  PNR耗时=<min>  卡阻=<有/无:卡在80%>
-```
+## 5. 结果给手机端（省流量协议）
+- **不 push 大日志/.fs**（留 PC 本地 `out/138k_pro/synth/`）。
+- 只提交仓库内小文本：脚本自动生成的 `board_top_result.txt`（status + 耗时）。
+- 若 PnR 异常（卡 60% / WNS<0），先 `gw_sh mk_diag.tcl F:/sram/sram/out/138k_pro/synth` 生成 `diag_*.txt`（<10KB），只推这一个取证文件。
+- 然后 `git add <result/diag> && git commit && git push` —— 我 `git pull` 后直接判读，不用你贴任何格式。
 
 ## 6. 这一步在整条主线里的位置
 ```

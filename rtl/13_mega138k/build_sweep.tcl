@@ -89,9 +89,25 @@ set_option -route_option 0
 set_option -global_freq $FREQ_MHZ
 
 set t0 [clock seconds]
-run all
+set run_rc [catch { run all } run_err]
 set t1 [clock seconds]
 set elapsed [expr {$t1 - $t0}]
+
+# ---- 判据落盘（写进仓库目录，用户提交后手机端直接读此文件判读）----
+# 路径固定到仓库内 rtl/13_mega138k/，避免结果遗落在 OUT（可能不在仓库）
+set result_file "$SRC/sweep_${FREQ_MHZ}m_result.txt"
+set fp [open $result_file w]
+puts $fp "# sweep ${FREQ_MHZ}MHz 结果（脚本自动生成，提交即完成回传）"
+puts $fp "freq_mhz = ${FREQ_MHZ}"
+puts $fp "period_ns = ${PERIOD_NS}"
+puts $fp "elapsed_s = ${elapsed}"
+if {$run_rc} {
+    puts $fp "status = FAIL-EXCEPTION"
+    puts $fp "detail = $run_err"
+} else {
+    puts $fp "status = PNR-DONE"
+}
+close $fp
 
 puts "=== SWEEP RESULT: FREQ=${FREQ_MHZ}MHz PERIOD=${PERIOD_NS}ns 耗时=${elapsed}s ==="
 # 覆盖率/拥塞快照（等价于界面报告；命令名随 Gowin 版本可能有差异，失败不阻断结果）
@@ -101,4 +117,5 @@ puts "=== slot/utilization ==="
 catch { report_utilization }
 puts "=== SUCCESS: FREQ=${FREQ_MHZ}MHz 达成 ==="
 puts "=== 若进程在这里被强制终止 → 该频点不可达（布线死循环）==="
+puts "=== 结果已落盘: $result_file ==="
 run close
