@@ -425,16 +425,21 @@ SSD 缓存两端数据流最终要落地:
 
 ### 11.5 工作量/风险分解(诚实评估)
 
-> **拓扑决策(2026-09, 实板运输前)**: 目标形态 **T1 = FPGA 直挂板载 M.2 盘**(FPGA
-> 当 NVMe 主机)为主, 但先把 **T2 = PC 居中**当过渡验证路径:
+> **拓扑决策(2026-09, 实板运输前, v2 已按原理图更正)**: 目标形态 **T1 = FPGA 直挂
+> NVMe 盘**(FPGA 当 NVMe 主机)为主, 但先把 **T2 = PC 居中**当过渡验证路径。
+> **原理图已确认(2026-09, 来自 Sipeed Pro Dock schematic `SDIO&M.2.kicad_sch`, 非猜测)**:
+> - 板载 **M.2 座(B-key)只接了 Q1 通用 SerDes 的 2 路 lane**(`Q1_DAT2/Q1_DAT3`)
+>   + `Q1_REFCLK0`**参考时钟, 不在 PCIe 硬核上**。
+> - **PCIe 硬核(GW5AST-138, 支持 RC+EP 双模式, 见 DS981/DS1104E)** 只接到 **Q0**,
+>   物理上只到板子自身 **PCIe 金手指边缘接口**(x1/x2/x4, Dock 标称 4 lane)。
+> - 推论: 想在**板载 M.2 座**上驱动 NVMe 只能走 N5(fabric 用 Q1 SerDes 重写
+>   PCIe 栈); 想用**硬核 N4** 则 SSD 必须插在**金手指**那一路。
+> - **T1 落地首选(已定)**: NVMe 盘经 **M.2→PCIe x4 被动转接卡**(纯布线无芯片)
+>   插到板子自己的 PCIe 金手指, FPGA 当 RC、盘当 EP → 硬核 N4 直连, 避开 N5。
 > - T2 接线: SSD 挂 PC 主板 M.2(芯片组当 NVMe 主机) → 数据经 PCIe 总线 →
->   FPGA 插 PC PCIe 槽当**端点加速卡**。物理上走板子 **PCIe 金手指边缘接口
->   + Gowin PCIe 硬核(x1/x2/x4/x8, Dock 标称 4 lane)**。
-> - 价值: (a) 绕过"板载 M.2 引脚接法未知"的最大风险, 真机先冒烟 **N4 物理适配器
->   (硬核 axis)**——`lspci -vv` 能枚举出 Vendor/Device ID + link training 上
->   Gen3 x4, 就是硬核路径的真机 PASS; (b) 之后回 T1 时只剩两个未知: 板载 M.2
->   引脚若接**硬核那路**→ N4 适配器直接迁移复用, 若接**通用 SerDes**→ 仅 SerDes
->   桥(N5)需 rework, 协议层(N1-N3 + nvme_bridge)物理无关, 两边都不白做。
+>   FPGA 插 PC PCIe 槽当**端点加速卡**。先真机冒烟 **N4 物理适配器(硬核 axis)**——
+>   `lspci -vv` 能枚举出 Vendor/Device ID + link training 上 Gen3 x4, 就是
+>   硬核路径的真机 PASS。随后 T1 只需角色对调(FPGA=RC), 适配器逻辑复用。
 > - T2 数据路径: SSD → PC 主机内存 → PCIe(H2C/C2H DMA) → FPGA; 等价于把
 >   "板载 NVMe 主机层"暂时后移到 PC, 由 PC 承担盘管理与驱动。
 
@@ -443,14 +448,12 @@ SSD 缓存两端数据流最终要落地:
 | N1 | **NVMe 协议层骨架**(命令组帧 + 队列状态机 + 完成处理), **纯仿真**验证 | 中-大 | 需 M.2 端行为模型(nvme 模型), 可先用行为桩 |
 | N2 | **PRP/DMA 数据搬运**, 读数据→权重组 FIFO 校验 | 中 | 数据通路吞吐与背压 |
 | N3 | **写路径**: 写命令 + 数据下发, 验证"更新缓存"闭环 | 中 | 写命令正确性/原子性 |
-| N4 | **物理适配器 A**: 接 Gowin PCIe 硬核(AXI-Stream), 真机冒烟 | 视硬核 | T2 借 PC PCIe 槽先行(REFCLK/PERST#/config space→`lspci`) |
-| N5 | **物理适配器 B**: 接自定义 SerDes 桥到 M.2 转接 | 大 | 需板卡 M.2 物理接法确认(通用 SerDes 那路才需要) |
+| N4 | **物理适配器 A**: 接 Gowin PCIe 硬核(AXI-Stream), 真机冒烟 | 视硬核 | T2 借 PC PCIe 槽先行(REFCLK/PERST#/config space→`lspci`); T1=RC 接金手指+转接卡 |
+| N5 | **物理适配器 B**: 接自定义 SerDes 桥到板载 M.2 转接 | 大 | 仅当 T1 必须走板载 M.2 座才需要(该座=Q1 通用 SerDes, 非硬核) |
 | N6 | ext4/file2lba 结果 → NVMe 命令对接, 绑板回环冒烟 | 中 | 138K 板 + NVMe SSD |
 
-**最大前置未知(必须确认)**: 板卡 M.2 引脚接到 FPGA 的**通用 SerDes** 还是
-**PCIe 硬核那一路**。它决定 T1 最终走 N4(硬核 axis)还是 N5(自定义 SerDes 桥)。
-在未确认前, **N1/N2/N3 协议层(与物理无关)可以先做且不白做**, 其余因物理接法而定;
-**T2(PC 居中)在未知解除前先承接真机验证, 重点先做硬核 N4**。
+**前置未知(已查证解除)**: 板载 M.2 座=Q1 通用 SerDes 2 lane(原理图确认), PCIe 硬核=Q0 只到金手指。
+结论: 硬核 N4 是主路(T1 用金手指+被动转接卡, T2 用 PC 槽), N5 仅在"必须用板载 M.2 座"时兜底。
 
 ### 11.6 验证策略
 
