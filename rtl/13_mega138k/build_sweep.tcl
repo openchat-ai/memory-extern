@@ -1,9 +1,25 @@
 # build_sweep.tcl — 频率扫描实验：量化频率对 PnR 收敛/耗时/拥塞的影响
 #
+# ==================== PC 侧验收清单 ====================
+# 目的：验证三条长路径全拆后，引擎能否在 200MHz 真实收敛。
+# 这之前手机端已过 9 项 iverilog 回归（sum=31476 稳定、顶层 7 帧帧同步正确）。
+# 这是唯一需要 PC 做的一步，做完就签核。
+#
 # 用法（在装有 Gowin IDE 的 PC 上）：
-#   gw_sh build_sweep.tcl 50      # 跑 50MHz
-#   gw_sh build_sweep.tcl 200     # 跑 200MHz
-#   gw_sh build_sweep.tcl 800     # 跑 800MHz（预期 60% 卡死 = 超可达极限）
+#   gw_sh build_sweep.tcl 200        # 主验证：200MHz
+#   可选对比：gw_sh build_sweep.tcl 50 (_基线) / 800 (_预期卡死=极限边界)
+#
+# 观察三件事：
+#   1. 是否收敛？run 走到 report/bitstream = 成功；卡在 ~60% 进度 = 不可达
+#   2. 耗时多久？（脚本已打印 elapsed）
+#   3. 看 catch 输出的 route congestion：若只有零星热点而非引擎核心区，签核可过
+#
+# 三种结果 → 对应动作：
+#   a) 收敛         → 直接 sign-off；可回头跑 50 对比耗时，验证修复收益
+#   b) 收敛但有时序违规(WNS<0) → 贴 WNS/TNS 值回来，我看够不够(可放宽到 180)
+#   c) 卡 60%       → 贴卡死时 PnR 日志尾部 + report_route_congestion，定位残留区
+# 无论结果如何，把上面三件事的记录贴回对话即可。
+# ======================================================
 #
 # 每个频点一个独立工程目录 OUT/sweep_<freq>m，互不干扰。
 # 记录指标：是否完成、耗时、WNS 由 on_finish 打印；拥塞看 PnR 报告。
@@ -68,11 +84,11 @@ set t1 [clock seconds]
 set elapsed [expr {$t1 - $t0}]
 
 puts "=== SWEEP RESULT: FREQ=${FREQ_MHZ}MHz PERIOD=${PERIOD_NS}ns 耗时=${elapsed}s ==="
-# 覆盖率/拥塞快照（等价于界面报告）：
+# 覆盖率/拥塞快照（等价于界面报告；命令名随 Gowin 版本可能有差异，失败不阻断结果）
 puts "=== route congestion report ==="
-report_route_congestion
+catch { report_route_congestion }
 puts "=== slot/utilization ==="
-report_utilization
+catch { report_utilization }
 puts "=== SUCCESS: FREQ=${FREQ_MHZ}MHz 达成 ==="
 puts "=== 若进程在这里被强制终止 → 该频点不可达（布线死循环）==="
 run close
