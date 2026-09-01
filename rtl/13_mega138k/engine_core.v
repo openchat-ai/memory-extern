@@ -31,13 +31,15 @@ module engine_core #(
 
     // ------------------------------------------------------------------
     // SIMD MAC 阵列：每 lane 独立累加器
+    // PIPE_MUL=1：打断关键路径（乘积锁存一拍 + 累加一拍），撑到 200MHz
     // ------------------------------------------------------------------
     wire [NUM_LANES*ACC_WIDTH-1:0] acc_bus;
     wire                           acc_done;
 
     simd_mac_array #(
         .NUM_LANES(NUM_LANES),
-        .ACC_WIDTH(ACC_WIDTH)
+        .ACC_WIDTH(ACC_WIDTH),
+        .PIPE_MUL (1)             // 超频/布线：流水打断关键路径
     ) u_mac (
         .clk       (clk),
         .rst_n     (rst_n),

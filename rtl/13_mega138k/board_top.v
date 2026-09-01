@@ -25,7 +25,20 @@ module board_top (
     output wire [5:0]  lcd_b
 );
 
-    wire clk_int = sys_clk;
+    // ------------------------------------------------------------------
+    // 引擎时钟：PLL 把板上 50MHz 倍频到 200MHz（VCO=800, ODIV0=4）
+    // 打断关键路径（PIPE_MUL=1）后，每段组合逻辑可在 5ns 内收敛
+    // ------------------------------------------------------------------
+    wire        clk_200m;
+    wire        pll200_lock;
+    Gowin_PLL_X200 u_pll200 (
+        .clkout0 (clk_200m),
+        .lock    (pll200_lock),
+        .clkin   (sys_clk)
+    );
+
+    wire clk_int = clk_200m;
+    wire rst_n_core = rst_n_int & pll200_lock;
 
     // ------------------------------------------------------------------
     // 复位同步 + 上电延时（按键低有效）
@@ -51,14 +64,14 @@ module board_top (
     end
 
     // ------------------------------------------------------------------
-    // LED[0]：心跳（约 1Hz @ 50MHz 输入）
+    // LED[0]：心跳（约 1Hz @ 200MHz 输入 → 27-bit 计数）
     // ------------------------------------------------------------------
-    reg [25:0] hb_cnt;
+    reg [26:0] hb_cnt;
     always @(posedge clk_int) begin
-        if (!rst_n_int)             hb_cnt <= 26'd0;
-        else                        hb_cnt <= hb_cnt + 26'd1;
+        if (!rst_n_core)        hb_cnt <= 27'd0;
+        else                    hb_cnt <= hb_cnt + 27'd1;
     end
-    wire heartbeat = hb_cnt[25];
+    wire heartbeat = hb_cnt[26];
 
     // ------------------------------------------------------------------
     // 自由运行激励：权重码递增、激活固定模式，验证 MAC 阵列翻转
@@ -76,7 +89,7 @@ module board_top (
     integer i;
     // 突发模式：跑 16 拍停 1000 拍，循环往复
     always @(posedge clk_int) begin
-        if (!rst_n_int) begin
+        if (!rst_n_core) begin
             pat_wt    <= {NUM_LANES*4{1'b0}};
             pat_x     <= {NUM_LANES*8{1'b0}};
             pat_en    <= 1'b0;
@@ -113,12 +126,12 @@ module board_top (
         .ACC_WIDTH(32)
     ) u_engine (
         .clk      (clk_int),
-        .rst_n    (rst_n_int),
+        .rst_n    (rst_n_core),
         .wt_valid (pat_en),
         .wt_data  (pat_wt),
         .x_data   (pat_x),
         .x_valid  (pat_en),
-        .acc_clr  (~rst_n_int),
+        .acc_clr  (~rst_n_core),
         .sum_out  (sum_out),
         .sum_valid(sum_valid),
         .busy     (engine_busy)
@@ -130,7 +143,7 @@ module board_top (
     // 引擎活动计数（LED + LCD 共用）
     reg [23:0] act_cnt;
     always @(posedge clk_int) begin
-        if (!rst_n_int)             act_cnt <= 24'd0;
+        if (!rst_n_core)             act_cnt <= 24'd0;
         else if (sum_valid)      act_cnt <= act_cnt + 24'd1;
     end
 
