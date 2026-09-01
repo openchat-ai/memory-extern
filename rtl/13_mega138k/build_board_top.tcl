@@ -14,6 +14,7 @@ set_device -device_version B GW5AST-LV138FPG676AES
 # ---- 顶层设计文件 ----
 add_file $SRC/board_top.v
 add_file $SRC/gowin_pll.v
+add_file $SRC/gowin_pll_x200.v
 add_file $SRC/lcd_display.v
 add_file $SRC/engine_core.v
 # ---- 引擎核心（12_fpga_proto 已有 RTL）----
@@ -21,7 +22,7 @@ add_file $PROTO/simd_mac_array.v
 add_file $PROTO/reduction_tree.v
 # ---- 引脚约束 ----
 add_file $SRC/mega138k_engine.cst
-# ---- 时序约束：sys_clk 50MHz + PLL 35MHz（解决 PNR 默认 100MHz 约束导致的布线死循环）----
+# ---- 时序约束：引擎 200MHz + PLL 35MHz（PIPE_MUL=1 打断关键路径后可达）----
 add_file $SRC/mega138k_engine.sdc
 
 set_option -top_module $TOP
