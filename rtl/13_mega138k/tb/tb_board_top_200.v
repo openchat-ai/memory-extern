@@ -64,7 +64,10 @@ module tb_board_top_200;
 
 // 监控 sum_valid 脉冲（从 engine 侧内部信号观察）
     always @(posedge dut.clk_int) begin
-        if (dut.sum_valid) sum_valid_seen <= 1;
+        if (dut.sum_valid) begin
+            sum_valid_seen <= 1;
+            $display("  [sum_valid t=%0t] sum_out=%0d", $time, $signed(dut.sum_out));
+        end
     end
 
     initial begin

@@ -26,6 +26,7 @@ module simd_mac_array #(
     parameter NUM_LANES      = 128,   // 并行 MAC 数量
     parameter ACC_WIDTH      = 32,    // 累加器位宽：32=精确 / 16=饱和省资源
     parameter PIPE_MUL       = 0,     // 1=打断关键路径的流水分段累加
+    parameter PIPE_IN        = 0,     // 1=输入寄存器级：打断 x_data/wt_data 全局广播
     parameter SATURATE       = (ACC_WIDTH <= 16)
 )(
     input  wire                       clk,
@@ -51,6 +52,47 @@ module simd_mac_array #(
     output wire [NUM_LANES*ACC_WIDTH-1:0] acc_out,
     output wire                       acc_done
 );
+
+    // ========================================================================
+    // 输入寄存器级（PIPE_IN=1）：打断 x_data(1024bit)/wt_data(512bit) 的
+    // 全局广播。原广播是每一位跨 die 扇出到几十个 lane；寄存后每个 bit
+    // 只从『邻近的入口寄存器』扇出本 lane，缩短布线器需收敛的长网跨度。
+    // 功能等价：只是数据晚 1 拍进入累加；x/wt/x_valid/wt_valid 同拍对齐。
+    // ========================================================================
+    wire [NUM_LANES*8-1:0]   x_use;
+    wire [NUM_LANES*4-1:0]   wt_use;
+    wire                     x_v_q, wt_v_q;
+
+    generate
+        if (PIPE_IN == 1) begin : gen_pipe_in
+            reg [NUM_LANES*8-1:0] x_q;
+            reg [NUM_LANES*4-1:0] wt_q;
+            reg x_v, wt_v;
+            always @(posedge clk) begin
+                if (!rst_n) begin
+                    x_q   <= {NUM_LANES*8{1'b0}};
+                    wt_q  <= {NUM_LANES*4{1'b0}};
+                    x_v   <= 1'b0;
+                    wt_v  <= 1'b0;
+                end else begin
+                    x_q   <= x_data;
+                    wt_q  <= wt_data;
+                    x_v   <= x_valid;
+                    wt_v  <= wt_valid;
+                end
+            end
+            assign x_use  = x_q;
+            assign wt_use = wt_q;
+            assign x_v_q  = x_v;
+            assign wt_v_q = wt_v;
+        end else begin : gen_no_pipe_in
+            assign x_use  = x_data;
+            assign wt_use = wt_data;
+            // 旁通：有效信号直接使用原始值，不引入额外延迟
+            assign x_v_q  = x_valid;
+            assign wt_v_q = wt_valid;
+        end
+    endgenerate
 
     // ========================================================================
     // mxfp4 E2M1 查表解码（LUT 实现，不用 DSP）
@@ -94,11 +136,11 @@ module simd_mac_array #(
         for (i = 0; i < NUM_LANES; i = i + 1) begin : gen_lane
             reg signed [ACC_WIDTH-1:0] acc;
 
-            wire signed [7:0] x_val = x_data[i*8 +: 8];
+            wire signed [7:0] x_val = x_use[i*8 +: 8];
 
             // ── 移位加法乘法器（E2M1 幅值全偶数：w = 2k）──
-            wire [2:0] mag = wt_data[i*4 +: 3];
-            wire      sgn = wt_data[i*4+3];
+            wire [2:0] mag = wt_use[i*4 +: 3];
+            wire      sgn = wt_use[i*4+3];
             wire signed [11:0] sx = {{4{x_val[7]}}, x_val};
             reg  signed [11:0] kx;                     // k·x ∈ [-1536,+1512]
             always @(*) begin
@@ -133,7 +175,7 @@ module simd_mac_array #(
                 always @(posedge clk) begin
                     if (!rst_n || acc_clr)
                         acc <= {ACC_WIDTH{1'b0}};
-                    else if (en && wt_valid && x_valid && acc_en)
+                    else if (en && wt_v_q && x_v_q && acc_en)
                         acc <= SATURATE ? sum_sat[ACC_WIDTH-1:0]
                                         : sum_ext[ACC_WIDTH-1:0];
                 end
@@ -141,7 +183,7 @@ module simd_mac_array #(
                 // ── 流水版：打断关键路径 ──
                 // Stage A：锁存本拍乘积到 prod_pipe0（延迟一拍后才累加）
                 // Stage B：prod_pipe0 + acc → 累加（独立一拍）
-                wire do_sample = en && wt_valid && x_valid && acc_en;
+                wire do_sample = en && wt_v_q && x_v_q && acc_en;
                 reg  sample_q;                        // 上一拍是否采样（product 有效）
                 reg  signed [ACC_WIDTH-1:0] prod_pipe0;
 
@@ -189,21 +231,21 @@ module simd_mac_array #(
         always @(posedge clk) begin
             if (!rst_n || acc_clr)
                 done_cnt <= 16'd0;
-            else if (en && wt_valid && x_valid && acc_en)
+            else if (en && wt_v_q && x_v_q && acc_en)
                 done_cnt <= done_cnt + 16'd1;
         end
         always @(posedge clk) begin
             if (!rst_n) wt_valid_d <= 1'b0;
-            else        wt_valid_d <= wt_valid;
+            else        wt_valid_d <= wt_v_q;
         end
         // acc_done 必须是脉冲：帧消费完（wt_valid 下降沿）仅触发一次，
         // 否则归约树会每周期重新发射 sum_valid 导致结果重复
-        assign acc_done = (done_cnt != 16'd0) && wt_valid_d && !wt_valid;
+        assign acc_done = (done_cnt != 16'd0) && wt_valid_d && !wt_v_q;
     end else begin : gen_done_pipe
         reg sample_any;
         always @(posedge clk) begin
             if (!rst_n) sample_any <= 1'b0;
-            else        sample_any <= (en && wt_valid && x_valid && acc_en);
+            else        sample_any <= (en && wt_v_q && x_v_q && acc_en);
         end
         reg sample_any_d;
         always @(posedge clk) begin
