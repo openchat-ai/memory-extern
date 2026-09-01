@@ -20,6 +20,7 @@ add_file $SRC/engine_core.v
 # ---- 引擎核心（12_fpga_proto 已有 RTL）----
 add_file $PROTO/simd_mac_array.v
 add_file $PROTO/reduction_tree.v
+add_file $PROTO/reduce_group.v
 # ---- 引脚约束 ----
 add_file $SRC/mega138k_engine.cst
 # ---- 时序约束：引擎 200MHz + PLL 35MHz（PIPE_MUL=1 打断关键路径后可达）----

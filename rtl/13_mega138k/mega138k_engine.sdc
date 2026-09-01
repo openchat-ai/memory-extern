@@ -20,3 +20,14 @@ create_clock -name engine_clk_200 -period 5 -waveform {0 2.5} [get_nets {clk_200
 
 // LCD 像素时钟 35MHz（PLL.clkout0，VCO=1050MHz / ODIV0=30）
 create_clock -name lcd_clk_35 -period 28.571 -waveform {0 14.2855} [get_nets {lcd_clk_d}]
+
+// ------------------------------------------------------------------
+// 异步时钟域声明：引擎200MHz / LCD35MHz / sys50MHz 相互异步
+//   三个 PLL/外部时钟是独立的，Gowin STA 默认对所有时钟做跨域分析，
+//   会把 act_cnt[23:0]/sum_out[31:0]/engine_busy 等 CDC 路径当真实时序追，
+//   徒增布线负担并可能把布线器拖进不可收敛的循环。
+//   硬件上也确实是异步域（各自 lock），故显式声明为 async 组。
+// ------------------------------------------------------------------
+set_clock_group -asynchronous \
+    -group [get_clocks {sys_clk}] \
+    -group [get_clocks {engine_clk_200 lcd_clk_35}]
