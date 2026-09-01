@@ -7,7 +7,8 @@
 #
 # 用法（在装有 Gowin IDE 的 PC 上）：
 #   gw_sh build_sweep.tcl 200        # 主验证：200MHz
-#   可选对比：gw_sh build_sweep.tcl 50 (_基线) / 800 (_预期卡死=极限边界)
+#   可选对比：gw_sh build_sweep.tcl 50 (_基线) / 400 (_提速)/ 800 (_预期卡死)
+#   PLL 源自动选：400→gowin_pll_400.v，其余→gowin_pll_x200.v
 #
 # 观察三件事：
 #   1. 是否收敛？run 走到 report/bitstream = 成功；卡在 ~60% 进度 = 不可达
@@ -31,6 +32,15 @@ if {[llength $argv] > 0} {
     set FREQ_MHZ [lindex $argv 0]
 } else {
     set FREQ_MHZ 200
+}
+
+# 按目标频率选择引擎 PLL 源文件（VCO 恒 800MHz，改 ODIV0 得输出）
+#   200: ODIV0=4 → gowin_pll_x200.v
+#   400: ODIV0=2 → gowin_pll_400.v
+#   300/500/800 等未提供实体文件 → 兜底用 x200（PnR 时序仍按 -period 约束跑）
+switch $FREQ_MHZ {
+    400 { set PLL_FILE gowin_pll_400.v }
+    default { set PLL_FILE gowin_pll_x200.v }
 }
 
 set SRC  F:/sram/sram/rtl/13_mega138k
@@ -62,7 +72,7 @@ set_device -device_version B $DEVICE
 
 add_file $SRC/board_top.v
 add_file $SRC/gowin_pll.v
-add_file $SRC/gowin_pll_x200.v
+add_file $SRC/$PLL_FILE
 add_file $SRC/lcd_display.v
 add_file $SRC/engine_core.v
 add_file $PROTO/simd_mac_array.v
