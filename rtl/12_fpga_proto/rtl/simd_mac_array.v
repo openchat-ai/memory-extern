@@ -180,25 +180,48 @@ module simd_mac_array #(
                                         : sum_ext[ACC_WIDTH-1:0];
                 end
             end else begin : gen_pipe
-                // ── 流水版：打断关键路径 ──
-                // Stage A：锁存本拍乘积到 prod_pipe0（延迟一拍后才累加）
-                // Stage B：prod_pipe0 + acc → 累加（独立一拍）
+                // ── 流水版：打断关键路径（三级）──
+                // Stage A：kx 锁存 — 打断 `case(mag)` 移位加法 MUX 组合路径
+                // Stage B：product 锁存 — 由已寄存的 kx_pipe 计算（只剩符号/位宽扩展）
+                // Stage C：psum(acc) 锁存 — 累加
                 wire do_sample = en && wt_v_q && x_v_q && acc_en;
-                reg  sample_q;                        // 上一拍是否采样（product 有效）
-                reg  signed [ACC_WIDTH-1:0] prod_pipe0;
-
+                reg  kx_vld;                          // 上一拍 kx 有效
+                reg  signed [11:0] kx_pipe;           // Stage A：锁存 kx
+                reg  kx_sgn;                          // Stage A：锁存符号（与 kx 同拍）
                 always @(posedge clk) begin
                     if (!rst_n) begin
-                        sample_q   <= 1'b0;
-                        prod_pipe0 <= {ACC_WIDTH{1'b0}};
+                        kx_vld  <= 1'b0;
+                        kx_pipe <= 12'sd0;
+                        kx_sgn  <= 1'b0;
                     end else begin
-                        sample_q   <= do_sample;
-                        if (do_sample)
-                            prod_pipe0 <= product;   // Stage A：锁存乘积
+                        kx_vld  <= do_sample;
+                        if (do_sample) begin
+                            kx_pipe <= kx;            // Stage A：锁存移位加法结果
+                            kx_sgn  <= sgn;
+                        end
                     end
                 end
 
-                // 累加上一拍的乘积（48bit 域，ACC16 饱和）
+                // Stage B：由 kx_pipe 计算 product（符号用同拍锁存的 kx_sgn）
+                wire signed [12:0] prod13_p =
+                    kx_sgn ? -$signed({kx_pipe, 1'b0})
+                           :  $signed({kx_pipe, 1'b0});
+                reg  signed [ACC_WIDTH-1:0] prod_pipe0;
+                always @(posedge clk) begin
+                    if (!rst_n)
+                        prod_pipe0 <= {ACC_WIDTH{1'b0}};
+                    else if (kx_vld)
+                        prod_pipe0 <= prod13_p;       // Stage B：锁存乘积
+                end
+
+                // Stage C：kx_vld 延迟成 prod_vld（product 有效）→ 累加
+                reg  prod_vld;
+                always @(posedge clk) begin
+                    if (!rst_n) prod_vld <= 1'b0;
+                    else        prod_vld <= kx_vld;
+                end
+
+                // 累加（48bit 域，ACC16 饱和）
                 wire signed [47:0] psum_ext =
                     {{(48-ACC_WIDTH){prod_pipe0[ACC_WIDTH-1]}}, prod_pipe0} +
                     {{(48-ACC_WIDTH){acc[ACC_WIDTH-1]}}, acc};
@@ -207,7 +230,7 @@ module simd_mac_array #(
                 always @(posedge clk) begin
                     if (!rst_n || acc_clr)
                         acc <= {ACC_WIDTH{1'b0}};
-                    else if (sample_q)
+                    else if (prod_vld)
                         acc <= SATURATE ? psum_sat[ACC_WIDTH-1:0]
                                         : psum_ext[ACC_WIDTH-1:0];
                 end
@@ -242,17 +265,25 @@ module simd_mac_array #(
         // 否则归约树会每周期重新发射 sum_valid 导致结果重复
         assign acc_done = (done_cnt != 16'd0) && wt_valid_d && !wt_v_q;
     end else begin : gen_done_pipe
+        // 三级流水（PIPE_IN=kx→product→acc）：累加触发在 do_sample 延迟 2 拍
+        // （prod_vld），acc 在下一拍完成。acc_done 须取 do_sample 延迟 3 拍
+        // 的下降沿，保证『最后 product 已累加』时归约树采样完整。
         reg sample_any;
         always @(posedge clk) begin
             if (!rst_n) sample_any <= 1'b0;
             else        sample_any <= (en && wt_v_q && x_v_q && acc_en);
         end
-        reg sample_any_d;
+        reg sample_any_d1, sample_any_d2;
         always @(posedge clk) begin
-            if (!rst_n) sample_any_d <= 1'b0;
-            else        sample_any_d <= sample_any;
+            if (!rst_n) begin
+                sample_any_d1 <= 1'b0;
+                sample_any_d2 <= 1'b0;
+            end else begin
+                sample_any_d1 <= sample_any;
+                sample_any_d2 <= sample_any_d1;
+            end
         end
-        assign acc_done = sample_any_d && !sample_any;
+        assign acc_done = sample_any_d2 && !sample_any_d1;
     end
 
 endmodule
