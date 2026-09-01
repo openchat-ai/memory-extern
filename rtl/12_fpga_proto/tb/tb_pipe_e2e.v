@@ -27,7 +27,8 @@ module tb_pipe_e2e;
     wire sum_valid;
 
     simd_mac_array #(
-        .NUM_LANES(NUM_LANES), .ACC_WIDTH(ACC_WIDTH), .PIPE_MUL(1)
+        .NUM_LANES(NUM_LANES), .ACC_WIDTH(ACC_WIDTH), .PIPE_MUL(1),
+        .PIPE_IN(`TB_PIPE_IN)
     ) u_mac (
         .clk(clk), .rst_n(rst_n), .en(en),
         .wt_valid(wt_valid), .wt_data(wt_data), .wt_scale(8'h40),

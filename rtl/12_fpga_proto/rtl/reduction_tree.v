@@ -45,7 +45,7 @@ module reduction_tree #(
                 .in_valid  (in_valid),
                 .lane_in   (acc_in[g*GROUP_LANES*ACC_WIDTH +: GROUP_LANES*ACC_WIDTH]),
                 .part      (part[g]),
-                .part_valid(part_valid)
+                .part_valid(part_valid[g])
             );
         end
 

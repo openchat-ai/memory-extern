@@ -39,7 +39,8 @@ module engine_core #(
     simd_mac_array #(
         .NUM_LANES(NUM_LANES),
         .ACC_WIDTH(ACC_WIDTH),
-        .PIPE_MUL (1)             // 超频/布线：流水打断关键路径
+        .PIPE_MUL (1),            // 超频/布线：流水打断关键路径
+        .PIPE_IN  (1)             // 布线：输入寄存器级打断 x_data/wt_data 广播
     ) u_mac (
         .clk       (clk),
         .rst_n     (rst_n),
