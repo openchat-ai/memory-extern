@@ -26,26 +26,29 @@
    - 板载 **M.2 座 = Q1 通用 SerDes 2 lane**，**不在硬核上**；**硬核只到 PCIe 金手指（Q0, x4）**；
    - 目标形态：**T1 = FPGA 直挂 NVMe 盘优先**（M.2→PCIe x4 被动转接卡插金手指，FPGA=RC）；**T2 = PC 居中过渡**（SSD 在 PC M.2、FPGA 当 EP 插 PC 槽）。
 
-## 硬性环境约束
+## 硬性环境约束（板子已到货，2026-09-02 更新）
 - 手头环境 = **Termux (aarch64, Android)**：只有 iverilog -g2012 仿真 + python3 分析。
-- **无 Gowin IDE、不能 PnR、无板卡**。真机 = 用户 PC/板子：`gw_sh build_sweep.tcl 200`、`build_board_top.tcl`、`lspci` 都是**用户执行**；你负责把 RTL/tcl/约束/判据/操作清单做到"用户照做即签核"。
+- **真机已就位**：Tang Mega 138K Pro Dock 到货；PC 已装 Gowin IDE，**官方 key-led 示例已烧录成功**（烧录链路验证过）。
+- 我可以做的 = RTL/tcl/约束/判据/操作清单做到"用户照做即签核"；真机命令由**用户执行**，但每一步已排好，不再停留在"就绪度"。
 
 ## 仓库现状（读哪个文件确认）
 - `README.md` → 全貌与两条线的真机闭环结论
 - `rtl/README.md` → RTL 目录地图（01→14 递增链）
+- `rtl/13_mega138k/BOARD_DAY1.md` → **板子到手第一天动线**（board_top 综合/烧录/LED 心跳验收，当前正在做的这步）
 - `notes/` → architecture-decision / bandwidth-capacity-research 等决策链
 - `rtl/14_serdes_proto/doc/ARCHITECTURE.md` → 协议层设计 + §11.5 工作量/风险（v2 已按原理图更正）
-- `git log --oneline -15` → 最近节奏（当前在 13 PnR 验收 + 14 NVMe 桥）
+- `git log --oneline -15` → 最近节奏（当前在 13 真机冒烟）
 
-## 待办（按优先级）
-1. **13 频点签核（当前主战场）**：用户在 PC `gw_sh build_sweep.tcl 200` → 判读收敛 / WNS<0 / 卡60% 三结果；你补判据模板 + `build_board_top.tcl` 综合冒烟清单。
-2. **三方汇合（13↔14）**：`pcie_dma_engine`（FPGA 权重流）↔ `nvme_bridge`（块请求）↔ `cachectl_pipeline`（wt_lba 落点）语义对上，加回归（仿真桩粒度自己定）。
-3. **14 PCIe 硬核真机准备**：EP(T2)/RC(T1) 适配器 = 顶层骨架 + 金手指约束 + 用户照做的 Gowin IDE 清单（`lspci -vv` 目标 Gen3 x4）。Termux 无 Gowin IP，只能到"bitstream 就绪度"。
-4. 新代码沿用各支线回归；14 追加 `sim.sh run`；12/13 按各自 tb 单跑。
-5. 调试临时文件一律 `/data/data/com.termux/files/usr/tmp/opencode/`。
+## 待办（按优先级，真机已启动）
+1. **【当前一步】13 board_top 真硅片冒烟**：用户在 PC 改 `build_board_top.tcl` 里 SRC/PROTO/OUT 三行为真实路径 → `gw_sh build_board_top.tcl` → 烧 SRAM → 看 **LED[0](J14) ~1Hz 心跳**（PLL 200MHz + LCD 可加分）。判据：`=== PNR DONE ===` + `.fs` 生成；卡 60% 布线 = 已知会诊场景。回传格式：`board_top: PASS/FAIL LED心跳=Y/N LCD=Y/N PNR耗时=min 卡阻=有/无:卡在X%`。
+2. **13 频点签核（紧接其后）**：`gw_sh build_sweep.tcl 200` → 判读收敛 / WNS<0 / 卡60% 三结果（脚本头注释有完整判据），200 过了即签核。
+3. **三方汇合（13↔14）**：`pcie_dma_engine`（FPGA 权重流）↔ `nvme_bridge`（块请求）↔ `cachectl_pipeline`（wt_lba 落点）语义对上，加回归（仿真桩粒度自己定）。
+4. **14 PCIe 硬核真机准备**：EP(T2)/RC(T1) 适配器 = 顶层骨架 + 金手指约束 + 用户照做的 Gowin IDE 清单（`lspci -vv` 目标 Gen3 x4）。Termux 无 Gowin IP，只能到"bitstream 就绪度"。
+5. 新代码沿用各支线回归；14 追加 `sim.sh run`；12/13 按各自 tb 单跑。
+6. 调试临时文件一律 `/data/data/com.termux/files/usr/tmp/opencode/`。
 
 ## 提交规范
 - message 风格参考 `git log --oneline -8`；只 stage 本任务文件；`master` 分支不动；push 仅当用户说。
 
 ## 终点
-13 签核判据就绪 + 三方对接点清晰 + 14 PCIe 骨架/清单就绪，编译全过、14 回归 22/22 或更多全绿，并给出用户 PC/板子上的完整验收步骤与预期数值。
+13 board_top 真机冒烟 PASS（LED 心跳）→ 200MHz 签核完成 → 三方对接点清晰 → 14 PCIe 骨架/清单就绪，编译全过、14 回归 22/22 或更多全绿，给出用户 PC/板子上的完整验收步骤与预期数值（含下一次真机步骤）。
