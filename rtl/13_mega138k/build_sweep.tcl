@@ -57,7 +57,7 @@ set sdc_content "// frequency sweep: engine clock ${FREQ_MHZ}MHz\n"
 append sdc_content "create_clock -name sys_clk -period 20 -waveform {0 10} \[get_ports {sys_clk}\]\n"
 append sdc_content "create_clock -name engine_clk -period $PERIOD_NS -waveform {0 $HALF_NS} \[get_nets {clk_200m}\]\n"
 append sdc_content "create_clock -name lcd_clk_35 -period 28.571 -waveform {0 14.2855} \[get_nets {lcd_clk_d}\]\n"
-append sdc_content "set_clock_group -asynchronous -group \[get_clocks {sys_clk}\] -group \[get_clocks {engine_clk lcd_clk_35}\]\n"
+append sdc_content "set_clock_groups -asynchronous -group \[get_clocks {sys_clk}\] -group \[get_clocks {engine_clk lcd_clk_35}\]\n"
 
 set sdc_file "$OUT/sweep_${FREQ_MHZ}m.sdc"
 set fp [open $sdc_file w]

@@ -1,0 +1,52 @@
+# PnR 死循环诊断（sweep_200m 场景 c）
+# 生成时间: 2026-09-02_09:00
+# 结论: 200MHz 布线永不收敛，卡死在 [60%] Routing Phase 0 completed
+
+## 1. 理想验收 vs 实测
+- 上游预期（build_sweep.tcl 200MHz）：引擎 200MHz 真实收敛 → 出 board_top.fs → 签核
+- 实测：合成 100% 完成；PnR placement 10%~50% 完成；routing 卡在 [60%] Routing Phase 0，之后永不进展
+
+## 2. 逐个配置对照实验（全部卡同一行，无一收敛）
+| # | 实验          | place_option | route_option | enable_dsrm | SDC | 结果                    |
+|---|---------------|--------------|--------------|-------------|-----|-------------------------|
+| 1 | 原始 sweep    | 0            | 0            | 0           | 有  | 卡 [60%] Routing Phase 0 |
+| 2 | 3/2 复测(旧会话) | 3            | 2            | 0           | 有  | 卡 [60%] Routing Phase 0 |
+| 3 | DSR 实验      | 0            | 0            | 1           | 有  | 卡 [60%] Routing Phase 0 |
+| 4 | NOSDC 对照    | 0            | 0            | 0           | 无  | 卡 [60%] Routing Phase 0 |
+
+注：#3 已验证 prj 中 enable_dsrm=1 生效；#4 已验证 prj 中无任何 sdc 引用、global_freq=200.000
+结论：死循环与 place/route 退化选项、DSRM 路由资源、SDC 约束均无关。
+
+## 3. PnR 日志尾部（仅存的 599B，见板断点）
+Reading netlist file ... completed
+Running placement......
+[10%] Placement Phase 0 completed
+[20%] Placement Phase 1 completed
+[30%] Placement Phase 2 completed
+[50%] Placement Phase 3 completed
+Running routing......
+[60%] Routing Phase 0 completed
+
+## 4. 死循环实证（watchdog 采样）
+- log 行数恒定不再增长；gw_sh CPU 单核持续满转 >500s；进程不退出
+- 每次运行均被手动 kill（sweep 08:34、DSR 08:51、NOSDC 08:58）
+
+## 5. 排除项（已实测推翻）
+- 非 SDC 语法错误（已修 set_clock_group→set_clock_groups，TA2000 消失后仍卡）
+- 非 SDC 存在与否（无 sdc 对照 #4 同样卡）
+- 非 place/route 选项（0/0、3/2 均卡）
+- 非 enable_dsrm（1 仍卡）
+- 非 RTL 版本（上游最新 7f85de0 含分层归约树/PIPE_IN/PIPE_MUL 仍卡）
+- 非全局频率（global_freq=200 与 SDC 均指向 200MHz，无 100MHz 兜底混入）
+
+## 6. 现存假设（无法用 config 级选项继续拆）
+根因指向 Gowin 布线引擎在 138K 大器件稀疏布局下的工具级非时序路由收敛行为：
+- 历史记录：aa9158c"修复"未触及根因，三成功案 build8/9 实为周期不同配置
+- notes 584-602：定论 PNR 布线永不收敛（非资源/约束/综合层）
+- 此前的"三成功案例无 SDC"说法在仓内笔记中未找到实证，判为存疑
+
+## 7. 下一步（需决策）
+无法用 tool/config 选项继续推进。候补：
+a) 提交此 diag 给上游，等上游 RTL/工具层级对策
+b) 试官方 demo 工程（led/ddr3_400M 同 138K 器件）验证是否工具环境问题
+c) 用户已否决降频，故 100MHz/180MHz 不在选项内
