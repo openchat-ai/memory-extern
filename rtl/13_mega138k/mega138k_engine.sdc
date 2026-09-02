@@ -28,6 +28,4 @@ create_clock -name lcd_clk_35 -period 28.571 -waveform {0 14.2855} [get_nets {lc
 //   徒增布线负担并可能把布线器拖进不可收敛的循环。
 //   硬件上也确实是异步域（各自 lock），故显式声明为 async 组。
 // ------------------------------------------------------------------
-set_clock_groups -asynchronous \
-    -group [get_clocks {sys_clk}] \
-    -group [get_clocks {engine_clk_200 lcd_clk_35}]
+set_clock_groups -asynchronous -group [get_clocks {sys_clk}] -group [get_clocks {engine_clk_200 lcd_clk_35}]

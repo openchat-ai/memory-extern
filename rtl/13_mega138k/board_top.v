@@ -1,12 +1,20 @@
 // ============================================================================
-// board_top.v — Tang Mega 138K Pro 综合顶层（冒烟测试版）
+// board_top.v — Tang Mega 138K Pro 综合顶层（确定性 GEMV 自测版）
 //
-// 目标：
-//   1. 验证时钟/复位/LED 引脚约束正确
-//   2. 引擎核心在真实 fabric 上编译通过
-//   3. LED 心跳 + 活动指示，上电即可观察
+// 目标（阶段A：USB 串口前先验证 GEMV 正确性）：
+//   1. 板上跑一个确定性 GEMV 自测：固定权重/激活向量，跑固定拍数
+//   2. 结果 SUM 固化在确定值上，经 LCD Line3(SUM: hex8) 上屏
+//   3. 主机算出期望值比对，证明 128-lane MAC 正确性（无需 PCIe/串口）
 //
-// 后续步骤：接入 PCIe DMA 权重流，替换本文件的自由测试激励
+// 后续步骤：接入 PCIe DMA 权重流，替换本文件的确定性自测激励
+//
+// 自测向量设计（可心算验证）：
+//   - 所有 128 lane 权重 w = E2M1 码值 4'b0010（sgn=0, mag=2 → E2M1 值 = 4）
+//   - 所有 128 lane 激活 x = +1（8'b0000_0001）
+//   - MAC 乘积 = E2M1值 × x = 4×1 = 4（kx=mag·x=2 → prod13 = sgn?−2kx:2kx = +4）
+//   - 单拍 128 lane 合计 = 512
+//   - 跑 N_SELFTEST = 16 拍，acc 持续累加 → SUM = 512 × 16 = 8192 = 0x2000
+// 若 LCD Line3 显示 SUM=00002000（hex）=> 引擎正确
 // ============================================================================
 
 `timescale 1ns/1ps
@@ -74,41 +82,37 @@ module board_top (
     wire heartbeat = hb_cnt[26];
 
     // ------------------------------------------------------------------
-    // 自由运行激励：权重码递增、激活固定模式，验证 MAC 阵列翻转
+    // 确定性 GEMV 自测激励：固定权重/激活 + 固定拍数，SUM 可预期
     // 真实数据路径（PCIe DMA）接入后删除此段
     // ------------------------------------------------------------------
-    localparam NUM_LANES = 128;
+    localparam NUM_LANES  = 128;
+    localparam N_SELFTEST = 16;   // 自测拍数
 
-    /* verilator lint_off UNUSEDSIGNAL */
+    // w=E2M1值4 : code=4'b0010(mag=2,sgn=0) → 乘积=4×x
+    // x=+1 : 8'b0000_0001
+    localparam [3:0] SELFW = 4'b0010;
+    localparam [7:0] SELFX = 8'h01;
+
     reg [NUM_LANES*4-1:0] pat_wt;
     reg [NUM_LANES*8-1:0] pat_x;
-    /* verilator lint_on UNUSEDSIGNAL */
     reg                   pat_en;
-    reg [9:0]             burst_cnt;
+    reg [4:0]             st_cnt;
 
-    integer i;
-    // 突发模式：跑 16 拍停 1000 拍，循环往复
     always @(posedge clk_int) begin
         if (!rst_n_core) begin
-            pat_wt    <= {NUM_LANES*4{1'b0}};
-            pat_x     <= {NUM_LANES*8{1'b0}};
-            pat_en    <= 1'b0;
-            burst_cnt <= 10'd0;
+            pat_wt <= {NUM_LANES*4{1'b0}};
+            pat_x  <= {NUM_LANES*8{1'b0}};
+            pat_en <= 1'b0;
+            st_cnt <= 5'd0;
         end else begin
-            burst_cnt <= burst_cnt + 10'd1;
-            if (burst_cnt < 10'd16)
+            // 复位后跑 N_SELFTEST 拍即停，之后保持 SUM 不变
+            if (st_cnt < N_SELFTEST) begin
+                st_cnt <= st_cnt + 5'd1;
                 pat_en <= 1'b1;
-            else
+                pat_wt <= {NUM_LANES{SELFW}};
+                pat_x  <= {NUM_LANES{SELFX}};
+            end else
                 pat_en <= 1'b0;
-
-            if (pat_en) begin
-                /* verilator lint_off UNUSEDLOOP */
-                for (i = 0; i < NUM_LANES; i = i + 1) begin
-                /* verilator lint_on UNUSEDLOOP */
-                    pat_wt[i*4 +: 4] <= pat_wt[i*4 +: 4] + 4'd1;
-                    pat_x [i*8 +: 8] <= pat_x [i*8 +: 8] + 8'd3;
-                end
-            end
         end
     end
 
