@@ -8,8 +8,9 @@
 `timescale 1ns/1ps
 
 module engine_core #(
-    parameter NUM_LANES = 128,
-    parameter ACC_WIDTH = 32
+    parameter NUM_LANES   = 128,
+    parameter ACC_WIDTH   = 32,
+    parameter GROUP_LANES = 32   // reduction_tree 每组 lane 数；默认32 保持现行为
 )(
     input  wire                       clk,
     input  wire                       rst_n,
@@ -61,7 +62,8 @@ module engine_core #(
     // ------------------------------------------------------------------
     reduction_tree #(
         .NUM_LANES(NUM_LANES),
-        .ACC_WIDTH(ACC_WIDTH)
+        .ACC_WIDTH(ACC_WIDTH),
+        .GROUP_LANES(GROUP_LANES)
     ) u_reduce (
         .clk       (clk),
         .rst_n     (rst_n),

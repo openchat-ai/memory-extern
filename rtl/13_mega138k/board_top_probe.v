@@ -20,7 +20,8 @@ module board_top_probe (
 );
 
     // ================= 结构二分开关（只改这里） =================
-    localparam NUM_LANES = 128;   // 128 / 64 / 32 二分；0 支持仍需留引擎结构被封死
+    localparam NUM_LANES   = 64;   // 128 / 64 / 32 二分；0 支持仍需留引擎结构被封死
+    localparam PROBE_MODE  = 3;    // 0=无引擎 1=仅MAC阵列 2=仅归约树 3=完整引擎
     // =============================================================
 
     wire clk_200m;
@@ -61,27 +62,107 @@ module board_top_probe (
         else                    hb_cnt <= hb_cnt + 27'd1;
     end
     assign led[0] = hb_cnt[26];
-    assign led[3:1] = 3'b000;   // 共阳极，灭 = 1
+    // led[3:1] 由引擎输出扇出驱动 → 保证 sum 有扇出，防止引擎被 DCE sweep（NL0002）
+    assign led[1] = sum_valid | hb_cnt[15];
+    assign led[2] = sum_out[0] | hb_cnt[16];
+    assign led[3] = (|sum_out[31:1]) ? 1'b0 : hb_cnt[17];   // 共阳极，灭 = 1
 
-    // ================= 引擎（恒静态输入，探结构不跑数据） =================
+    // ================= 引擎（结构探针：输入由 hb_cnt 驱动，防综合优化） =================
+    // 重要：输入恒 0 或 sum 无扇出时，综合会 sweep 整个阵列（实测 REG=45/LUT=10），
+    //       探针假通过；必须让 wt/x 非恒定且 sum 有扇出，阵列才真正进入布线器。
+    localparam WT_BITS = NUM_LANES * 4;
+    localparam X_BITS  = NUM_LANES * 8;
+    wire [WT_BITS-1:0] wt_drv;
+    wire [X_BITS-1:0]  x_drv;
+    genvar gi;
+    generate
+        if (WT_BITS > 0) begin : g_wt
+            for (gi = 0; gi < WT_BITS; gi = gi + 1) begin : wtb
+                assign wt_drv[gi] = hb_cnt[gi % 27];
+            end
+        end
+        if (X_BITS > 0) begin : g_x
+            for (gi = 0; gi < X_BITS; gi = gi + 1) begin : xb
+                assign x_drv[gi] = ~hb_cnt[(gi + 13) % 27];
+            end
+        end
+    endgenerate
+
     wire [31:0] sum_out;
     wire        sum_valid;
     wire        busy;
 
-    engine_core #(
-        .NUM_LANES (NUM_LANES),
-        .ACC_WIDTH (32)
-    ) u_engine (
-        .clk        (clk_int),
-        .rst_n      (rst_n_core),
-        .wt_valid   (1'b0),
-        .wt_data    ({NUM_LANES*4{1'b0}}),
-        .x_data     ({NUM_LANES*8{1'b0}}),
-        .x_valid    (1'b0),
-        .acc_clr    (1'b0),
-        .sum_out    (sum_out),
-        .sum_valid  (sum_valid),
-        .busy       (busy)
-    );
+    // PROBE_MODE 分支：隔离阵列 vs 归约树（保证 sum 有扇出，防 sweep）
+    generate
+        if (PROBE_MODE == 3) begin : g_engine
+            engine_core #(
+                .NUM_LANES (NUM_LANES),
+                .ACC_WIDTH (32)
+            ) u_engine (
+                .clk        (clk_int),
+                .rst_n      (rst_n_core),
+                .wt_valid   (hb_cnt[0]),
+                .wt_data    (wt_drv),
+                .x_data     (x_drv),
+                .x_valid    (hb_cnt[1]),
+                .acc_clr    (1'b0),
+                .sum_out    (sum_out),
+                .sum_valid  (sum_valid),
+                .busy       (busy)
+            );
+        end
+        else if (PROBE_MODE == 1) begin : g_mac_only
+            wire [NUM_LANES*32-1:0] acc_bus_m;
+            wire acc_done_w;
+            simd_mac_array #(
+                .NUM_LANES (NUM_LANES),
+                .ACC_WIDTH (32),
+                .PIPE_MUL  (1),
+                .PIPE_IN   (1)
+            ) u_mac_only (
+                .clk       (clk_int),
+                .rst_n     (rst_n_core),
+                .en        (1'b1),
+                .wt_valid  (hb_cnt[0]),
+                .wt_data   (wt_drv),
+                .wt_scale  (8'h40),
+                .x_data    (x_drv),
+                .x_valid   (hb_cnt[1]),
+                .acc_clr   (1'b0),
+                .acc_en    (1'b1),
+                .acc_out   (acc_bus_m),
+                .acc_done  (acc_done_w)
+            );
+            wire acc_any;
+            assign acc_any = |acc_bus_m;
+            assign sum_out = {acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_any, acc_bus_m[0], acc_bus_m[1]};
+            assign sum_valid = acc_done_w;
+        end
+        else if (PROBE_MODE == 2) begin : g_tree_only
+            wire [NUM_LANES*32-1:0] fake_acc;
+            genvar gj;
+            for (gj = 0; gj < NUM_LANES*16; gj = gj + 1) begin : fg1
+                assign fake_acc[gj] = hb_cnt[gj % 27];
+            end
+            for (gj = 0; gj < NUM_LANES*16; gj = gj + 1) begin : fg2
+                assign fake_acc[NUM_LANES*16 + gj] = ~hb_cnt[(gj + 13) % 27];
+            end
+            reduction_tree #(
+                .NUM_LANES (NUM_LANES),
+                .ACC_WIDTH (32)
+            ) u_tree_only (
+                .clk       (clk_int),
+                .rst_n     (rst_n_core),
+                .in_valid  (hb_cnt[1]),
+                .acc_in    (fake_acc),
+                .sum_out   (sum_out),
+                .out_valid (sum_valid)
+            );
+        end
+        else begin : g_none
+            assign sum_out   = 32'd0;
+            assign sum_valid = 1'b0;
+        end
+    endgenerate
 
 endmodule
