@@ -19,10 +19,13 @@ entropy_codec.py — E2M1 码流熵编码框架（§12.3 落地件）
 用法：
   python3 entropy_codec.py --selftest          # 无损往返 + 合成分布压缩率
   python3 entropy_codec.py --demo              # 打印码表样例
+  python3 entropy_codec.py --fit-real <json>   # 用真 K3 频率表定案压缩率
+  # json: {"codes_16": {0: 0.042, ..., 15: 0.022}} 或整份 T4 产出文件
 """
 
 import argparse
 import heapq
+import json
 from collections import Counter
 
 
@@ -174,12 +177,45 @@ def demo():
         print(f"  E2M1={mag:+.1f} (code {s:X}) → '{c}'")
 
 
+def fit_real(path: str):
+    """用真实 K3 频率表定案：Huffman 码表 + 真实压缩率。"""
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    freq = data["codes_16"] if isinstance(data, dict) and "codes_16" in data else data
+    freq = {int(k): int(v * 1e9) for k, v in freq.items()}   # 概率→计数，保 Huffman 稳定
+    codes = build_huffman(freq)
+
+    total = sum(freq.values())
+    print(f"== fit-real: {path} ==")
+    print("  真实 E2M1 码表（按频率排序）：")
+    for s, c in sorted(codes.items(), key=lambda kv: len(kv[1])):
+        mag = [0, .5, 1, 1.5, 2, 3, 4, 6][s & 7]
+        print(f"  E2M1={mag:+.1f} (code {s:X}) freq={freq[s]/total*100:5.2f}% → '{c}'")
+
+    # 真实压缩率
+    raw_bits = total * 4
+    comp_bits = sum(freq[s] * len(codes[s]) for s in freq)
+    bps = comp_bits / total
+    ratio = comp_bits / raw_bits
+    print(f"\n  原始 4.00 bit/sym → 实际 {bps:.2f} bit/sym "
+          f"（字节省 {(1-ratio)*100:.0f}%，相比原始位流）")
+    print(f"  有效带宽增益 ×{1/ratio:.2f}")
+
+    mx = max(len(c) for c in codes.values())
+    print(f"  最长码长 = {mx} bit"
+          f" → {'两级 LUT 可解 ✓' if mx <= 8 else '需多周期解码 ⚠️'}")
+    return codes
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--fit-real", type=str, default=None)
     args = ap.parse_args()
     if args.demo:
         demo()
+    elif args.fit_real:
+        fit_real(args.fit_real)
     else:
         selftest()

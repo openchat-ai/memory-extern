@@ -18,7 +18,7 @@
 import struct
 import collections
 
-PATH = "/data/data/com.termux/files/usr/tmp/opencode/kimi-k3-in-c-main/tests/fixtures/expert_trace.bin"
+PATH = "/mnt/f/sram/sram/data/expert_trace.bin"
 N_EXPERTS = 896
 KBYTES = 17_547_264
 

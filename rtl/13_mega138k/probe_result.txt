@@ -1,0 +1,3 @@
+# probe PnR 结果（脚�?�?动生成，提交即完成回传）
+elapsed_s = 352
+status = PNR-DONE

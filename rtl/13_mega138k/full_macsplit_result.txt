@@ -1,0 +1,5 @@
+# full_macsplit PnR 结果（脚�?�?动生成）
+route_option = 2
+place_option = 0
+elapsed_s = 1603
+status = PNR-DONE

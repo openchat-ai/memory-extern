@@ -1,0 +1,35 @@
+# macsplit_dontouch PnR 结果：syn_dont_touch 修复双实例寄存器合并
+
+route_option = 2
+place_option = 0
+elapsed_s = 1434
+status = PNR-DONE
+
+## 网表修复验证（.vg 逐字核对，对比坏版本）
+- hi 模块 (simd_mac_array_0) prod_pipe0 引用       ：6208（坏版本为 0）✓
+- hi 模块 prod_pipe0 DFFRE                        ：2048 个（=lo，全套 64 lane × 32bit 恢复）✓
+- hi 模块 kx_pipe DFFRE                           ：768 个（=lo）✓
+- hi 模块 lane26 加法器 psum_ext_7_s .I0           ：\gen_lane[26].gen_pipe.prod_pipe0[7]（自洽，坏版为 lane9）✓
+- 顶层 prod_pipe0 连接                             ：0（坏版本为两侧共享网）✓
+- lo/hi 两实例共享的 kx 顶层网                      ：0 ✓
+- 结论：syn_dont_touch = 1 成功阻止寄存器等价合并，hi 实例完全独立完整
+
+## 修复后真实时序（里程碑：不再基于损坏网表）
+- Fmax = 91.423 MHz（engine_clk_200，Logic Level 5；坏版本 129.4 为失真假象）
+- Setup TNS = -25680.125 ns（19955 endpoints 违例），Hold 全满足
+- 资源：Logic 12144(9%)，Register 14349(11%，坏版 ~10800 → +3500=hi 流水寄存器恢复)
+- Route 22 分钟主导；Arrival Data 内 route 占 82.7%（cell 仅 14.2%）→ 布线延迟主导，非逻辑深度
+
+## 最差路径（真实，非跨实例共享假路径，但跨布局区域）
+- From u_engine/u_mac_lo/gen_pipe_in.x_q_506_s0 → u_engine/u_mac_lo/gen_lane[53].gen_pipe.kx_pipe_10
+- 数据到达 14.114 vs 需 8.176，slack -5.938
+- 中间含 u_mac_lo 的 x_q 8 级 ALU 进位链 (n21039→n21034) + 一个 4.302ns 超大 tNET 进入
+  u_mac_hi/gen_lane[43].kx_9 组合 + 回到 lo kx_pipe
+- 根因：修复后 lo/hi 两个独立 64-lane 实例仍被布局在器件两侧，kx/x 组合逻辑跨实例区域长线
+  （PgH 不再共享网，但物理布线仍远）。瓶颈 = 布线/布局，正是下一步布局干预(MAX_FANOUT/CST/pblock)目标
+
+## 下一步（用户指令落地：布局布线干预 → 实验）
+1. MAX_FANOUT：x/wt 广播 + kx 组合 (全局大扇出) 约束
+2. CST GROUP + GRP_LOC / pblock：按 32-lane 分组锁定，压缩跨实例长线
+3. 220-230MHz 约束（10-15% 余量）+ 全时钟 SDC
+4. 或验证 layout retiming 缓解 x_q→kx 进位链

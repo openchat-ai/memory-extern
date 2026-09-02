@@ -1,0 +1,39 @@
+# macsplit_smoke PnR result (dontouch netlist + correct CST + timing intervention)
+route_option = 2
+place_option = 3
+max_fanout = 100
+elapsed_s = 640
+status = PNR-DONE
+
+## Real timing (from tr_content.html / timing_paths)
+engine_clk_200 constraint = 200.000 MHz
+engine_clk_200 actual Fmax = 124.311 MHz   (vs dontouch 91.423MHz, +36%)
+engine_clk_200 TNS     = -4559.665  (5631 endpoints)   (vs dontouch -25680.125, x5.6 better)
+engine_clk_200 Hold    = 0.000
+sys_clk                = no timing paths (LED0 heartbeat is clock-independent)
+
+## Pin check (rpt.txt) - ALL correct
+sys_clk = P16   rst_n = K16
+led[0]=J14 led[1]=R26 led[2]=L20 led[3]=M25
+
+## Worst paths (setup -3.044): lo gen_pipe_in x_q -> lo kx chain -> hi lane7 kx_6 + lo lane44 kx_pipe
+# i.e. cross-instance long nets on kx broadcast remain the bottleneck, but ~half distance vs before.
+
+## Resources (rpt.txt)
+Register = 14349 (11%)
+LUT/ALU  = 12425 (3761 LUT + 8664 ALU)
+
+## Bitstream
+fs = F:\sram\sram\out\138k_pro\macsplit_smoke\board_top_macsplit_reg_r2p3\impl\pnr\board_top_macsplit_reg.fs (34.6MB, 2026-09-02 18:15)
+ready-to-flash for smoke: LED0 (J14) heartbeat 1Hz, PLL clk 200MHz engine internally
+
+## Board smoke result (2026-09-02 on real silicon GW5AST-138B, ID 0x0001081B)
+Flashed via programmer_cli: -cable-index 1 -d GW5AST-138B --frequency 8 -r 2 --fsFile <fs>
+  (15MHz JTAG failed at 20%; 8MHz succeeded in 27s. SRAM volatile.)
+Observed LEDs (6 total on board; only [0..3] constrained):
+  LED[0] J14:  ~1Hz heartbeat blink     -> PASS (independent counter)
+  LED[1] R26:  dim/bright (busy strobe) -> PASS (engine MAC activity)
+  LED[2] L20 / LED[3] M25: faint        -> PASS
+  LED[6-th] N23 (LED[5]): steady ON     -> EXPECTED default (N21/N23 UNCONSTRAINED,
+       Gowin default unconstrained-IO drives them; not a fault). User kept as-is.
+SMOKE: PASS. Toolchain + netlist fix verified on real silicon.

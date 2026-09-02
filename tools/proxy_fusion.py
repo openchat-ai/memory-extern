@@ -4,7 +4,7 @@
 import struct
 from collections import defaultdict, Counter
 L_MOE=92; TOP_K=16
-d=open('/data/data/com.termux/files/home/sram/data/expert_trace.bin','rb').read()
+d=open('/mnt/f/sram/sram/data/expert_trace.bin','rb').read()
 recs=[struct.unpack('<II',d[i*8:i*8+8]) for i in range(len(d)//8)]
 per_layer=defaultdict(list)
 for (lay,exp) in recs: per_layer[lay].append(exp)

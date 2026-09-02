@@ -1,0 +1,25 @@
+// ============================================================================
+// macsplit_engine.cst — 纯引擎 macsplit 冒烟版物理引脚约束
+// 顶层 board_top_macsplit_reg 仅: sys_clk / rst_n / led[3:0]
+// 引脚来源: mega138k_engine.cst（官方 tang_mega_138k-pro_pins + key_led，2025-11-03）
+//   sys_clk=P16 板载50MHz 振荡器(单端,非GCLK); led 共阳极(逻辑低点亮)
+// 注: 不含 LCD 端口（macsplit_reg 顶层无 lcd）
+// ============================================================================
+
+// ---- 时钟（P16 板载 50MHz 振荡器）----
+IO_LOC  "sys_clk" P16;
+IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF PULL_STRENGTH=STRONG BANK_VCCIO=3.3;
+
+// ---- 复位按键（S0）----
+IO_LOC  "rst_n" K16;
+IO_PORT "rst_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+
+// ---- LED ×4（共阳极，逻辑低点亮）----
+IO_LOC  "led[3]" M25;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[2]" L20;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[1]" R26;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[0]" J14;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;

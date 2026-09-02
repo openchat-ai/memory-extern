@@ -23,17 +23,17 @@ MAT_CLASS = {
 
 def classify(name):
     n = name.lower()
-    if "router" in n:
+    if "router" in n or n.endswith(".gate.weight") or "e_score_correction_bias" in n:
         return "router"
     if "embed" in n or "tok_embeddings" in n or "lm_head" in n:
         return "embed"
-    if "latent" in n or "kv_down" in n or "k_up" in n or "v_up" in n or "w_a" in n:
+    if ("latent" in n or "kv_down" in n or "k_up" in n or "v_up" in n or "w_a" in n
+            or "f_a_proj" in n or "f_b_proj" in n or ".b_proj" in n or ".g_proj" in n):
         return "latent"
     if "up_proj" in n or "down_proj" in n or "w1" in n or "w3" in n or "w2" in n or "ffn" in n:
         return "ffn"
     if "out_proj" in n or "gate_proj" in n:
         return "out_gate"
-    # 用子串匹配(兼容 key 带 'layers.N.' 和 '.weight' 后缀)
     if "q_proj" in n or "k_proj" in n or "v_proj" in n:
         return "qkv"
     return "other"
@@ -81,26 +81,59 @@ def parse_curve(curve, s, rows):
         verdict = f"中等(1/4维误差{rel_at_quarter:.2f}) 需权衡"
     return drop, rel_at_quarter, verdict
 
+def load_index_cands(index_path, layer=None, maxrows=0):
+    """多shard模式: 读 k3_index.json, 按需 safe_open 取矩阵, 支持 --layer 过滤, 跳过量化U8"""
+    import json
+    from safetensors import safe_open
+    idx = json.load(open(index_path))
+    pre = "language_model.model.layers."
+    cands = []
+    for k, meta in idx.items():
+        if layer is not None and not (k.startswith(pre) and k[len(pre):].startswith(f"{layer}.")):
+            continue
+        if meta.get("dtype") == "U8":
+            continue
+        shape = meta.get("shape", [])
+        if len(shape) != 2:
+            continue
+        if maxrows and max(shape) > maxrows:
+            continue
+        cls = classify(k)
+        if cls == "other":
+            continue
+        shard = meta["shard"]
+        try:
+            with safe_open(f"/model/{shard}", framework="pt") as f:
+                v = f.get_tensor(k)
+        except Exception as e:
+            print(f"  [skip] {k}: {e}")
+            continue
+        cands.append((k, cls, v))
+    return cands
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--ckpt", required=True, help="safetensors文件 或 k3_index.json")
     ap.add_argument("--arch", choices=["auto", "smol", "k3"], default="auto")
     ap.add_argument("--max", type=int, default=0, help="最多扫几个矩阵(0=全)")
+    ap.add_argument("--layer", type=int, default=None, help="只扫该层(layers.N.)")
+    ap.add_argument("--maxrows", type=int, default=0, help="跳过任意维>maxrows的矩阵(0=不跳)")
     o = ap.parse_args()
     import torch
-    from safetensors.torch import load_file
-    sd = load_file(o.ckpt)
-    cands = []
-    for k, v in sd.items():
-        if v.ndim != 2: continue
-        cls = classify(k)
-        if cls == "other": continue
-        cands.append((k, cls, v))
+    if o.ckpt.endswith(".json"):
+        cands = load_index_cands(o.ckpt, layer=o.layer, maxrows=o.maxrows)
+    else:
+        from safetensors.torch import load_file
+        sd = load_file(o.ckpt)
+        cands = []
+        for k, v in sd.items():
+            if v.ndim != 2: continue
+            cls = classify(k)
+            if cls == "other": continue
+            cands.append((k, cls, v))
     if o.max: cands = cands[:o.max]
     if not cands:
-        print("没找到候选矩阵。列出的所有2D张量key:")
-        for k, v in sd.items():
-            if v.ndim == 2: print("  ", k, list(v.shape))
+        print("没找到候选矩阵(检查 --layer/--maxrows 过滤)。")
         return
     print(f"扫描 {len(cands)} 个矩阵, 每个跑 k→满 曲线\n")
     print(f"{'key':<40}{'类别':<8}{'shape':>12}{'断崖':>6}{'1/4误差':>9}  判定")

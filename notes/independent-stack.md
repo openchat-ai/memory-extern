@@ -118,7 +118,7 @@ K3 是月之暗面（Moonshot AI）于 2026 年 7 月发布的旗舰开源模型
 ### 3.1 原理
 
 MoE 每 token 只激活一小部分专家切片（K3: 25.83 GB/token）。
-每层工作集仅 ~280 MB —— 远小于模型总量。
+每层 trunk 工作集实测 **1.17 GB**（93 层 trunk 累计 108.8 GB/token，占总流量 81%）。
 ⇒ **不需要装下全部权重，只需要及时流过当前层的切片。**
 
 ### 3.2 数据流水线
@@ -139,15 +139,15 @@ DDR4/LPDDR 落地缓冲（当前层+下一层切片，~2 GB）
 
 | 层间搬运量 | 需要的持续带宽 | NVMe 配置 |
 |---|---|---|
-| 280 MB/层 × 层切换频率 | ~94 GB/s | 12 盘 Gen5 = 84 GB/s ✓ |
-| 加 DDR4 二级缓冲摊平突发 | 有效需求减半 | 6 盘即可 ✓ |
+| 1.17 GB/层（trunk 实测）+ experts | ~400 GB/s（单 token 全层） | 需多盘 NVMe RAID + DDR 缓冲摊平 |
+| DDR4 二级缓冲摊平突发 | 有效需求减半 | 6 盘 Gen4 即可 ✓ |
 
 ### 3.4 【核心结论】零外挂 DRAM
 
 **流式架构彻底消除了对外部 DRAM 的需求。**
 
 原因：权重不是随机访问的数据——是可预测的顺序流。
-每层只流过 ~280 MB 切片，预取引擎提前一层开始搬运，
+每层只流过 ~1.17 GB 切片（trunk 实测均值），预取引擎提前一层开始搬运，
 MAC 消费和 NAND 预取在时间上重叠，互不阻塞。
 
 ⇒ 不需要 LPDDR5X、不需要 HBM、不需要任何大容量快速存储。
@@ -365,6 +365,66 @@ MAC 改用 LUT 查表后，Tang Mega 138K 上原本 298 个 DSP，**除 trunk �
 > **每一块硅片都榨干，没有一粒在偷懒。**
 > ¥1,080 的国产 FPGA 从"只能验证架构"变成"有实用价值的推理节点"。
 
+### 3.6 官方 K3 技术报告架构要点（2026-08-27 读取）
+
+> 来源：`kimi-k3-tech-report.pdf`（47 页）+ arXiv:2607.24653
+
+**核心参数对照表（K2 → K3）：**
+
+| 参数 | K2 | K3 | 变化 |
+|---|---|---|---|
+| 总参数 | 1.04T | 2.78T | +167% |
+| 激活参数 | 32.6B | 104.2B | +220% |
+| 层数 | 61 | 93 | +52% |
+| 注意力组合 | 61 MLA | 69 KDA + 24 MLA | 混合注意力 |
+| 路由专家数 | 384 | 896 | +133% |
+| 每 token 激活专家 | 8 | 16 | +100% |
+| 共享专家 | 1 | 2 | +100% |
+| 隐维度 | 7168 | 7168 | = |
+| Latent MoE 维度 | — | 3584 (0.5×) | 新增 |
+| 专家隐维度 | 2048 | 3072 | +50% |
+| 注意力头数 | 64 | 96 | +50% |
+| 激活函数 | SwiGLU | SiTU-GLU | 改进 |
+| 量化 | — | MXFP4 权重 / MXFP8 激活 | QAT 训练 |
+
+**架构关键发现（对 GEMV 设计的影响）：**
+
+1. **块结构**：每个块 = 3 KDA + 1 Gated MLA，各配一个 Stable LatentMoE FFN
+   - 93 层 = 69 KDA + 24 MLA = 93 个 FFN
+   - KDA = delta-rule 递归状态（固定大小，无 KV 缓存增长）
+   - MLA = 标准 KV 缓存（低秩压缩，随序列增长）
+
+2. **Stable LatentMoE**：2 个共享专家（全宽7168）+ 896 路由专家（latent 3584）
+   - 路由专家每 token 激活 16 个
+   - Quantile Balancing：推理时冻结路由偏置，无需辅助损失
+   - 每个路由专家 SiTU-GLU FFN：gate_proj + up_proj + down_proj，各 3584×3072
+
+3. **AttnRes（注意力残差）**：每层有学习的伪查询（w），计算对所有前序层输出的注意力权重
+   - 需要保留所有 93 层的输出（O(Ld) 内存）
+   - 对 trunk 内存预算有直接影响
+
+4. **推理优化**（§5.4）：
+   - 前缀缓存：物理块 6144 token，哈希块 512 token，KDA 检查点在哈希边界保存
+   - MoE 解码：token 中心的流式内核（WarpDecode 风格），每个 warp 流式读取一个专家权重
+   - Latent GEMM：路由器 + down_proj 融合为一个 GEMM；latent 矩阵跨 rank 分片
+   - **无 SSD/PCIe 流式推理**——这是我们的创新空间
+
+5. **量化确认**：MXFP4 权重 / MXFP8 激活是 QAT 训练的原生格式
+   - 专家权重已是 MXFP4，无需后训练量化
+   - trunk 未做 QAT（官方 trunk-quantisation.txt 确认 int4=17.4% 误差）
+   - **我们的 mxfp4 trunk A/B 实验也证实**：cosine=0.8848, top1_match=False → trunk 不能量化
+
+6. **流量分布实测修正**：
+   - 原始声称 trunk ≈ 280 MB/层 → **实测 1.17 GB/层**（4.2× 低估）
+   - trunk 总流量 108.8 GB/token（81%）vs experts 25.8 GB/token（19%）
+   - 修正后单 token 全层带宽需求：~134.6 GB（bf16 trunk）或 ~53 GB（mxfp4 trunk 假设）
+
+7. **SINKER 存储设计启示**：
+   - 官方在集群规模（H20/H100 + NCCL）解决带宽问题
+   - 我们的单 GPU + NVMe SSD 架构是完全不同的部署层级
+   - KDA 固定状态 + MLA KV 缓存的混合设计验证了我们的流量模型
+   - Token-centric WarpDecode 内核验证了流式权重消费的可行性
+
 ## 四、多工艺节点对比
 
 | 工艺 | fmax | ROM 密度 | 能存 | K3 t/s | 晶圆成本 | 适用 |
@@ -531,13 +591,17 @@ K3 形状下热专家全集 ≈ 3.8GB（top-2×64 层×30MB）≫ 板上 1GB，
 ① 真实负载有强域偏好（需 K3 真实路由轨迹验证，工具已就绪）
 ② 多卡按专家分片，每卡工作集缩小到 DDR3 可容纳
 
-### 12.3 线上压缩（+15~20%）
+### 12.3 线上压缩（已封存 2026-08-29）
+
+> **定案：压缩路线整体关闭。** trunk 量化已否决（保 fp16，B.9-B.12 + k3-verdict §八）；专家侧 25.83GB/token 是字节硬账（B.20），熵编码/BF8 微省 % 级，换不来量级收益，不再投入。以下为历史记录，仅作参考上界。
 
 - scale 差分：E8M0 相邻块常相同 → 省 ~4%
 - E2M1 熵编码：零值/小幅值占比高 → Huffman 再挤 10-15%
   （FPGA 解码只需一张小查找表）
 
-### 12.4 模型侧瘦身（×1.5~2，质量换带宽）
+### 12.4 模型侧瘦身（已封存 2026-08-29）
+
+> **同样封存。** 混合精度 95% 层 int4 已被 B.9 否定（trunk 4-bit 重建误差 17.4%）；收紧 top-k / 早退属于质量换带宽，且 K3 已到 top-16 下限（B.13 后口径），不构成主方向。
 
 - 收紧路由 top-k（如 8 选 2 → 8 选 1.5）
 - 早退层：简单 token 提前输出
@@ -749,20 +813,44 @@ logits 缓冲           ~600KB          ✓
   - JTAG 能否识别器件（`gosw` / Sipeed 工具链）
   - FPGA 能否正常烧录
 - 二手卡重点查：**烧录口是否正常、是否有物理损伤、DDR/晶振是否工作**
-- Pro 版若与原版引脚/资源不同，先核对 `.cst` 引脚约束
+- **Pro 版与普通版引脚完全不同**（时钟/复位/LED 全部重映射，见 T5），
+  官方 Pro 全引脚表在 dl.sipeed.com `TANG/Mega_138K_Pro/09_Misc`
 
 #### T5 · 冒烟综合
 
 - 文件：`rtl/13_mega138k/board_top.v` + `engine_core.v` +
         `simd_mac_array.v` + `reduction_tree.v` + `.cst`
   ⚠️ 排除 `gowin_cells_stub.v`
-- IDE：教育版 ≥V1.9.11.03，器件 GW5AST-LV138PG484AC1/I0 (PBG484A)
-- 观测：LED0 心跳 ~1Hz；LED1-3 有活动 = MAC 在跑
+- **器件（Pro 版，2026-08-29 定论）：GW5AST-LV138FPG676AC1/I0，IDE 封装选
+  FCPBG676A、Device Version: B；商业版 IDE ≥ V1.9.9（教育版不支持 Pro）**
+- **引脚（官方 09_Misc 全引脚表 + 原理图定论，2026-08-29 修正）**：
+  - 时钟 P16 单端 LVCMOS33（板载 50MHz，非 GCLK，PR1014 警告可忽略；
+    普通版 V22 差分已作废）
+  - 复位 K16（S0），LED[3:0] = M25/L20/R26/J14（共阳极，低电平点亮）
+  - ⚠️ 旧 cst 为普通版引脚（V22/AB13/R19/U21/R17/T18），已全部废弃
+- **LCD 屏显（2026-08-29 新增，800x480 RGB666 Dock 屏）**：
+  - 像素时钟 35MHz（PLL 50M x21/1/30）；SYNC-DE 模式；H=1192（800+210+182）、
+    V=533（480+45+8），参数同官方 `rgb_screen/800_480_screen`
+  - 引脚（官方 09_Misc 全表）：lcd_clk=H21 lcd_en=A24 lcd_hs=H22 lcd_vs=A23
+    lcd_r=H19/J19/G25/H18/J18/K17 lcd_g=J16/K15/F22/G22/G21/G20
+    lcd_b=F20/G19/F19/F18/M17/M16；DRIVE：色=24、en/clk/hs/vs=8
+  - 显示：Line0 标题 / Line1 MODE: ACTIVE|IDLE / Line2 COUNT: hex6 / Line3 SUM: hex8
+    + 底部滚动活动条；engine 50M→LCD 35M 跨域两级同步（显示用，接受撕裂）
+  - 文件：`lcd_display.v`（无帧缓冲纯组合字模）、`gowin_pll.v`（lock 输出）
+  - 已修复：`glyph_on` 5bit AND 赋 1bit 被截断 → 归约 OR `|(...)`
+- 观测：LED0 心跳 ~1Hz；LED1-3 有活动 = MAC 在跑；LCD 显示引擎状态
 - 产出：实际 LUT/DSP/Fmax 三元组 → 替换本文所有"预计"值
 
 #### T6 · PCIe Gen3 x4 DMA 打通
 
-- 参考：sipeed/TangMega-138K-example `pcie_dma_demo`（Gen3 目录）
+- 参考：sipeed/TangMega-138KPro-example `pcie_dma_demo`（pcie_gen3(8G) 目录）
+  ⚠️ 非 TangMega-138K-example（那是普通版）；demo 官方标记 Unreviewed
+- **已知坑（官方 readme 实测）**：IDE 1.9.11.01；**禁 Programmer 1.9.10.02**
+  （BL616 板载调试器有严重问题）；PIN L23 必须 PULL_UP（PCIe reset）；
+  lspci ID `22C2:1100`；flash 烧录速率 105MHz；PR2017 报错需在
+  Project-Configuration 勾选 "Use SSPI/CPU as regular IO"；时序红时
+  Place Option=2 + IOB=True + Route Clock Route Order=1/Route Option=1；
+  勿删 impl 文件夹、勿改 FPGA model、勿重命名工程（会丢配置）
 - 步骤：官方 demo 先通 → 换入 pcie_dma_engine →
   `tools/host_stream.py --probe` 找设备 → 环回测速
 - 产出：实测有效 GB/s → 吞吐预测表全部刷新
@@ -794,9 +882,318 @@ T4(频率) ──→ 熵编码收益定案（依赖 T1 结论）
 | 0.5 | 2026-08-23 | **全面重写**：整合全部讨论成果，含裸片参数卡、双口径、流式架构、多工艺对比、产品矩阵、商业模式、安全方案、NAS 双用途、厂商触达状态 |
 | — | — | §3.4 新增：零外挂 DRAM 核心结论（流式范式替代囤积式）|
 | — | — | §3.5 新增：DSP 非必须——加法器/LUT 查找表可完全替代乘法器，Tang Mega 吞吐提升 4-8× |
-| — | — | §3.6 新增：DSP 复用方案——KV量化/ECC/激活函数，从原型升级为可用产品 |\n| — | — | §3.7 核心突破：LUT↔DSP 双向复用，Tang Mega 极限吞吐 4.2 t/s（性价比反超 U50 七倍）|
+| — | — | §3.6 新增：DSP 复用方案——KV量化/ECC/激活函数，从原型升级为可用产品 |
+| — | — | §3.7 核心突破：LUT↔DSP 双向复用，Tang Mega 极限吞吐 4.2 t/s（性价比反超 U50 七倍）|
 | — | — | 新增 §12 带宽榨取四路：投机解码/热专家缓存/线上压缩/模型瘦身 |
 | — | — | 新增 §13 独立运行固件架构：kimi-k3-in-c 掏心改造清单 + RISC-V 能力边界 |
 | — | — | 新增 §14 真机任务清单：权重机 T1-T4 / 板卡 T5-T7，含操作步骤/产出物/回填位置/依赖图 |
 | 0.6 | 2026-08-26 | **T3 实测回填**：§12.2 勘误 v4——真实轨迹推翻勘误 v3，1GB 缓存命中 35.3%（×1.55），路线复活；框架修正为"路由驱动预取为主、热度分级兜底"；§12.1 ρ=0.279 实测，投机解码上限 ~×1.26；§13.2 路由 GEMV 须上 MAC 阵列；T3 方法论修正（gate 单独跑不出路由） |
 | 0.7 | 2026-08-27 | 硬件节点：二手 Tang Mega 138K Pro ¥850 入手；新增 T0 收货验收；NVMe 补购规划中 |
+| 0.8 | 2026-08-27 | **官方架构验证 + 流量修正**：§3.1 trunk 流量从 280MB 修正为 1.17GB/层（实测 4.2×）；§3.3 带宽表更新；新增 §3.6 官方 K3 技术报告要点（47 页 arXiv:2607.24653）：块结构 3KDA+1MLA、Stable LatentMoE 896 专家 latent 3584、AttnRes 内存影响、推理优化（前缀缓存/WarpDecode/融合 GEMM）、MXFP4 原生 QAT 确认、无 SSD 流式方案（我们的创新空间） |
+
+---
+
+## 附录 B · 非专家数据提取 + 量化格式对比（2026-08-27 会话记录）
+
+> 本节为当天实测/探索过程记录，供下次接续，非正式架构章节。
+
+### B.1 SINKER 挂载故障与解决
+- `wsl --shutdown` 后 SINKER 从 k3 消失（k3 只剩 VHDX + 基础盘，无 sdd7），根因是物理盘附加关系被清空
+- 解决：`Set-Disk 2 -IsOffline` 释放 → `wsl --mount \\.\PHYSICALDRIVE2 --partition 7 --type ext4 --name sinker` → k3 内手动 `mount /dev/sdd7 /mnt/sinker`
+- 注意：`wsl --mount` 挂载点只位于执行它的 distro；block device(sdd7) 内核级共享，k3 可见
+- k3 systemd 因 `user@0.service` 起不来一直 `starting`，但不影响 bash/IO，属已知非致命问题
+
+### B.2 非专家数据提取：完成
+- 脚本 `extract_trunk.py`：遍历 96 shard，**跳过** `block_sparse_moe.experts.`，其余非专家张量按层分组，原样字节写入 per-layer safetensors
+- 产出 `/mnt/sinker/k3-workspace/extract/trunk_v1/`：**94 个 layer 文件（含 global），114.40 GB**
+  - 逐文件 header 校验全部通过（94/94）
+  - dtype 合计：BF16 ×2122 + F32 ×506（无专家 U8，符合跳过预期）
+- ⚠️ manifest.json 因最后 `sorted()` 混字符串 'global' 与 int 崩溃没写成（数据完整，仅元数据缺失，可后续补）
+- 提取是"安全网"：原始 k3 VHDX 18 前未动；塞回/量化对比在副本上进行
+
+### B.3 存储格式实测（澄清"FP16"疑问）
+- **trunk（非专家）原始就是 BF16**（+少量 F32 参数），提取前后 dtype 标签一致，非"提取后变 FP16"
+- **专家权重在 /model 里是 `weight_packed` U8 = MXFP4 打包字节**（如 `*_proj.weight_packed`），从不 dequantize：`value = E2M1[nibble] · 2^(E8M0_scale−127)`
+- shard 001 是纯 trunk（exp=0）；shard 002+ 每层 exp=5376 个 U8 专家张量
+- 层命名两变体：`layer_000` 用 `mlp.*`，`layer_001+` 用 `block_sparse_moe.*`（block 边界首层）
+
+### B.4 量化格式对比实测（layer_001 各矩阵，GEMM 激活输出 SNR）
+| 矩阵 | MXFP4 | KM-2b | KM-3b | **KM-4b** |
+|------|-------|-------|-------|-----------|
+| shared_experts.gate | 16.4 | 9.0 | 13.7 | **18.9** |
+| routed_expert_up | 16.4 | 8.5 | 14.2 | **18.4** |
+| self_attn.g | 17.7 | 9.0 | 14.7 | **19.3** |
+| self_attn.q | 17.7 | 8.6 | 13.4 | **17.6** |
+| self_attn.k | 18.1 | 9.0 | 14.4 | **18.8** |
+| self_attn.v | 17.2 | 9.7 | 14.5 | **18.3** |
+| self_attn.o | 17.3 | 9.8 | 13.6 | **20.0** |
+
+- **KM-4b 同带宽普遍优于 MXFP4（多数 +1~2dB）**；个别矩阵（g_proj）略低但属可接受档
+- KM-2b / MXFP2 全线 ~-2~9dB 彻底不可用；FPe（自然底数 scale）无收益（实测略降）
+- 跨层(005/010/020/030/040)验证：gate_proj/q_proj KM 系统性胜出，g_proj 系统性略差，o_proj 波动 —— **无普适赢家，最后靠端到端定**
+
+### B.5 端到端（非线性）测试
+- 单层 shared_experts FFN（含 SiTU-GLU）：MXFP4 与 KM-4b **均 12.5 dB**（KM-3b 9.6）
+- ⚠️ 纯 FFN 串行（无残差/norm）：**误差爆炸性累积**（layer1 12.4→layer2 8.9，~3.5dB/层）
+- **但架构实测（ARCHITECTURE.md）：层分 blocks of 12，block 边界运行时残差 snapshot+clear；embedding 总为第一 source；StdMoE 专家 aggregate 后 RMSNorm** → 误差不是 93 层线性累积，实际累积尺度约一个 block(12 层)
+
+### B.6 关键架构事实（ARCHITECTURE.md，影响后续一切）
+- 激活 SiTU-GLU（β₁=4, β₂=25）
+- KDA 线性注意力 69 层 + Gated MLA 24 层（=93）
+- **Attention 残差：层分 blocks of 12；block 边界残差 snapshot + clear；embedding 恒为第一 source**
+- **Stable LatentMoE：降到 latent(3584)→Top-16 专家→RMSNorm aggregate（非每专家）→投影回全宽；两个 shared experts 全宽无权重叠加**
+- router：独立 sigmoid 分数（不归一化）；冻结 per-expert bias 只管"选择不管权重"，组合权重用 unbiased 分数
+
+### B.7 待办 / 下次聚焦
+> ⚠️ **8-28 旧待办，多数已过时**：第2条"塞回 VHDX 量化方案"已被 B.9-B.12 推翻 + 8-29 定案 trunk 保 fp16 作废；第3条格式定稿已由 B.9-B.11 完成；第1条"深度精简"属层剪枝/early-exit（非压缩原物），未立项。仅存档。
+1. **"深度精简"研究立项（用户兴趣）**：大模型 93 层计算深度能否精简？候选：层剪枝(post-hoc 测每层残差贡献/范数找近恒等层)、early-exit、层内稀疏。**与"测几层够"不同**——是探索能否在数学上合法跳过/缩短
+2. 走完 v0.7 的"SINKER 流式访问"主线：先补 manifest；再把格式对比结论（KM-4b vs MXFP4）落到"塞回 VHDX（k3 VHDX 可改，用户已确认）"方案
+3. 端到端 block(12层)含 RMSNorm/残差 的误差趋势测试（用于真正定格式，替代纯 FFN 悲观串行）
+4. 用户指示：SINKER 里的副本先留着做对比，**勿删**；最终"塞回 k3 VHDX"（用户确认 k3 VHDX 可改）
+
+### B.8 环境速查
+- 默认 distro: qwen（fstab SINKER 行当前注释，避免与 k3 抢挂）
+- k3 内定位：`/dev/sdd7 → /mnt/sinker`；torch 2.13.0+cpu；numpy 2.3.5；SparkMoE fork 在 /root/sparkmoe-fork
+- 验证脚本位于 `C:\Users\ADMINI~1\AppData\Local\Temp\opencode\*.py`
+### B.9 决定性对照：dense trunk 投影深度量化实测不可行（2026-08-28 开工确认）
+
+**用户质疑**：此前 KM-4b "multi-layer 爆炸"（纯 FFN 及简化 MoE）可能是程序 bug 假象。
+**验证**：同一 `full_moe_trend.py` 框架，加 **BF16 round-trip 对照组**（权重 bf16→float，模拟 BF16 存储代价），对比 KM-4b。结论决定性。
+
+| 层 | BF16 round-trip SNR(dB) | KM-4b SNR(dB) |
+|----|----|----|
+| 1 | 168.2 | 12.0 |
+| 2 | 190.8 | 7.8 |
+| 3 | 239.6 | 4.3 |
+| 4 | 339.5 | 1.6 |
+
+- **BF16 完全不累积，甚至 SNR 随层数上升（168→340dB）** → 测试框架无发散 bug（用户怀疑被排除，但对照正确性确认了）✓
+- **KM-4b 每层 ~3.5dB 累积流失、4 层 1.6dB** → 是**真实量化代价**，非程序假象
+- 潜在偏差已评估：latent RMSNorm **不能**抑制该累积（norm 只在 latent 内打断 routed 链，管不了 dense 投影残差）；纯 `cur+layer_out(x)` 残差假设未含 attention block 边界 reset（见 B.10）
+
+**重大结论（推翻 prior "KM-4b 优选、trunk 量化塞回 VHDX" 方向）**：
+- dense trunk 投影（`routed_expert_down_proj/up_proj`、`shared_experts.*`、attention 各 proj）**每层必经 + 残差直通**，4-bit 深度量化误差沿残差链爆炸
+- **任何明显差于 BF16 的格式都不可行 → trunk 应保持 BF16**（单片 ~1.4MB/层 down, ~2.6MB/层 up，量化省空间收益 < 累积误差损失）
+- 量化收益只应来自**已 MXFP4 化的 routed 专家**（稀疏路由、latent 窄空间、非残差直通）——这是官方本来的做法，也是正确边界
+- ⚠️ 下一步需验证 B.10（attention block 边界 reset 是否真的缓解）后再最终定稿；当前数据已足够倾向"trunk 保 BF16"
+### B.10 BF8 分档实测：修正 B.9 的悲观结论（2026-08-28 续）
+同一框架加 **BF8(E4M3) round-trip** 对照，完整精度阶梯（BF16/BF8/KM4b）在 dense trunk 残差链上的累积趋势：
+
+> ⚠️ **8-29 总裁决覆盖本节"BF8 可行"方向**：owner 定案 trunk **保留 fp16**，36GB/BF8 量化口径整体作废（见 k3-verdict §八 修订）。本节是 8-28 的实测记录，仅存档，不再作为行动方向。
+
+| 层 | BF16 roundtrip | BF8-e4m3 | KM-4b |
+|----|----|----|----|
+| 1 | 168.2 | 25.8 | 12.0 |
+| 2 | 190.8 | 22.1 | 7.8 |
+| 3 | 239.6 | 19.5 | 4.3 |
+| 4 | 339.5 | 18.5 | 1.6 |
+
+- **BF8 单层 25.8→4 层 18.5dB**：仍可接受（>量化噪声阈值），省一半空间；误差累积率 ~2.4dB/层但**底线健康**
+- **KM-4b 单层 12→4 层 1.6dB**：直接崩（单层精度不够，累积无助）
+- **关键判据**：dense 残差链的可用性由**单层精度**决定。单层 ≥20dB（BF8）→ 累积后仍可用；单层 ~12dB（4bit）→ 累积崩
+- **BF16 基准**：168→340dB，零空间节省、全安全
+
+**修正 B.9 结论**：
+- ~~"trunk 必须保 BF16、任何格式都爆炸"~~ **不成立**（那是只测了 4bit 的过悲外推）
+- **正确边界：trunk（dense 投影 down/up/shared/attention proj）用 BF8(E4M3) 可行** —— 省一半空间，4 层后 18.5dB 可接受
+- **KM-4b（≤4bit）在 dense 残差路径不可行**（单层精度不足）；MXFP4 可行仅在 routed 专家（稀疏、latent、非残差直通），因为不沿 dense 残差链累积
+- ⚠️ 后续仍宜验证 attention block 12 层边界 reset 对长链累积的实际缓解，但当前数据已支持 **trunk→BF8 塞回** 方向
+### B.11 符号位必要性 + trunk 精度阶梯定案（2026-08-28 续）
+**用户问：权重为何需要符号位？可否全正数？**
+- GEMM `Σ W·x`：W 符号决定增强/抑制，是表达能力必要部分；K3 权重元素正负约各半（平衡点 0）
+- 无符号存储 `U=|W|` 丢失信息→崩；符号位是信息载体，不可省于权重量化
+- 用户的直觉对应真机会（记录备用）：**权重平衡化 weight-balancing**——按行乘符号向量预平衡成多数为正 + 对称激活，推理时恢复符号；对 4bit 存储才划算（符号位占 1bit），对 BF8 收益小；且对已知非负的激活（SiTU-GLU 输出等）天然可无符号。待后续评估。
+
+**trunk 精度完整阶梯（full_moe_trend.py，4层 dense 残差链，norm=on）**：
+| 层 | BF8-E4M3 | BF8-E5M2 | MXFP4-E2M1(2bit) | KM-4b(4bit) |
+|----|----|----|----|----|
+| 1 | 25.8 | 21.4 | 12.8 | 12.0 |
+| 2 | 22.1 | 17.7 | 9.7 | 7.8 |
+| 3 | 19.5 | 15.2 | 7.2 | 4.3 |
+| 4 | 18.5 | 14.2 | 6.4 | 1.6 |
+
+- **E4M3 优于 E5M2**（每层 ~4dB）：K3 trunk 权重值域有界(±448内)，永远吃不到 E5M2 的大指数范围，却要付尾数精度损失 → **选 E4M3**
+- **MXFP4-E2M1(2bit) 4 层崩到 6.4dB**，与 KM-4b(1.6dB) 同属"4bit 级"，均**不可用于 trunk**
+- **为什么专家能 MXFP4 而 trunk 不能【核心规律】**：路径结构决定容忍度——trunk 的 down/up/shared 是每层必走全宽密集投影、**残差直通**，4bit 误差无衰减累积；专家是**稀疏路由+latent窄空间+非残差直通**，4bit 误差不沿 dense 链累积。官方 trunk=BF16/专家=MXFP4 正是此规律的设计体现（且实测 trunk 可降到 BF8-E4M3，官方 BF16 偏保守）
+- **定案：trunk → BF8-E4M3（4层18.5dB，省一半空间）；专家维持 MXFP4**。不再支持更高压缩
+  - ⚠️ **被 8-29 定案推翻**：owner 最终定案 trunk 保 fp16，本节"BF8 定案"作废，仅存档。
+  - 佐证：8-29 真 K3 张量分解实测（kda-mla-decompose §19）显示 qkv/trunk 满秩墙，量化省空间方向无收益，与保 fp16 一致。
+
+**脚本卫生**：`multilayer_trend.py`（初代纯FFN串行版，无norm/attention，被hint反复误报）已移入 `_deprecated/` 并改名为 `*_DEPRECATED.py`，明确弃用，防误跑。
+### B.12 trunk 拆开研究：误差主源定位（2026-08-28 续）
+纠正"trunk 当整体"的错误 → 逐矩阵隔离测试（bf8-e4m3，4层，完整层含 routed+latent-norm+shared，norm=on）：
+| 单独量化 BF8-E4M3 | L1 | L4 |
+|----|----|----|
+| ALL(down+up+shared) | 25.8 | 18.5 |
+| shared only (sg/su/sd) | 25.8 | 18.5 |
+| down only | 79.7 | 75.2 |
+| up only | 79.7 | 73.7 |
+
+- **误差几乎全部来自 shared_experts**（sg/su/sd）——shared 单独量化 = ALL，是唯一误差主导
+- **down/up 量化到 BF8 几乎零代价**（75dB 极高，远高于阈值）——被 norm+latent 收缩压制（latent 输出非残差直通）
+- **shared 无 norm、残差直通** → 是 trunk 误差瓶颈，18.5dB
+- **解释**：B.6 测的"shared-only 无 norm 崩到 2.2dB"是缺失 routed+norm 路径的过度悲观；本次带完整层，shared 单独 18.5dB（仍是最弱，但不如纯 shared 链崩）
+- **落地细分**：down/up → BF8 安全（但省空间小，down 51MB/up 102MB/层）；shared → 是误差主源，必须保住精度（BF16 或 BF8 都由它主导），它是 [6144,7168]×3 全宽、空间大但动不得；真正的 BF8 省空间大头在 **attention 的 q/k/v/o 大矩阵**（[12288,7168]），需另行隔离验证
+- **下一步**：attention 各 proj（q/k/v/o/f_a/f_b）逐矩阵隔离，确认它们能否 BF8（它们是最省空间目标）
+  - ⚠️ **此"下一步"已被 8-29 终止**：真 K3 实测（kda-mla-decompose §19）证明 q/k/v 满秩墙（head_err_R4≈0.99），该隔离验证无收益；且 owner 定案 trunk 保 fp16，BF8 路线整体作废。仅存档。
+- **关于脚本退出码**：`full_moe_trend.py` 每次正常输出 DONE，wsl 的 exit 1 源自已知 systemd 启动非致命噪音（非 Python 崩溃）；隔离逻辑为脚本演进，非调试循环
+### B.13 目标转向 + 存储层真相 + 带宽地基（2026-08-28 关键转折）
+**用户定目标：算得快，传得快**（非"存储密度"）。SNR 阶梯研究停止，转向带宽/计算速率实测。
+
+**存储层重大澄清（推翻历史认知）**：
+- 此前 `/mnt/sinker` 里 94 层 107GB 提取，实为**本地虚拟盘 /dev/sdd 根目录的普通目录**（lsblk/mount/findmnt/df 全部证实其非独立挂载点），并非物理 SINKER
+- 真实 SINKER 物理盘 = **PHYSICALDRIVE2 = SINKER SEV512THK-CEN 512G SATA SSD**，本会话起点时 IsOffline
+- **重新挂载**：`Set-Disk -Number 2 -IsOffline $false` → `wsl --mount \\.\PHYSICALDRIVE2 --partition 7` → `/mnt/wsl/PHYSICALDRIVE2p7` = **/dev/sdd7**，383G 可用（1% 用）
+- 物理盘 k3-workspace 基本空（8KB）—— 此前提取竟写到本地虚拟盘目录，未落真实 SINKER（需后续迁移或重新提取）
+
+**真实物理盘顺序带宽（关键地基，direct I/O 冷测）**：
+- 写 **1.4 GB/s**，读 **1.5 GB/s**（SATA SSD 真实水平）
+- ⚠️ 对比：此前 `/mnt/sinker`（虚拟盘目录）只有 **133 MB/s**，差 11 倍——旧记录"133MB/s SINKER 桥"是**错误认知**（那是虚拟盘目录非物理盘）
+
+**对"传得快"的重新计算（BF16 trunk，93层）**：
+> ⚠️ 本节及 B.14/B.15 中的"流式必须压缩 / BF8 杠杆"为 8-28 视角；**8-29 定案 trunk 保 fp16**（36GB 量化口径作废），BF8/压缩不再作为方向（见 k3-verdict §八 与 B.20 字节硬账）。
+- 每层 trunk ~1.27GB × 93 ≈ **121GB/token**（仅 trunk，不含专家）
+- BF16 @ 1.5GB/s ≈ **~80 s/token**（仅传输，极端慢——流式必须压缩）
+- 压缩杠杆 = 每层字节数 ÷ 带宽：BF8 2×、MXFP4 8× → 直接成比例提升 tokens/sec
+- **量化的真实动机 = 减少传输字节以达可用 tokens/sec，而非"塞得进"**
+- 8-29 判定：压缩收益被累计误差/满秩墙否决（B.9-B.12 + §19），字节硬账只能靠更高带宽硬件（B.20）
+
+**测量基线确立**：端到端 token 延迟 = Σ(每层传输字节)/带宽 + Σ(计算时间)；后续实验以 1.5GB/s 为带宽常量，探每层字节与 GEMV 计算时间的实际测量。
+### B.14 "算得快"实测：单token GEMV vs 批次 GEMM（2026-08-28）
+down_proj 形状 [3584,7168]x[7168,3072]，k3 16线程 fp64→实测（fp64为稳妥计时）：
+| batch | 每op ms | 聚合 TFLOPS | 每token ms |
+|----|----|----|----|
+| 1(GEMV) | 10.31 | 15.3 | 10.31 |
+| 4 | 17.52 | 36.0 | 4.38 |
+| 16 | 28.28 | 89.3 | 1.77 |
+| 64 | 78.27 | 129.1 | 1.22 |
+| 256 | 303.7 | 133.0 | 1.19 |
+- **单token GEMV 极慢**（10.3ms/个down_proj）因为算术强度低、memory-bound、算率仅15TF
+- **批次化 = 算得快解药**：batch256 → 每token 1.19ms（8.7x），聚合算率 15→133TF（硬件饱和）
+- 模型规模：单层~10个大矩阵 down/up(2)+shared(3)+attn(5)，93层≈930次大乘 → batch256 时全层 ~1s/token 计算（勉强可用）
+- ⚠️ **核心矛盾**：批次化救计算侧，但传输侧每token字节不变——除非权重驻留内存跨批次复用。真正方案=**权重驻留+批次复用**（驻留DRAM的权重跨token共享，只搬批次间增量）
+
+### B.15 "传得快"完整决策表（真实字节×带宽×批次，实测data）
+- 真实 /model = **1.6TB**（1.67e12 B，93层全权重+MXFP4专家打包）
+- trunk BF16 = 1248MB/层 ×93 = **116GB**（纯维度算）；BF8=58GB；4bit=29GB
+- 传输时间 @ 纯单token全扫 = 字节/带宽：
+  | 带宽 | 全模型1.6TB | BF16 trunk 116G | BF8 trunk 58G |
+  |---|---|---|---|
+  | 1.5GB/s SATA | 1067s (~18min) | 77s | 39s |
+  | 7GB/s NVMe | 229s | 17s | 8s |
+  | DRAM 50GB/s | 32s | 2.3s | 1.2s |
+- **结论：单token全量流式在任何当前内存层次不可行**（最低也是秒级/token）
+- **必须批次+驻留**：批次分摊计算（B.14），驻留使权重跨token复用不重传 → 传输时间=驻留外增量/带宽，可到实用级
+- 决策杠杆排序（按收益）：① 批次化（计算8.7x+传输分摊）＞② 权重驻留DRAM（消除重传）＞③ 更高带宽存储 ＞④ 量化降字节（BF8/4bit补充）
+
+**目标转向落定**："算得快/传得快" = 批次GEMM(计算饱和) + 权重驻留(传输消除重传) + 量化(降字节辅助)。SNR 研究停止，以实测带宽/算率为准。
+### ⚠️ B.16（已被 B.18 证实为假象纠正）决定性突破：并发预取使"传得快"从死路变可行（2026-08-28）
+**背景**：单线程 dd 冷测 /model 仅 45-58 MB/s，一度判定"k3 跑不动 MoE"（死路）。
+**真相**：那是 **WSL 虚拟盘单请求延迟假象**，非存储硬限制。并发预取式读（2/4/8 线程并行，首 2GB）：
+| 线程 | MB/s |
+|----|----|
+| 1 | 58 |
+| 2 | **6480** |
+| 4 | **8379** |
+| 8 | 7656 |
+- **2 路并发即 6.5GB/s，4 路 8.4GB/s —— 提升 140 倍**
+- 结论：**流式推理必须并发预取（≥4路）+ I/O/计算重叠**，带宽不再硬天花板
+
+**修正后的流式预算 @8.4GB/s**（每 token 激活视图）：
+| trunk | 全93层/token | batch64 | batch128 |
+|----|----|----|----|
+| BF16 116G | ~164GB | 0.31s | 0.15s |
+| BF8 58G | ~107GB | 0.20s | 0.10s |
+- 从"45MB/s 分钟级/token"修正为"8.4GB/s 下 0.1-0.3s/token"（batch 到位）
+- ⚠️ 计算侧（B.14 实测 batch256 全层 ~1s）此时**可能反成新瓶颈** → 需验证流水线重叠后的真实端到端
+
+**架构定式**：并发预取（多路读当前层+预取下层）→ 批次 GEMM（权重在内存跨 batch 复用）→ 层内 I/O/计算流水线重叠。26GB 内存不足驻留多层 → 逐层流水线（预取→算→释放→预取），而非整模型驻留。
+### ⚠️ B.17（继承 B.16 假象前提，已被 B.18 作废）端到端流水线模拟：k3 跑起来的诚实极限（2026-08-28）：用全部实测常数构造 stream_sim.py（93层，并发预取8.4GB/s + 批次GEMM重叠，max(io,comp)流水线）。
+| trunk | 每层I/O | 每层计算 | 93层端到端 |
+|----|----|----|----|
+| BF16 | 211ms | 1-5ms | 19.7 s/token (0.051 tok/s) |
+| BF8 | 137ms | 1-5ms | 12.8 s/token (0.078 tok/s) |
+- 瓶颈 = I/O（预取一层 211/137ms），计算被完全吸收（1-5ms），batch 不帮助：token 各自流式搬权重（26GB内存装不下驻留），batch 只加速已非瓶颈的计算
+- 结论：k3 上 MoE 流式推理端到端 = 10-20s/token（BF8/BF16）——能跑通（架构验证OK），但不够实用
+- 唯一真优化杠杆 = 减少每层字节：BF16→BF8 省 50%；深量化（B.11）排除；k3 虚拟盘 8.4GB/s 已是内部最快，更高带宽收益有限
+- 实用化出路（超出k3当前硬件）：更大内存驻留多层 / GPU后端 / 更大batch硬件
+
+交付：stream_sim.py 为可复现端到端模拟器；prefetch_bw.py/gemv_vs_gemm.py/byte_budget.py/flow_budget.py 为实测常数来源。
+
+### B.18 C 实现评估 + B.16 假象纠正 + k3 硬件地板（2026-08-28）
+
+**探索结论：`kimi-k3-in-c` 的流式 C 实现早已完整且成熟**，无需从零新写：
+- `src/io/k3_trunk.c/h`：流式 trunk 预取，双缓冲 ring slots，reader 线程预取层 L+1 与主线程计算层 L 重叠，pin 策略，计时计数器（记录 71.75→42.27 s/token，更早设备带宽下）
+- `src/core/k3_ops.c`：MoE 前向内核（UpProj(RMSNorm_latent(Σ routedExpert(DownProj(x)))) + SharedExpert）
+- 构建产物 `bin/k3`（2026-8-19）比源码（2026-8-8）新，已含流式 trunk
+- `docs/PERFORMANCE.md`：EPYC 7763 + 3.2GB/s NVMe 上完整基准：**10.66-11.79 s/token**（16-32 token 持续）
+- 双缓存分析：专家缓存因 Quantile Balancing 无热子集、<192GB 全无收益；trunk ring 是唯一响应项（hit≈pin/93）
+- 分配优于容量：128GB 配得好（16.80 s/token）> 224GB 配得差（19.21）
+
+**k3 真实跑 = k3_run.json 记录 1662.75 s/token**——不是软件缺陷，是 k3 磁盘地板。
+
+**⚠️ B.16 的重大假象纠正（推翻早前结论）**：
+- 早前"8.4GB/s 并发预取、提升 140 倍"是**假的**：`prefetch_bw.py` 在 1/2/4/8 线程之间**没有 drop_caches**，后几次跑分是**页缓存命中**（内存驻留），非磁盘带宽
+- 本次在真实 `trunk.bin`（108.8GB, align4096）严格冷缓存实测（每次 drop_caches）：
+
+| 配置 | 1线程 | 2线程 | 4线程 | 8线程 |
+|----|----|----|----|----|
+| O_DIRECT 连续切分 | 52 | 56 | 60 | 59 |
+| 缓冲 连续切分 | 58 | 66 | 66 | 49 |
+| 缓冲 16MB 轮询 | 61 | — | — | 42 |
+| O_DIRECT 16MB 轮询 | 76 | — | 77 | 68 |
+
+- **结论：k3 磁盘 = ~55-77 MB/s 平坦墙**，无论线程数、O_DIRECT/缓冲、块布局怎么变都打不破。后端 VHDX 既是瓶颈，不是请求延迟假象
+- 软件并发预取对 k3 **零收益**；现有单线程 O_DIRECT 引擎在这块盘上已接近最优
+
+**正确端到端**：108.8GB / ~65MB/s ≈ **1675s/token** ≈ k3_run.json 的 1663s。B.17 的 stream_sim 继承 B.16 错误前提需作废；B.15 "单token流式不可行" 结论重新成立。
+
+**真实瓶颈 = 硬件，非软件**：真正有用杠杆只剩减字节数（BF8/压缩）或换更高带宽+更大内存硬件，k3 当前配置无法实用运行 Kimi K3 流式推理。
+> ⚠️ 其中"减字节数（BF8/压缩）"已被 **8-29 定案否决**（trunk 保 fp16，压缩路线关闭，见 k3-verdict §八 与 B.20）；剩真杠杆 = 换更高带宽+更大内存硬件。
+### B.19 trunk 放错盘：SINKER sdd7 vs /model 实测差 31 倍 + 持久挂载破解（2026-08-28）
+
+**用户洞察**：k3 的 `/model` 是 VHDX 虚拟盘（sde，100% 满，60MB/s 墙），而 k3 有**真实物理盘 SINKER（PHYSICALDRIVE2, SEV512THK 476.9GB SATA SSD）**。trunk 一直放错盘——慢盘上挣扎，快盘闲置。
+
+**实测真实带宽（严格冷缓存，O_DIRECT）**：
+- `/model`（sde VHDX）：55-77MB/s 平坦墙（B.18，无论并发/O_DIRECT/布局都打不破）
+- **SINKER /dev/sdd7 裸块设备读**：单线程 1013MB/s，**4线程 1889MB/s**（8线程 1735MB/s）
+- SINKER 写：735MB/s（dd 实测，符合 SATA 3.0 极限）
+- ⚠️ 修正早前"8.6GB/s"是文件系统路径的 **ext4+页缓存/宿主缓存假象**；裸设备读 ~1.9GB/s 才是物理真实
+
+**端到端预算（trunk 放 sdd7，4线程 1.9GB/s）**：
+- 108.8GB / 1900MB/s ≈ **57s/token**（vs /model 的 1663s/token，**~29 倍**）
+
+**持久挂载破解（关键）**：
+- 根因：`wsl -e bash` 命令结束**VM 就关闭**，挂载随 VM 消失 → 每次挂载都丢
+- 解法：**让 k3 VM 常驻**（后台 `nohup sleep 86400` + 内核级 `mount /dev/sdd7 /mnt/wsl/PHYSICALDRIVE2p7`）→ 跨命令保持
+- 已验证：VM 存活时，另一 `wsl -e bash` 调用来/相见挂载仍在（/proc/mounts 显示 sdd7 已挂）
+- `wsl --mount` 报 `WSL_ALREADY_MOUNTED` 不可用；`Set-Disk -IsOffline $false` Access Denied 不可用；只能 WSL 内 `mount /dev/sdd7`
+- **非持久前提**：Windows 重启 / `wsl --shutdown` 后需重跑 `k3-mount.bat`（已建 H:\k3\k3-mount.bat）
+- 引擎指向：`k3 <model_dir> --trunk /mnt/wsl/PHYSICALDRIVE2p7/trunk`（k3_trunk.c 读 <dir>/trunk.json + trunk.bin）
+
+**落地**：102G trunk 从 /model 拷到 sdd7/trunk（源 sde 慢盘 60-80MB/s 读 → 拷贝 ~25 分钟），待完成后 k3_run 验证 s/token 是否从 1663 降到 ~57 区间。
+
+### B.20 L2 专家缓存实测：sdd7 256GB 冷/热缓存 verdict + gen=32 长跑（2026-08-28~29，H:\k3）
+
+**背景**：sdd7 是真实物理 SSD（SEV512THK SATA，裸块读 1.9GB/s，B.19），`trunk` 放 sdd7 后，额外开出 `experts.l2`（256GB）给专家切片做跨 token 二级缓存。引擎新增 `--l2 FILE --l2-gb N`（kimi-k3-in-c，H:\k3\kimi-k3-in-c）。
+
+**8-28 四步修复链（L2 从错到对）**：
+- buggy open-addressing find：hit 0.73%，**输出错误**
+- pad-fix only：hit 6.67%，输出正确
+- pad + slot_of direct map：hit **33.08%**，输出正确（`generated_ids` 命中 [250,3502,123,343]）
+
+**8-28 gen=4 verdict（`/root/k3_l2_verdict.txt` 存档）**：
+
+| 配置 | s/token |
+|---|---|
+| L2 256GB（slot_of fix, 18:22 bin） | **346.85** |
+| no-L2 baseline（iso1, 17:38 bin） | 353.31 |
+| intrace old-bin ref | 326.55 |
+
+- L2 报告：requests 5565，hits 1841 (33.08%)；read 32.30GB + written 71.01GB
+- PEAK RSS 11.09 GB（引用这个，别引计划的数）
+- I/O share of wall：**112.2%**（trunk 387.8s + experts 1168.5s / 1387.4s）→ 专家 I/O 是绝对天花板
+
+**8-29 gen=32 长跑（进行中，验证跨 token 稳态）**：`--l2 experts.l2 --l2-gb 256 --gen 32`，复用 8-28 已填充的 L2 文件避免冷启动。STEP 表显示 CACHE HIT 稳定 **100%**（token≥5 后专家全命中），但每 token READ GB 恒定 **25.83** —— 专家流量 25.83GB/token 是字节硬账，L2 命中只能省随机读的 seek，省不掉字节本身（25.83GB = 92层×top16×17.55MB）。
+
+**判定**：L2 使 hit 33%→100%，但 s/token 346.85 仅比 no-L2 353.31 快 ~1.8%（I/O 占 112% 已是墙，256GB L2 省的 seek 换不来量级收益）。**专家侧每 token 25.83GB 字节流是比 trunk 更大的真瓶颈**；要量级收益只能减字节（量化/分解专家）或换更高带宽硬件，缓存类手段到此为止。

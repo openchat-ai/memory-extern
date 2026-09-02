@@ -1,25 +1,19 @@
 // ============================================================================
-// board_top.v — Tang Mega 138K Pro 综合顶层（确定性 GEMV 自测版）
+// board_top_full_macsplit.v — 完整板（128-lane + LCD）集成 MAC 阵列级拆分版
 //
-// 目标（阶段A：USB 串口前先验证 GEMV 正确性）：
-//   1. 板上跑一个确定性 GEMV 自测：固定权重/激活向量，跑固定拍数
-//   2. 结果 SUM 固化在确定值上，经 LCD Line3(SUM: hex8) 上屏
-//   3. 主机算出期望值比对，证明 128-lane MAC 正确性（无需 PCIe/串口）
+// 动机：macsplit（纯引擎，无 LCD）已证 128-lane 拆 2×64 独立 simd_mac_array
+//   可布通（unrouted=0, Total 9m53s）。本实验把该结构集成回完整板
+//   （128-lane + LCD 35MHz 双时钟域 + 确定性自测激励），验证：
+//   (a) 完整板含 LCD/多时钟域是否仍收敛；
+//   (b) SDC 时序约束（引擎 200MHz）在拆分结构下是否可达。
 //
-// 后续步骤：接入 PCIe DMA 权重流，替换本文件的确定性自测激励
-//
-// 自测向量设计（可心算验证）：
-//   - 所有 128 lane 权重 w = E2M1 码值 4'b0010（sgn=0, mag=2 → E2M1 值 = 4）
-//   - 所有 128 lane 激活 x = +1（8'b0000_0001）
-//   - MAC 乘积 = E2M1值 × x = 4×1 = 4（kx=mag·x=2 → prod13 = sgn?−2kx:2kx = +4）
-//   - 单拍 128 lane 合计 = 512
-//   - 跑 N_SELFTEST = 16 拍，acc 持续累加 → SUM = 512 × 16 = 8192 = 0x2000
-// 若 LCD Line3 显示 SUM=00002000（hex）=> 引擎正确
+// 相对 board_top.v 的差异：u_engine 用 engine_core_macsplit（2×64 独立收敛块），
+//   其余（LCD、PLL、自测激励、act_cnt、LED）完全一致。
 // ============================================================================
 
 `timescale 1ns/1ps
 
-module board_top (
+module board_top_full_macsplit (
     input  wire sys_clk,          // P16 板载 50MHz 振荡器，单端
     input  wire rst_n,            // 复位按键 S0（K16）
     output wire [3:0] led,
@@ -117,7 +111,7 @@ module board_top (
     end
 
     // ------------------------------------------------------------------
-    // 引擎核心实例化
+    // 引擎核心实例化：MAC 阵列级拆分版（2×64 独立收敛块）
     // ------------------------------------------------------------------
     /* verilator lint_off UNUSEDSIGNAL */
     wire [31:0] sum_out;   // 高位暂未消费，PCIe DMA 阶段回传主机
@@ -125,9 +119,10 @@ module board_top (
     wire        sum_valid;
     wire [7:0]  sum_low = sum_out[7:0];
 
-    engine_core #(
-        .NUM_LANES(NUM_LANES),
-        .ACC_WIDTH(32)
+    engine_core_macsplit #(
+        .NUM_LANES  (NUM_LANES),
+        .ACC_WIDTH  (32),
+        .HALF_LANES (64)
     ) u_engine (
         .clk      (clk_int),
         .rst_n    (rst_n_core),

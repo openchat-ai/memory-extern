@@ -1,0 +1,32 @@
+# macsplit_reg PnR 结果（stage 显式寄存器版）
+# ===================================================================
+# 改动：reduce_group_reg.v 的 gen_slot 越界 bug 修复 + stage 全 FF 化
+#   - 循环上界 LANES/(2*(s+1)) -> LANES/(1 << (s+1))（消除 EX3784/EX3828）
+#   - 综合日志不再出现 "Extracting RAM for identifier 'stage'" → FF 化达成
+# 基线对比：full_macsplit（stage 走 RAM）engine Fmax = 97.6MHz, TNS=-20859.4
+# ===================================================================
+route_option = 2
+place_option = 0
+elapsed_s = 338
+status = PNR-DONE
+bitstream = generated (board_top_macsplit_reg.bin 4330802 B)
+
+engine_clk_200:
+  constraint     = 200.000 MHz
+  Fmax           = 129.415 MHz   # 基线 97.6 -> 129.4 (+33%)
+  Logic Level    = 6
+  Setup TNS      = -11655.002   # 基线 -20859（+44% 改善）
+  Setup Endpoints= 13364
+  Hold           = 全满足 (slack 最小 +0.270)
+
+最差 setup 路径（slack -2.727）：
+  P1  u_mac_lo/gen_pipe_in.x_q_498_s0/Q -> gen_lane[18].gen_pipe.kx_pipe_8_s0/D
+       Data Delay 7.722ns = cell 1.658(21%) + route 5.720(74%)   ← 布线主导
+  P2  u_mac_lo/gen_lane[9].gen_pipe.prod_pipe0_7_s0/Q -> u_mac_hi/gen_lane[26].acc_31_s0/D
+       单段 tNET 5.525ns（R68C39->R56C114）跨实例长网
+  关键路径族：① x_q->kx_pipe（乘法 MUX）② prod_pipe->acc（累加进位链）
+
+结论：
+  - stage RAM->FF 确认有效（+33%），stage 归约不再是最差路径
+  - 新瓶颈是布线（route 74%）+ 跨实例长网 → 布局规整化是下一个干预点
+  - 路径中出现 u_mac_lo prod -> u_mac_hi acc 跨实例连接，疑似综合跨实例共享/折叠
