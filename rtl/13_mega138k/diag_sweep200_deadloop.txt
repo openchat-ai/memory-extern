@@ -1,6 +1,8 @@
 # PnR 死循环诊断（sweep_200m 场景 c）
 # 生成时间: 2026-09-02_09:00
-# 结论: 200MHz 布线永不收敛，卡死在 [60%] Routing Phase 0 completed
+# 更新时间: 2026-09-02_12:10（A实验：128+分2组×64 仍死循环 → 死循环=总lane数，与归约分组无关）
+# 结论: 200MHz PnR 卡死在 [60%] Routing Phase 0，与 SDC/place/route/DSRM 无关；
+#       触发因子 = 引擎 lane 规模（128-lane 真死循环，32/64-lane 均收敛 186s/352s）
 
 ## 1. 理想验收 vs 实测
 - 上游预期（build_sweep.tcl 200MHz）：引擎 200MHz 真实收敛 → 出 board_top.fs → 签核
@@ -17,6 +19,22 @@
 注：#3 已验证 prj 中 enable_dsrm=1 生效；#4 已验证 prj 中无任何 sdc 引用、global_freq=200.000
 结论：死循环与 place/route 退化选项、DSRM 路由资源、SDC 约束均无关。
 
+## 2.x 结构二分探针实验（board_top_probe.v / build_probe.tcl，无 SDC，0/0）※ 关键新证据
+| lane | PROBE_MODE        | elapsed | 结果                     |
+|------|-------------------|---------|--------------------------|
+| 64   | 3 完整引擎        | 352s    | PNR-DONE ✅（曾误判死循环）|
+| 64   | 1 仅 MAC 阵列     | 353s    | PNR-DONE ✅（acc_bus 全宽扇出防 sweep）|
+| 64   | 2 仅归约树        | 117s    | PNR-DONE ✅ |
+| 32   | 3 完整引擎        | 186s    | PNR-DONE ✅ |
+| 128  | 3 完整引擎(+SDC)  | >15min  | 真死循环 ❌（watchdog 实证，见 §4）|
+
+关键推断：
+- 早期"MODE=1 仅阵列 62s 通过"是假通过：acc_bus 除 [31:0] 外全悬空，阵列尾级被 DCE sweep。
+- "死循环"判定的早期样本均观察 <5min，而 352s 收敛案例显示 Routing 有一段 2-3min 日志静默期，
+  此后才继续推进 → 早期全部"死循环"结论被推翻。
+- 64-lane 引擎（含阵列+树全连、真实 acc_bus 全宽扇出）352s 收敛，128-lane 同结构 15min 不收敛 → 
+  触发因子是 lane 规模跨越 64→128 触发的布线引擎崩溃，而非 SDC/结构组合/归约树。
+
 ## 3. PnR 日志尾部（仅存的 599B，见板断点）
 Reading netlist file ... completed
 Running placement......
@@ -28,8 +46,10 @@ Running routing......
 [60%] Routing Phase 0 completed
 
 ## 4. 死循环实证（watchdog 采样）
-- log 行数恒定不再增长；gw_sh CPU 单核持续满转 >500s；进程不退出
-- 每次运行均被手动 kill（sweep 08:34、DSR 08:51、NOSDC 08:58）
+- 128-lane：log 行数恒 74 不再增长；gw_sh CPU 单核持续满转：892(10:40)→951.8(10:41)→1011(10:42)；
+  连续 15+ min 无进展；进程不退出，需手动 kill。
+- 收敛对照（64-lane 352s）：log 也有 2-3min 静默期但 CPU 至 ~350s 后果断突破（10:18:35 116→10:19:35 148 行）。
+- 判据修正：单看"log 恒定 + CPU 满转"不足判定死循环，必须等 >5min（或 CPU>400s）才可下结论。
 
 ## 5. 排除项（已实测推翻）
 - 非 SDC 语法错误（已修 set_clock_group→set_clock_groups，TA2000 消失后仍卡）
@@ -38,15 +58,22 @@ Running routing......
 - 非 enable_dsrm（1 仍卡）
 - 非 RTL 版本（上游最新 7f85de0 含分层归约树/PIPE_IN/PIPE_MUL 仍卡）
 - 非全局频率（global_freq=200 与 SDC 均指向 200MHz，无 100MHz 兜底混入）
+- 非归约树 RAM 抽取（syn_ramstyle="registers" 无效、Extracting RAM 仍在；且 MODE=2 117s 收敛）
+- 【推翻】早期"引擎整体不可收敛"结论——64/32-lane 收敛，1320s 级即可完成
 
-## 6. 现存假设（无法用 config 级选项继续拆）
-根因指向 Gowin 布线引擎在 138K 大器件稀疏布局下的工具级非时序路由收敛行为：
-- 历史记录：aa9158c"修复"未触及根因，三成功案 build8/9 实为周期不同配置
-- notes 584-602：定论 PNR 布线永不收敛（非资源/约束/综合层）
-- 此前的"三成功案例无 SDC"说法在仓内笔记中未找到实证，判为存疑
+## 6. 现存假设
+根因指向 Gowin 布线引擎在 engine 128-lane（4096 累加器总线、约 4.5 倍 64-lane 结构密度）下的
+工具级布线不收敛：
+- 证据链：32/64-lane 同 RTL 结构收敛（186s/352s）→ 128-lane 同结构 15min 不收敛 = 规模阈值
+- 【A实验】128-lane 改 2组×64（GROUP_LANES=64，恢复顶层 TOP_LANES=4→2，engine_core/reduction_tree
+  增 GROUP_LANES 参数透传）→ Routing Phase 1 依旧死循环（CPU≈墙钟满转，5.3min 停 [60%] Phase 0）。
+  → 死循环与归约树分组/顶层合并规模无关，是 128 lane 数据通路本身宽度/扇入引发布线不收敛。
+- 【96-lane 否决】96/160/192 等非 32×2^k 规模在 PA 阶段报 DPB WRITE_MODE=2'b10（reduce_group
+  LANES 非 2 幂→stage 数组抽 DPB 落不支持区间），非死循环而是独立设计盲区，非合法 PnR 点
+  → "64→128 精确到 lane 数拐点"无法用合法中间规模测量，拐点判定锁定为 64 收敛 / 128 死
+- 下降方向：需上游在 128-lane 下进一步拆分（如归约树段间插 reg、acc_bus 分 2 组并行归约），或确认工具版本限制
 
 ## 7. 下一步（需决策）
-无法用 tool/config 选项继续推进。候补：
-a) 提交此 diag 给上游，等上游 RTL/工具层级对策
+a) 提交此修订版 diag + probe 工具链给上游，请求 128-lane 结构拆分方案（用户红线：不降频）
 b) 试官方 demo 工程（led/ddr3_400M 同 138K 器件）验证是否工具环境问题
-c) 用户已否决降频，故 100MHz/180MHz 不在选项内
+c) 等待上游对 128-lane 结构的 RTL 级路由收敛修复

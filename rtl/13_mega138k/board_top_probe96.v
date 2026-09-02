@@ -13,14 +13,14 @@
 // ----------------------------------------------------------------------------
 `timescale 1ns/1ps
 
-module board_top_probe (
+module board_top_probe96 (
     input  wire sys_clk,          // P16 板载 50MHz 振荡器
     input  wire rst_n,            // S0（K16）复位按键，低有效
     output wire [3:0] led
 );
 
     // ================= 结构二分开关（只改这里） =================
-    localparam NUM_LANES   = 64;   // 128 / 64 / 32 二分；0 支持仍需留引擎结构被封死
+    localparam NUM_LANES   = 96;   // 96-lane 阈值定位：64 收敛过 / 128 死循环；96 插值钉死拐点
     localparam PROBE_MODE  = 3;    // 0=无引擎 1=仅MAC阵列 2=仅归约树 3=完整引擎
     // =============================================================
 

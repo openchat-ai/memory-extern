@@ -13,14 +13,15 @@
 // ----------------------------------------------------------------------------
 `timescale 1ns/1ps
 
-module board_top_probe (
+module board_top_probe128_g64 (
     input  wire sys_clk,          // P16 板载 50MHz 振荡器
     input  wire rst_n,            // S0（K16）复位按键，低有效
     output wire [3:0] led
 );
 
-    // ================= 结构二分开关（只改这里） =================
-    localparam NUM_LANES   = 64;   // 128 / 64 / 32 二分；0 支持仍需留引擎结构被封死
+    // ================= 结构二分开关（A实验：128-lane + 分2组×64） =================
+    localparam NUM_LANES   = 128;  // A实验：128-lane 验证死循环是否源于顶层多组归约
+    localparam GROUP_LANES = 64;   // 覆盖 engine 默认32 → 128分2组×64，顶层TOP_LANES=2
     localparam PROBE_MODE  = 3;    // 0=无引擎 1=仅MAC阵列 2=仅归约树 3=完整引擎
     // =============================================================
 
@@ -97,7 +98,8 @@ module board_top_probe (
         if (PROBE_MODE == 3) begin : g_engine
             engine_core #(
                 .NUM_LANES (NUM_LANES),
-                .ACC_WIDTH (32)
+                .ACC_WIDTH (32),
+                .GROUP_LANES(GROUP_LANES)
             ) u_engine (
                 .clk        (clk_int),
                 .rst_n      (rst_n_core),
