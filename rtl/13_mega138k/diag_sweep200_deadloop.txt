@@ -1,6 +1,6 @@
 # PnR 死循环诊断（sweep_200m 场景 c）
 # 生成时间: 2026-09-02_09:00
-# 更新时间: 2026-09-02_12:10（A实验：128+分2组×64 仍死循环 → 死循环=总lane数，与归约分组无关）
+# 更新时间: 2026-09-02_13:20（D实验：acc_bus 数据通路级拆成 2×独立64-lane归约 仍死 → 瓶颈在 128-lane 阵列自身全局网，非归约树）
 # 结论: 200MHz PnR 卡死在 [60%] Routing Phase 0，与 SDC/place/route/DSRM 无关；
 #       触发因子 = 引擎 lane 规模（128-lane 真死循环，32/64-lane 均收敛 186s/352s）
 
@@ -27,6 +27,8 @@
 | 64   | 2 仅归约树        | 117s    | PNR-DONE ✅ |
 | 32   | 3 完整引擎        | 186s    | PNR-DONE ✅ |
 | 128  | 3 完整引擎(+SDC)  | >15min  | 真死循环 ❌（watchdog 实证，见 §4）|
+| 128  | A: 3, GROUP_LANES=64(2组×64) | 5.3min 停 | 死循环 ❌（executor DEADLOOP）|
+| 128  | D: 数据通路拆 2×独立64归约(engine_core_dsplit) | 1203s 停 | 死循环 ❌（executor DEADLOOP 1202.9s）|
 
 关键推断：
 - 早期"MODE=1 仅阵列 62s 通过"是假通过：acc_bus 除 [31:0] 外全悬空，阵列尾级被 DCE sweep。
@@ -71,6 +73,17 @@ Running routing......
 - 【96-lane 否决】96/160/192 等非 32×2^k 规模在 PA 阶段报 DPB WRITE_MODE=2'b10（reduce_group
   LANES 非 2 幂→stage 数组抽 DPB 落不支持区间），非死循环而是独立设计盲区，非合法 PnR 点
   → "64→128 精确到 lane 数拐点"无法用合法中间规模测量，拐点判定锁定为 64 收敛 / 128 死
+- 【D实验·数据通路级拆分】engine_core_dsplit：acc_bus(4096bit) 按 lane 切成两半（lane0-63 /
+  lane64-127），各自喂一个「与已知收敛的 64-lane 完全同构」的 reduction_tree(64,GROUP_LANES=32)，
+  顶层仅 2×32bit 部分和相加（engine_core_dsplit.v + board_top_dsplit.v）。综合✔ Placement 全过✔，
+  Routing 仍死循环（executor 判 DEADLOOP 1202.9s，卡 [60%] Routing Phase 0，无 .rpt.txt）。
+  → 数据通路级拆分归约【救不了 128】。瓶颈不在归约树，而在 128-lane simd_mac_array 自身共用的
+    全局网（x/wt 广播到 128 lane 的扇出 + acc_out 4096bit 全局跨距到两个归约块）。归约分组/拆块
+    无论怎么改都覆盖不到数组侧的全局广播。
+- 修正下降方向：仅拆归约树（分组/段插 reg/acc_bus 分路）均无效。需动 simd 阵列本身：
+  (i) 128-lane 拆成两个 64-lane simd_mac_array，各自独立 PLL 域/acc_bus，仅顶层结果合并；
+  (ii) 或 x/wt 输入分段传送、阵列分块各自局部归约，消除 128-wide 全局广播；
+  (iii) 或确认工具 (GW5AST-LV138B) 对 128-lane 全宽数据通路的布线极限，接受 64-lane 交付档。
 - 下降方向：需上游在 128-lane 下进一步拆分（如归约树段间插 reg、acc_bus 分 2 组并行归约），或确认工具版本限制
 
 ## 7. 下一步（需决策）
