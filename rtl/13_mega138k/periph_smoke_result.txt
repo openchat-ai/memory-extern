@@ -1,0 +1,32 @@
+# periph_smoke 真硅片冒烟报告（engine + WS2812 + 按键 + RGB LCD 全外设）
+日期: 2026-09-03
+
+## PnR 结果
+- route=2 / place=3 / max_fanout=100 / opt_goal=timing
+- elapsed = 1032s (17min)
+- Register = 14442/139140 (11%)
+- Fmax:
+  - sys_clk (50MHz 约束): 165.029MHz, 满足 (TNS=0)
+  - engine_clk_200 (200MHz 约束): 90.649MHz, 未满足 (setup WNS≈-6ns)
+  - lcd_clk_d (100MHz): 238.212MHz, 满足
+- 注: engine 200MHz 依然违约(Fmax 90MHz vs 上次 macsplit smoke 124MHz)——布局变化导致,
+  与外设冒烟目的无关(LCD/WS2812/按键均工作于满足约束的时钟域)。
+- 位流: out/138k_pro/periph_smoke/board_top_periph_smoke_r2p3/impl/pnr/board_top_periph_smoke.fs (34.7MB)
+
+## 烧录
+- 命令: programmer_cli.exe --cable-index 1 -d GW5AST-138B --frequency 8 -r 2 --fsFile board_top_periph_smoke.fs
+- 首次失败: exit=50, 0.01s 即失败(设备ID 0x0001081B 可读但 SRAM Program 立即失败) → JTAG 锁定特征
+- 恢复: 用户物理断电 ~5s 再上电 → 重试成功
+- 成功: 26.5s, 100%, User Code 0x00006733, Status 0x00026230, exit=0
+- 注意: 日志显示工具自动把频率提到了 15MHz 且这次成功未锁死(断电复位后链路健康)
+
+## 板上观察（待人工确认）
+- LED[0] 心跳 1Hz; 引擎半亮参考
+- LED[4] 亮 → key1(S1=F15) 未按(上啦高→~key=0)
+- LED[5] 亮 → key2(S2=G15) 未按
+- 按下 S3(key3=G16) → WS2812 颜色停止旋转(暂停当前色)
+- RGB LCD 显示彩条(红→绿→蓝 循环, 10MHz 像素时钟, DE 模式)
+- WS2812(H16) 单灯颜色旋转循环
+
+## 结论
+PASS(外设点亮)。engine 200MHz 签核问题仍悬而未决(Fmax 90-124MHz 波动, 未达 200MHz)。

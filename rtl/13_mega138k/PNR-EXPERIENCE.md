@@ -174,3 +174,10 @@ IO_LOC  "WS2812" H16;   IO_PORT "WS2812" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8
 ## 本小结论
 - 已用 LED0(J14)心跳 + LED1(R26)半亮 在真硅片验证 macsplit 冒烟 PASS。
 - WS2812 在 H16（官方例程 ws2812.cst 证实）。
+## 2026-09-03 全外设冒烟 - JTAG 锁定识别与恢复经验
+- **锁定症状补全**：不只 15MHz 高速中断会锁死。锁定状态下即使是 8MHz、常规 `--cable-index 1 -d GW5AST-138B --frequency 8 -r 2` 命令，也会**立即 exit=50**（0.01s 失败），但设备 ID 0x0001081B 仍能正常读到（IDCODE 通道 OK，仅 Program 通道失败）。
+- **关键判别**：ID 能读 + Program 立即失败 + 重枚举无效 = JTAG 锁死，**只能物理断电复位**（断电 ~5s 再上电）。
+- **USB 重枚举(disable/enable)无效**：`Get-PnpDevice` / `Disable-PnpDevice` / `Enable-PnpDevice` 都救不回来。
+- **断电复位有效**：断电 ~5s 再上电后，同一条 8MHz 命令立即恢复，且工具自动把频率提到 15MHz、26.5s 成功烧满、未锁死。说明修复后链路健康时 15MHz 也能用，风险重点是"烧录中途异常/锁定态"。
+- **命令确认**：`--cable-index 1 -d GW5AST-138B --frequency 8 -r 2`，烧录成功 user code 0x00006733 / status 0x00026230。
+- **验证对象**：board_top_periph_smoke.fs（engine 124->90MHz 布局波动 + LCD 彩条 10MHz + WS2812 + 按键 LED）。sys_clk 50MHz / lcd_clk 100MHz 约束均满足。
