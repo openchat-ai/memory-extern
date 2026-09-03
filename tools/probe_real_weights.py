@@ -74,6 +74,61 @@ def analyze(W, name):
     except Exception as e:
         print(f"[3] 谱/SVD失败: {e}")
 
+    # 核心 A/B 探针: 列内 e 值集中度 — 判断"紧凑编码(A)"vs"可推导公式(B)"
+    # A: 每列/每行的指数 e 均匀混合(随机)→ 只是紧凑编码, 无内在规律
+    # B: 某些列/行集中在少数 e 值 → 存在空间规律, 可能可推导(真公式)
+    _ab_probe(W)
+
+def _ab_probe(W):
+    """列内 e 值集中度检测."""
+    if W.ndim < 2:
+        print("[A/B] 一维权重, 不适用"); return
+    Mc = W.reshape(W.shape[0], -1)
+    rows, cols = Mc.shape
+    # 采样若干列, 统计各列内非零权重的指数 e 值数(去重)
+    rng = np.random.RandomState(0)
+    sample_cols = min(cols, 64)
+    cidx = np.sort(rng.choice(cols, sample_cols, replace=False))
+    # 对每列求指数(绝对值取 log2 下取整); 过滤0
+    avg_distinct_e = 0.0
+    ncol_nonzero = 0
+    for c in cidx:
+        col = np.abs(Mc[:, c])
+        nz = col[col > 0]
+        if nz.size == 0:
+            continue
+        ncol_nonzero += 1
+        e = np.floor(np.log2(nz))
+        uniq = len(np.unique(e))
+        avg_distinct_e += uniq
+    if ncol_nonzero == 0:
+        print("[A/B] 无非零列"); return
+    avg_distinct_e /= ncol_nonzero
+    # 行内集中度(反向)
+    rng = np.random.RandomState(1)
+    sample_rows = min(rows, 64)
+    ridx = np.sort(rng.choice(rows, sample_rows, replace=False))
+    avg_row_e = 0.0
+    nrow_nonzero = 0
+    for r in ridx:
+        row = np.abs(Mc[r, :])
+        nz = row[row > 0]
+        if nz.size == 0:
+            continue
+        nrow_nonzero += 1
+        e = np.floor(np.log2(nz))
+        avg_row_e += len(np.unique(e))
+    if nrow_nonzero:
+        avg_row_e /= nrow_nonzero
+    total_distinct = len(np.unique(np.abs(W[W != 0])))
+    print(f"[A/B] 列内平均唯一指数数: {avg_distinct_e:.1f} (采样{len(cidx)}列) "
+          f"行内平均: {avg_row_e:.1f} (采样{len(ridx)}行); 全局唯一e数由唯一值体现")
+    if avg_distinct_e <= 1.5 or avg_row_e <= 1.5:
+        print("  → 高度集中: 存在空间规律, 可能是「可推导公式」(B). "
+              "值得深挖列/行间的指数分布!")
+    else:
+        print("  → 均匀混杂: 各列指数随机, 仅是「紧凑编码/查表」(A), 无内在推导规律")
+
 def read_bf16_as_f32(f, n):
     raw = f.read(n * 2)
     b = np.frombuffer(raw, dtype=np.uint16)
