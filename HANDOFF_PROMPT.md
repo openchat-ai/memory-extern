@@ -63,6 +63,15 @@
 4. **14 PCIe 硬核真机准备**：EP(T2)/RC(T1) 适配器 = 顶层骨架 + 金手指约束 + 用户照做的 Gowin IDE 清单（`lspci -vv` 目标 Gen3 x4）。Termux 无 Gowin IP，只能到"bitstream 就绪度"。
 5. 新代码沿用各支线回归；14 追加 `sim.sh run`；12/13 按各自 tb 单跑。
 6. 调试临时文件一律 `/data/data/com.termux/files/usr/tmp/opencode/`。
+7. **真实 K3 权重三要素验证（桌面已下载完整官方 K3 权重，待跑）**：
+   - 工具已入仓：`tools/probe_real_weights.py`（读 safetensors F32/BF16，输出唯一值/二幂/谱）。用法见 `docs/research_weight_probe.md`。
+   - 要测三类张量（在完整 K3 里都有，需按官方 config 确认确切张量名）：
+     a. **dense attention**：`q/k/v/o_proj`
+     b. **dense MLP**：`down/gate/up_proj`
+     c. **routed experts**：每专家权重 + 共享专家
+   - 已知基线（别推翻）：MXFP4 专家唯一值21/二幂100%；NVFP4 vision dense 唯一值~4900/二幂~40%/谱低秩(前10奇值能量仅1.2%)。
+   - **待解答**：真实文本层 dense 是否低秩（低秩压缩活路？）；真实 routed expert 是否二幂（MXFP4 移位 GEMV）。
+   - 结论回传：`git commit` + `git push`（只推 <10KB 结果文本，别推大文件），手机端接手 `git pull` 读判读。
 
 ## 提交规范
 - message 风格参考 `git log --oneline -8`；只 stage 本任务文件；`master` 分支不动；push 仅当用户说。
