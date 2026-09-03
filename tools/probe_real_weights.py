@@ -41,18 +41,38 @@ def analyze(W, name):
             break
     print(f"[2] 二幂(k·2^e)比例(采样4000唯一值): {ok/max(1,len(vals))*100:.1f}%")
 
-    ncol = min(W.shape) if W.ndim == 2 else n
+    # 谱分析 + 有效秩 + 近无损低秩代表位宽 b/w
     try:
-        S = np.linalg.svd(W.reshape(W.shape[0], -1)[: min(20000, W.shape[0]), :],
-                          compute_uv=False)
+        M = W.reshape(W.shape[0], -1)
+        M = M[: min(60000, M.shape[0]), :]          # 内存保护,降采样行
+        S = np.linalg.svd(M, compute_uv=False)
+        ncol = min(M.shape)
         if S.size > 1:
+            e2 = S ** 2
+            total = e2.sum()
+            def cum_rank(frac):
+                csum = np.cumsum(e2) / total
+                return int(np.searchsorted(csum, frac) + 1)
+            r95 = cum_rank(0.95)                     # 95%能量所需秩
+            r99 = cum_rank(0.99)
+            rank_ratio = r95 / ncol                  # 有效秩占比
+            # 低秩代表位宽: 用 r 个奇异值(每个 fp32=32b) + 正奇向量(每元素独立)
+            # 近似: 存 U[:,:r] (nrow*r) + S[:r] + V[:,:r] (ncol*r), 都在 fp32
+            # 但元素数是本源全量 fp32 的分子;
+            # 实际存储 = (nrow+ncol)*r + r 个奇异值, 除以总元素数 n
+            for r, tag in [(r95, "95%能量"), (r99, "99%能量")]:
+                wt = r * (M.shape[0] + M.shape[1] + 1)
+                bperw = 32.0 * wt / n if wt < n else 32.0 * n / n
+                print(f"    low-rank[{tag}] 秩r={r} 有效秩占比={r/M.shape[1]*100:.1f}% "
+                      f"→ 若只存{tag}约需 {bperw:.2f} b/w (fp32全量=32, fp16=16)")
             span = S[0] / S[-1] if S[-1] > 0 else float('inf')
             print(f"[3] 谱: max={S[0]:.4f} min={S[-1]:.4f} span={span:.1f} "
-                  f"前10能量={(S[:10]**2).sum()/(S**2).sum()*100:.1f}%")
+                  f"前10能量={e2[:10].sum()/total*100:.1f}% "
+                  f"有效秩占比(95%能量)={rank_ratio*100:.1f}%")
         else:
             print("[3] 谱: 一维, 无法SVD")
     except Exception as e:
-        print(f"[3] SVD失败: {e}")
+        print(f"[3] 谱/SVD失败: {e}")
 
 def read_bf16_as_f32(f, n):
     raw = f.read(n * 2)
