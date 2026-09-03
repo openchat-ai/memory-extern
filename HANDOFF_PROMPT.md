@@ -65,6 +65,7 @@
 6. 调试临时文件一律 `/data/data/com.termux/files/usr/tmp/opencode/`。
 7. **真实 K3 权重三要素验证（桌面已下载完整官方 K3 权重，待跑）**：
    - 工具已入仓：`tools/probe_real_weights.py`（读 safetensors F32/BF16，输出唯一值/二幂/谱）。用法见 `docs/research_weight_probe.md`。
+   - **切片工具**：`tools/slice_k3_micro.py` 从完整 K3 safetensors 切出几百 MB 最小测试包（dense+多个 expert+.npy），免反复下载大模型。读取已验证（NVFP4 分片 BF16 解码正确）。桌面连真实 K3 后若有张量名偏差，缺失列表会提示。
    - 要测三类张量（在完整 K3 里都有，需按官方 config 确认确切张量名）：
      a. **dense attention**：`q/k/v/o_proj`
      b. **dense MLP**：`down/gate/up_proj`
