@@ -135,6 +135,27 @@ def run_for(W, E, M, block, tag):
     Wq, ent, nb = mxfp8_pow2_quantize(W, E, M, block)
     return report(tag, W, Wq, ent, nb, block)
 
+def block_scan(W, configs, blocks):
+    """位分配优化: 对每尾数配置扫描块大小, 用熵尺子量信息, 输出贴近度."""
+    print("\n=== 位分配优化: 块大小扫描 ===")
+    print(f"  固定每权重8bit + block scale(E8M0,8bit)摊销. 尺子=熵(信息量下界).")
+    best_overall = None
+    for E, M, name in configs:
+        for b in blocks:
+            r = run_for(W, E, M, b, f"{name} block={b}")
+            # 摊销后每权重实际bit
+            am = (8 * b + 8) / b
+            r["amortized_bits"] = am
+            closeness = r["entropy"] / am   # 信息贴近度: 越接近1越好(格式没浪费)
+            r["closeness"] = closeness
+            print(f"    摊销={am:.3f}bit/权重  → 熵/摊销={closeness:.3f}  (越接近1=格式越贴近信息下界)")
+            if best_overall is None or closeness > best_overall[1]:
+                best_overall = (f"{name} block={b}", closeness, am, r["rel_l2"])
+    if best_overall:
+        print(f"\n→ 位分配最优: {best_overall[0]}  贴近度={best_overall[1]:.3f}  "
+              f"摊销={best_overall[2]:.2f}bit/权重  rel_l2={best_overall[3]:.4f}")
+        print("   (尺子说信息只有~6.5bit, 若摊销>6.5则格式有冗余, 需更小块或更小E)")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--raw")
@@ -167,6 +188,8 @@ def main():
     else:
         ap.print_help(); return
     W = np.asarray(W, dtype=np.float32)
+    if W.ndim == 1:
+        W = W.reshape(1, -1)   # 向量按单行处理(块仍线性连续)
     print(f"权重: shape={list(W.shape)} 元素={W.size:,}")
 
     configs = [  # (E, M, 名称)
@@ -184,6 +207,7 @@ def main():
         mark = "  ←" if r is best else ""
         print(f"  {r['config']}: 熵{r['entropy']:.2f}bit  误差{r['rel_l2']:.4f}{mark}")
     print(f"\n→ 推荐(熵+误差加权最优): {best['config']}")
+    block_scan(W, configs, blocks=[8, 16, 32, 64])
 
 if __name__ == "__main__":
     main()
