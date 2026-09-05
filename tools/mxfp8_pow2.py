@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-"""mxfp8_pow2.py — MXFP8 二幂(尾数小)量化对比工具: 对 dense 权重对比多种尾数配置。
+"""mxfp8_pow2.py — MXFP8 二幂(尾数小)量化对比: e6m7(已量化)→MXFP8+熵再压 全链.
 
-方向A: 设计"尾数小→二幂/移位收益大"的 8bit 量化格式, 想把专家那套 k×2^e 推广到 dense。
-本工具对给定浮点权重, 用 MXFP8(块尺度 + eXmY 每权重)量化, 报告每个配置:
-  - 量化后熵 (bit/权重): 压缩率信号
-  - 量化误差 (相对L2 / 最大误差): 质量信号
-  - 输出推荐配置(熵低 + 误差低的折中)
+前提(用户已完成): BF16(e8m7)→e6m7(14bit) 量化, 熵=6.5bit 已确认.
+本工具做后面工作: 用二幂法实现 8bit MXFP8, 并测"固定8bit vs 熵再压"的差距.
 
-MXFP8 语义:
-  8bit = 1符号 + E指数 + M尾数 (E+M=7)
-  每块(默认32)共享一个 e8m0 尺度 scale
-  每权重: ±(1 + m/2^M) × 2^(e-bias) × scale       (尾数M>0)
-           纯二幂(e6m1): ±k×2^e×scale, k∈{1,3}   (M=1)
-  实际实现: 量化到最近的可表示值, 再算熵+误差
+全链: e6m7(14bit) → MXFP8(E4M3, 8bit, 块尺2^e) → 熵编码再压(目标~6.5bit)
+
+输出每配置:
+  - 熵 (bit/权重): 熵压能达到的理论下限
+  - 固定8bit vs 熵压bit 对比 (冗余量 = 8 - 熵)
+  - 量化误差 (相对L2 / 最大误差)
 
 用法:
-  python3 mxfp8_pow2.py --raw <weight.bin> --dtype float32 --shape 7168,4096 [--block 32]
   python3 mxfp8_pow2.py --safetensors <file> --tensor <name> [--block 32]
+  python3 mxfp8_pow2.py --raw <bin> --dtype float32 --shape 7168,4096
 """
 import argparse
 import json
@@ -128,7 +125,10 @@ def mxfp8_pow2_quantize(W, E, M, block=32):
 def report(name, W, Wq, entropy, nblocks, block):
     err = np.linalg.norm(W - Wq) / np.linalg.norm(W)
     maxerr = np.max(np.abs(W - Wq))
-    print(f"  {name}: 熵={entropy:.2f} bit/权重  相对L2误差={err:.4f}  最大误差={maxerr:.4g}  (块数={nblocks})")
+    save = 8 - entropy          # 熵压相对固定8bit能省的量
+    print(f"  {name}: 熵={entropy:.2f} bit/权重  相对L2误差={err:.4f}  最大误差={maxerr:.4g}")
+    print(f"      固定8bit={8.0:.0f} → 熵压={entropy:.2f}  (省 {save:.2f}bit/权重, "
+          f"{save/8*100:.1f}% 存储冗余可熵压挤掉)")
     return {"config": name, "entropy": entropy, "rel_l2": err, "max_err": maxerr}
 
 def run_for(W, E, M, block, tag):
