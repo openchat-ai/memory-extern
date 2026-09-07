@@ -31,6 +31,7 @@ struct cache_entry {
     int32_t slot_id = -1;
     entry_state state = entry_state::empty;
     uint64_t last_use = 0;
+    uint64_t use_count = 0;
     bool pinned = false;
     uint32_t active_refs = 0;
     uint64_t generation = 0;
