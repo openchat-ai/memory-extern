@@ -117,7 +117,7 @@ y_t     = W_o[ Sigmoid(W_g x_t) ⊙ RMSNorm(ṽ_t) ]                  (Eq.6, L47
 |---|---|---|---|
 | Ch1 | K3 能力/配置/基线定位、官方评测/成本效率 | 1.1 + 1.4.1/1.4.2 | 官方已锁 ✓ |
 | Ch2 | 官方机制描述 + 我们对每条的可测试化（方程、探针映射） | 1.2/1.3 | 官方已锁 |
-| Ch3 | KDA 头维度/状态维度实测（解 74.67） | — | [待核]，需 k3_head_dims.py |
+| Ch3 | KDA 头维度/状态维度实测 | — | ✅ 权重已解（见 §5.2） |
 | Ch4 | 激活级审计：α/β 分布、inter/intra 切分、NoPE 位置测试 | B (+C) | [结果]待采集 |
 | Ch5 | AttnRes 深度选择性、draft 特征融合 | AttnRes/EAGLE | [结果]待采集 |
 | Ch6 | 讨论 + 局限 | — | 草稿 |
@@ -133,11 +133,16 @@ y_t     = W_o[ Sigmoid(W_g x_t) ⊙ RMSNorm(ṽ_t) ]                  (Eq.6, L47
 - 验证: 权重清单核对（k3_head_dims.py 直接数层）。
 - 支持: 与 L866 逐层一致。  反驳: 不一致 → 报告与权重不符（论文最大料）。
 
-### H2（遗忘门承担位置/近因）
+### H2（遗忘门承担位置/近因 + 残留 RoPE 槽 NoPE 验证）
 > KDA 的 α 通道门编码位置/近因; MLA(NoPE) 应位置无关。
+> ⚠️ 权重实测：MLA 含完整 64 维 RoPE 槽（576=512+64, kv_b 输出 96×192=128 content+64 rope）。
+> 宣称 NoPE 却没有把槽抹掉——必须实测判定槽实际发挥什么作用。
 - 探针: (a) α 对 token 相对距离的统计（长 story 数据上的 α 分布随距离的形状）;
-         (b) 交换输入顺序/插入填充 token 后 MLA 输出扰动 vs KDA 输出扰动。
-- 支持: MLA 输出对位置不敏感（扰动小）、KDA 敏感。
+         (b) 交换输入顺序/插入填充 token 后 MLA 输出扰动 vs KDA 输出扰动;
+         (c) **切开 MLA q/k**: content(128)/rope(64) 各自算 attention logit 贡献份额 + 零化 rope 块的输出扰动;
+             若 rope 块行为同 content（token 依赖、position 无关）→ NoPE 属实;
+             若 rope 块有系统性位置依赖 → NoPE 声称与实现不符。
+- 支持: MLA 输出对位置不敏感（扰动小）、KDA 敏感; rope 块扰动≈位置表观不敏感。
 - 反驳: MLA 输出表现出显著位置依赖 → NoPE 声称打脸（大料）。
 
 ### H3（定长状态 / KV 只在 MLA 增长）
@@ -189,8 +194,16 @@ y_t     = W_o[ Sigmoid(W_g x_t) ⊙ RMSNorm(ṽ_t) ]                  (Eq.6, L47
 
 ## 5. 风险与开放项
 
-- **[待核] 真实 head/state 维度**: 报告只给 96 heads (L860), 7168/96=74.67 非整数; d_k=d_v=128 来自 Kimi Linear [64] 而非 K3 原文。→ 必须 k3_head_dims.py 读权重。
-- **[待核] 55G/100G "trunk" 成分**: 我们自己压缩的东西尚未与官方口径对齐; 论文正文用官方参数量, 我们自己的只放部署实验小节。
+- ✅ **head 维度已解（权重实测）**：KDA k/v/o 输出 = 12,288 = 96×128，state S_t=128×128/head。
+- ✅ **MLA 维度解码（权重实测, layer 11）**: DeepSeek-V3 式 MLA 结构——
+  `q_a [1536] → q_b [18432]=96×(128 content+64 rope)`; `kv_a [576]=512+64` + `kv_a_layernorm [512]`
+  (只归 content); `kv_b [24576]=96×(k128+v128)`; `o_proj [12288]=96×128` (rope 不进输出);
+  全秩门 `g_proj [12288,7168]`。
+  ⇒ **几何 self-consistent**：KDA 头 128 纯粹；MLA 头 = content(128)+rope(64), K/V 各 128。
+- ⚠️ **新可测点 (NoPE vs 残留 RoPE 槽)**: MLA 权重含完整 64 维 RoPE 槽(576=512+64)，但官方声称 NoPE。
+  → 把 q/k 切成 content/rope 两块，测量各自对 attention 的贡献：rope 块退化 content(位置无关)
+  则 NoPE 属实；有系统位置依赖则与声称冲突。**已并入 H2 探针设计。**
+- **[待核] 55G/100G "trunk" 成分**: 已从权重清单解决（trunk.bin BF16 108.8GB：attn 52.8 + shared 24.3 + latent 16.8 + W↓↑ 9.5 + mqa 2.7 + mlp 1.5 + gate 1.2）。896 专家 FFN 不在 trunk。
 - **[待核] 版本匹配**: 我们是 55G 8bit 版本回测, 官方是 BF16 trunk; 激活统计若在压缩版跑, 需声明。
 - 未有官方基准复现的内部数字 → 全部以可引用公开事实 + 我们自己的观测口径写。
 
@@ -230,6 +243,6 @@ y_t     = W_o[ Sigmoid(W_g x_t) ⊙ RMSNorm(ṽ_t) ]                  (Eq.6, L47
 
 - [x] 官方口径锁定: 技术报告 47 页 + 博客 + README 三源比对, 修正 "KV−75%/6.3×" 无出处问题（2.5× 才可引）
 - [x] Ch1 官方评测/成本效率基线已填（Table 2/3/5 + Fig.13）
-- [ ] k3_head_dims.py → PC 跑 → 填 Ch3 (§3 第 4 行 [待核])
+- [x] k3_head_dims.py → PC 已跑 → 头维度已解（d_k=d_v=128, state 128×128; MLA 头 192/256）→ 已填 Ch3 ✓
 - [ ] PC 修活性 → 激活侧探针（H2/H4/H5）数据采集脚本
 - [ ] 是否保留 "我们 55G trunk 压缩" 作为 Ch7（部署实验）独立小节 —— 悬置，待 PC 结果定
