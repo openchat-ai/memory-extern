@@ -26,6 +26,30 @@
    - 板载 **M.2 座 = Q1 通用 SerDes 2 lane**，**不在硬核上**；**硬核只到 PCIe 金手指（Q0, x4）**；
    - 目标形态：**T1 = FPGA 直挂 NVMe 盘优先**（M.2→PCIe x4 被动转接卡插金手指，FPGA=RC）；**T2 = PC 居中过渡**（SSD 在 PC M.2、FPGA 当 EP 插 PC 槽）。
 
+## 新接入主线：kimi-k3 大模型 ←→ FPGA GEMV（2026-09-03 侦察插入）
+
+上游模型侧位于 **`H:\k3`**（当前 opencode 工作区，Windows 挂盘 /mnt/h/k3），与 FPGA 仓（F:\sram\sram）是**两个仓库、一条接缝**。目标一句话：**把 FPGA（Mega138K / rtl/13_mega138k 及 rtl/12_fpga_proto gemv_top）里面的 GEMV MAC 阵列用起来，喂 kimi-k3 大模型的 Expert MV 运算。**
+
+### 已侦察的硬事实（勿推翻，接缝已定死）
+- kimi-k3 推理程序 = `H:\k3\kimi-k3-in-c\bin/k3`，C 实现，93 层 MoE。
+  - 主循环/调度：`src\cli\k3_run.c`（77KB）；算子：`src\core\k3_ops.c`（67KB）。
+  - **关键算子 `k3_matmul_mxfp4(float *y, const float *x, const uint8_t *packed, const uint8_t *scales, int in, int rows, int group)`** — 权重就是 **OCP MX E2M1**（4bit 码，bit3=sign），**32 元素一组共享 scale**，每行 packed 字节带 scale 数组。
+  - 调用点：MoE 前向 `k3_ops.c`：606/607/609、749/750/752，参数 `K3_MXFP4_GROUP`。
+- **数字格式与 FPGA 完全对齐（非巧合）**：`rtl/12_fpga_proto/rtl/gemv_top.v` 输入就是 `wt_packed[15:0]`（4×E2M1 打包，共 8 元素/4 字节）+ `wt_scale` + `act_vec_in` 广播 → bf16 MAC。主机侧 `packed`+`scales` 与 FPGA 期望的 nible-stream 是同卵。**接入翻译量很小。**
+- **真瓶颈（接入价值所在，也是必须正视的墙）**：`H:\k3\kimi-k3-in-c\k3_run.json` = `seconds_per_token: 1662.75`（≈28min/token），`layers:93`。这是**内存/磁盘漏斗（194GB 权重装载/token，源注释自认 memory-bound）**，不是算力不足。**FPGA GEMV 只换"已够快的算子"，救不了 194GB 装载带宽。** 真加速必须先解决"SSD 专家权重→引擎累加"的装载链路（这正是 rtl/14_serdes_proto + rtl/13 pcie_dma_engine 的主线），否则 FPGA 只排在 CPU 后头当陪跑。
+
+### 接入流程（按优先级）
+1. **基线（软件侧先跑通，不通 FPGA）**：让 `./bin/k3` 稳定吐 token，钉下真实 per-token 基线对照。入口 `H:\k3\run_infer.sh`（`--preset laptop --gen 1 --incremental --prompt 'Hello'`，模型在 `/model`）。先确认有可加载 checkpoint。
+2. **确认物理通路**：FPGA（Mega138K）↔ 主机目前**无现成 PC→FPGA 送权重/回结果通路**（现只有 SUM 自检 + led/LCD 外设）。真加速最大缺口是这条上行/下行通路，不是 GEMV 本身。通路候选：UART / 金手指 PCIe（T1/T2，见协议层结论）/ M.2 转接。**先定通路再谈接 GEMV。**
+3. **算子重定向**：把 `k3_matmul_mxfp4` 的 one row 重定向到主机侧驱动 → 走通路喂 Mega138K MAC → 回读结果。涉及：主机侧序列化 `packed/scales/act`、FPGA 端握手协议、回读累加。**必须先做 2。**
+4. **融合**：接 rtl/14 `nvme_bridge`/`cachectl_pipeline` 让 SSD 权重直接进引擎，真正解决 194GB/token 装载——这才是痛点收敛（见待办 3 三方汇合）。
+
+### 注意（两条线别混）
+- `H:\k3` 的"K3" = kimi-k3 大模型；FPGA 仓的"K3"（notes 系列）是技术拆解主题。**两者不是一回事**，插入流程专指接入 kimi-k3。
+- 以上全部基于 2026-09-03 只读侦察；尚未写任何接入代码/通路。接入属 build 模式工作，不在本 HANDOFF 已完成的范畴。
+
+---
+
 ## 硬性环境约束（2026-09-02 真硅片冒烟后更新）
 - 手头环境 = **Termux (aarch64, Android)**：只有 iverilog -g2012 仿真 + python3 分析。
 - **真机已就位**：Tang Mega 138K Pro Dock 到货；PC 已装 Gowin IDE，**真硅片冒烟已通过**（macsplit 124.3MHz，LED 心跳+引擎半亮）。
@@ -47,7 +71,8 @@
 - `rtl/14_serdes_proto/doc/ARCHITECTURE.md` → 协议层设计 + §11.5 工作量/风险
 - `git log --oneline -15` → 最近节奏（当前在 13 冒烟 PASS，待决定下一步）
 
-## 待办（按优先级，2026-09-02 真硅片冒烟后更新）
+## 待办（按优先级，2026-09-03 插入 kimi-k3 接入主线后更新）
+0. **kimi-k3 ←→ FPGA GEMV 接入（新，最高优先外围线）**——具体流程见上文"新接入主线"节。第一步**只做基线**：`H:\k3` 里让 `./bin/k3` 稳定吐 token 钉 per-token 基准（对照 `k3_run.json` 的 1662.75s）；第二步定 FPGA↔主机物理通路（现无）；通道路再谈算子重定向接入 Mega138K MAC。**区别于 13 频点签核这条主线，二者独立推进。**
 1. ~~**13 board_top 真硅片冒烟**~~ ✅ **DONE**（2026-09-02，commit b742896）：
    - 位流 `board_top_macsplit_reg.fs`（124.3MHz，route=2/place=3/max_fanout=100）已烧 SRAM。
    - 结果：LED[0](J14) ~1Hz 心跳闪 + LED[1](R26) 引擎半亮 = **真硅片冒烟 PASS**。
@@ -73,6 +98,7 @@
      b. **routed expert（MXFP4）**：确认唯一值极少 ∧ 强二幂 → 公式/查表假说坐实
    - **已知基线（重要，已修正）**：MXFP4 专家唯一值21/二幂100%；**NVFP4 dense 是满秩**——"前10奇值能量仅1.2%"曾被误读为低秩，累积能量曲线实为 95%能量需55.7%秩=28b/w（几乎不省）。**教训：判低秩必须看累积能量→有效秩，别被前几个奇异值占比误导。**
    - **诚实门槛**：专家=公式真实用，dense 只余量化 → 不是"不须存全权重"，是"专家免解压、dense 压缩"。可发研究、可反哺 memory-extern，但别定位成"划时代 0 存储"。先实测定论再谈价值。结论回传：`git commit`+`git push`（只推<10KB文本），手机端 pull 判读。
+   - **已完成(2026-09-04)**：真实 /model 完整96分片逐一实测，回填 docs/research_weight_probe.md §2b「各结构完整实测汇总」。gate/router(BF16[896,7168] 唯一值4506/二幂29.8%/有效秩84.9%满秩)、gate.bias(F32[896]唯一≈满不可查表)、routed_expert_down/up_proj+norm、shared_experts、self_attn q/k/o/g(KDA门)、embed_tokens 均已测。结论全统一：DFN 非专家 BF16 权重唯一值~5-6.7K→13bit/2.46x无损查表、二幂38-56%、A-均匀紧凑编码；仅 router bias 与 RMSNorm 例外。发布物 H:\k3\k3-reps-release(1.97GB,59张量,含三要素实测表)。**压缩对比结论**：MXFP4 路由专家已是 4.25bit 最优编码，查表无法更小(5bit索引反而更大)；BF16 查表仅省 14%(16→13bit)；查表核心价值在硬件推理侧（免解压做乘累加），不在于缩小存储。§1c 无损验证:查表重构 vs 官方解码 bit-exact(0/11M 差)。
 8. **（已并入§7）~~划时代门槛/三要素~~** — 待办合并，核心收敛为§7。
 
 9. **MXFP8 无损装 e6m7 验证（关键硬前提，待桌面真实 dense）**：
@@ -102,4 +128,5 @@
 ## 终点
 ~~13 board_top 真机冒烟 PASS（LED 心跳）~~ ✅ 已完成（2026-09-02，124.3MHz，LED 心跳+引擎半亮）。
 → **当前阻塞**：200MHz 签核死循环（Routing Phase 0 卡死），需决定是试官方 demo 工程验证工具极限，还是接受 124MHz 继续推进。
+→ **新外围线（2026-09-03）**：kimi-k3 大模型接入 FPGA GEMV——接缝已侦察定死（`k3_matmul_mxfp4` 的 MXF4 与 `gemv_top.v` 输入同卵，见"新接入主线"）。起步只做软件基线 + 定物理通路，尚无代码。
 → 三方对接点清晰 → 14 PCIe 骨架/清单就绪，编译全过、14 回归 22/22 或更多全绿，给出用户 PC/板子上的完整验收步骤与预期数值（含下一次真机步骤）。
