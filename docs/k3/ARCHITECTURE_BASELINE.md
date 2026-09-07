@@ -95,6 +95,22 @@ d_k = d_v = 128 (per Kimi Linear; check K3 weights offline).
   position bias in MLA, that contradicts the design.
 - Full-rank channel-wise output gate (Eq.7), like KDA.
 
+### 4.1 ✅ Weight-verified MLA structure (layer 11, k3_head_dims_data.md)
+
+DeepSeek-V3-style MLA (not stock DeepSeek-V2). Per layer:
+- `q_a_proj [1536, 7168]` + `q_a_layernorm [1536]` → `q_b_proj [18,432, 1536]`; q head = 18,432/96 = **192**
+  = 128 content + 64 rope.
+- `kv_a_proj_with_mqa [576, 7168]`; kv latent = **512 content + 64 rope**. `kv_a_layernorm [512]`
+  normalizes content **only** (norm dim 512 ≠ 576) — the DeepSeek-V3 signature.
+- `kv_b_proj [24,576, 512]`; kv head = 24,576/96 = **256** = k(128) + v(128).
+- `o_proj [7168, 12,288]` = 96 × 128 (v-dim only; rope excluded from output).
+- `g_proj [12,288, 7168]` full-rank output gate (same param as KDA).
+⇒ Geometry is self-consistent with KDA: KDA head 128 pure; MLA head = content(128)+rope(64).
+
+⚠️ **Residual RoPE slot:** the latent carries a full 64-dim rope channel but the layer is declared
+NoPE. Whether that slot is position-informative or an inert second content channel is a probe target
+(zeroing the rope block = a testable signal; see PAPER_T1_DRAFT H2).
+
 ---
 
 ## 5. Attention Residuals (AttnRes, §2.2)
@@ -152,13 +168,22 @@ LatentMoE separates full width d from routed width ℓ = Latent MoE Dim = 3,584 
 
 ## 9. Open / to-verify items (our inference, NOT official)
 
-- [ ] d_k = d_v actual value in K3 weights (Kimi Linear used 128; K3 head dim 7168/96 = 74.67
-      is NOT an integer ⇒ K3 does not use plain 96 heads of equal dim; must read weights).
-- [ ] Real state size S_t (R^{d_k × d_v}) and how it maps onto 7168 hidden / 96 heads.
-- [ ] Actual composition of OUR 55G "trunk" — which tensors, and at what precision. Official
-      keeps attention/trunk/shared/router high-precision; we compressed trunk to 8bit.
-- [ ] 130 s/token measurement: does it reflect storage-pressure (working set not resident),
-      and does KV now only grow on 24 MLA layers?
-- [ ] Whether MBA/MLA attention outputs show position dependence (NoPE claim test).
+### 9.1 ✅ RESOLVED via weight probe (k3_head_dims_data.md, PC run)
+
+- [x] **d_k = d_v = 128 CONFIRMED.** q/k/v projects are [12,288, 7168]; 12,288 = 96 heads × 128,
+      so the "7168/96 = 74.67 non-integer" was a red herring (that divides hidden, not output).
+- [x] **State size:** S_t ∈ R^{128×128} per head. A_log [128] (per-head log-scale), dt_bias [12288]
+      (= 96×128 β write-projection), f_a_proj [128,7168] + f_b_proj [12288,128] (α low-rank gate).
+- [x] **Trunk composition resolved:** trunk.bin (BF16, 108.8GB) ≈ 54.4B params =
+      attn_qkv 52.8G + shared-expert 24.3G + attn-latent 16.8G + routed-latent 9.5G + mqa 2.7G
+      + gate 1.2G + mlp_dense 1.5G + norm. **Routed-expert FFNs (896×3,072) are NOT in trunk.bin**
+      (they're the MXFP4 part); trunk's "routed" category = only W↓/W↑ latent projections.
+
+### 9.2 Still open
+
+- [ ] Whether KDA/MLA attention outputs show position dependence (NoPE claim test).
 - [ ] Whether the inter-chunk (state) vs intra-chunk (Tril) split actually carries the
       long-range signal, layer by layer.
+- [ ] 130 s/token measurement: does it reflect storage-pressure (working set not resident)?
+- [ ] Actual precision in the 55.6G MXFP8 file vs 108.8G BF16 (we compressed the trunk; what
+      bit-distribution did LUT/pow2 give at MLP applied to non-expert components?)
