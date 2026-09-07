@@ -118,39 +118,33 @@ module board_top_periph_smoke (
         .busy      (busy)
     );
 
-    // ---------------- LCD：像素时钟分频 + 彩条时序 ----------------
-    // lcd_pix_clk = clk_int / 20 = 10MHz（异步生成时钟，sdc 约束）
-    reg [4:0] pix_div;
-    reg       lcd_clk_r;
-    always @(posedge clk_int or negedge rst_n_core) begin
-        if (!rst_n_core) begin
-            pix_div   <= 5'd0;
-            lcd_clk_r <= 1'b0;
-        end else begin
-            if (pix_div == 5'd9) begin
-                pix_div   <= 5'd0;
-                lcd_clk_r <= ~lcd_clk_r;
-            end else begin
-                pix_div <= pix_div + 5'd1;
-            end
-        end
-    end
-    wire lcd_pix_clk = lcd_clk_r;
+    // ---------------- LCD：35MHz PLL + 800x480 RGB666 彩条时序 ----------------
+    // 板上是 800x480 Dock RGB666 屏（lcd_display.v 已验证：H=800+210+182=1192, V=480+45+8=533, 35MHz）
+    // 先前误用 480x272 @10MHz 导致彩条只占 2/3 宽度；此处改回已验证时序
+    wire lcd_clk_35;
+    wire pll_lock;
+    Gowin_PLL u_pll (
+        .clkout0 (lcd_clk_35),
+        .lock    (pll_lock),
+        .clkin   (sys_clk)
+    );
+    wire lcd_pix_clk = lcd_clk_35;
+    wire lcd_rst_n = rst_n_core & pll_lock;
 
     reg [15:0] H_Pix;
     reg [15:0] V_Pix;
-    // 480x272 时序（DE 模式 + Pixel-Clock Gated DE，参考官方）
-    localparam H_VALID = 16'd480;
-    localparam H_FP    = 16'd50;
-    localparam H_BP    = 16'd30;
-    localparam H_TOTAL = H_VALID + H_FP + H_BP;
-    localparam V_VALID = 16'd272;
-    localparam V_FP    = 16'd20;
-    localparam V_BP    = 16'd5;
-    localparam V_TOTAL = V_VALID + V_FP + V_BP;
+    // 800x480 RGB666 时序（DE 模式 + Pixel-Clock Gated DE，复用 lcd_display.v 已验证值）
+    localparam H_VALID = 16'd800;
+    localparam H_FP    = 16'd210;
+    localparam H_BP    = 16'd182;
+    localparam H_TOTAL = H_VALID + H_FP + H_BP;  // 1192
+    localparam V_VALID = 16'd480;
+    localparam V_FP    = 16'd45;
+    localparam V_BP    = 16'd8;
+    localparam V_TOTAL = V_VALID + V_FP + V_BP;   // 533
 
-    always @(posedge lcd_pix_clk or negedge rst_n_core) begin
-        if (!rst_n_core) begin
+    always @(posedge lcd_pix_clk or negedge lcd_rst_n) begin
+        if (!lcd_rst_n) begin
             H_Pix <= 16'd0;
             V_Pix <= 16'd0;
         end else if (H_Pix == H_TOTAL) begin
@@ -169,8 +163,8 @@ module board_top_periph_smoke (
     // 官方 rgb_screen 用 "DE && lcd_clk"（Pixel-Clock Gated DE），照抄以匹配面板
     assign lcd_en = (h_active && v_active) && lcd_pix_clk;
 
-    // 彩条（8 段，每段 60 像素，6bit each channel）
-    localparam CBW = H_VALID / 8;  // 60px
+    // ---- LCD 显示：8 段彩条（冒烟验证三通道 / DE / 时序，铺满 800px）----
+    localparam CBW = H_VALID / 8;  // 100px
     wire [2:0] bar = (H_Pix - H_BP) / CBW;
     reg [5:0] lcd_r_r, lcd_g_r, lcd_b_r;
     always @(*) begin
@@ -185,20 +179,24 @@ module board_top_periph_smoke (
             default: begin lcd_r_r = 6'b000000; lcd_g_r = 6'b000000; lcd_b_r = 6'b000000; end
         endcase
     end
-
     assign lcd_r = lcd_r_r;
     assign lcd_g = lcd_g_r;
     assign lcd_b = lcd_b_r;
     assign lcd_clk = lcd_pix_clk;
 
     // ---------------- WS2812（H16，官方算法，50MHz sys_clk）----------------
-    // key3(S3) 按下则颜色循环暂停，否则旋转
-    wire ws_en = ~key3;
+    // key3(S3) 按下则关闭（熄灭）；松开恢复彩循环
+    // key1(S1)/key2(S2) 按键实时选择亮度档位 lvl（取 key 原样，未按=1）：
+    //   按S1+S2=0(0.4%) 按S2=1(100%) 按S1=2(10%) 都不按=3(2% 最暗缺省)
+    wire [1:0] ws_lvl = {key2, key1};
+    wire ws_off = ~key3;
     ws2812_smoke #(
         .CLK_FRE (50_000_000)
     ) u_ws2812 (
         .clk   (sys_clk),
-        .en    (ws_en),
+        .en    (1'b1),
+        .off   (ws_off),
+        .lvl   (ws_lvl),
         .WS2812(WS2812)
     );
 

@@ -9,4 +9,8 @@ create_clock -name sys_clk -period 20 -waveform {0 10} [get_ports {sys_clk}]
 
 create_clock -name engine_clk_200 -period 5 -waveform {0 2.5} [get_nets {clk_200m}]
 
+create_clock -name lcd_clk_35 -period 28.571 -waveform {0 14.2855} [get_nets {lcd_clk_d}]
+
 set_clock_groups -asynchronous -group {sys_clk} -group {engine_clk_200}
+set_clock_groups -asynchronous -group {sys_clk} -group {lcd_clk_35}
+set_clock_groups -asynchronous -group {engine_clk_200} -group {lcd_clk_35}
