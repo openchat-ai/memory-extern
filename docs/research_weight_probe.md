@@ -86,6 +86,8 @@ python3 tools/probe_real_weights.py --safetensors model-000XX.safetensors
 python3 tools/probe_weight_discreteness.py weights.bin
 ```
 推荐样本: nanguoyu/Kimi-K3-minirun 的 layer01-w1.mxfp4tile(专家, 5.2GB) 或 layerXX-deterministic.bin(文本层 dense+norm, ~1.2-2.3GB)。
+> ⚠️ **非原始 K3 内容声明**：下面 §2c 与 §2d（8bit 统一指数压缩方案与误差传播）是**作者自研的改造/量化方向**，不属于官方 K3 原始权重的结构分析。论文素材请**勿引用这两节**——原始 K3 分析仅到 §2b 为止。
+
 ### 2c. BF16 非专家 8bit 压缩方案（2026-09-04，统一指数）
 
 **背景**：BF16 非专家（shared/dense/attn/embed，发布物 1431MB）唯一值 5-6.7K、熵 10.48bit，无损熵编码只能到 10.48bit（香农极限）。要 8bit 落地+直接计算，只能量化。实测两方案。
