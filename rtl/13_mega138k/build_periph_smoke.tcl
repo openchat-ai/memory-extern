@@ -24,6 +24,7 @@ set_device -device_version B GW5AST-LV138FPG676AES
 
 add_file $SRC/${TOP}.v
 add_file $SRC/gowin_pll_x200.v
+add_file $SRC/gowin_pll.v
 add_file $SRC/engine_core_macsplit_reg.v
 add_file $SRC/reduction_tree_reg.v
 add_file $SRC/reduce_group_reg.v

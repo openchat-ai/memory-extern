@@ -181,3 +181,30 @@ IO_LOC  "WS2812" H16;   IO_PORT "WS2812" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8
 - **断电复位有效**：断电 ~5s 再上电后，同一条 8MHz 命令立即恢复，且工具自动把频率提到 15MHz、26.5s 成功烧满、未锁死。说明修复后链路健康时 15MHz 也能用，风险重点是"烧录中途异常/锁定态"。
 - **命令确认**：`--cable-index 1 -d GW5AST-138B --frequency 8 -r 2`，烧录成功 user code 0x00006733 / status 0x00026230。
 - **验证对象**：board_top_periph_smoke.fs（engine 124->90MHz 布局波动 + LCD 彩条 10MHz + WS2812 + 按键 LED）。sys_clk 50MHz / lcd_clk 100MHz 约束均满足。
+## 2026-09-03 增量编译（Inc PnR）支持与适用条件 — 用户点名要记录
+- **Gowin 支持增量 PnR**（Incremental Place & Route）。gw_sh Tcl 命令（SUG1220）：
+    - `set_option -inc_place <0|auto|file>`：增量布局。0=关 / auto=自动 / file=指定 *.p 布局描述文件。
+    - `set_option -inc_pnr  <0|auto|file>`：增量布局布线。取值同上。
+    - 差别：inc_place 只复用作前次布局；inc_pnr 布局+布线都基于上次结果做局部调整，**省掉整颗全量重布**，适合小改动快速迭代。
+- **`.p` 文件**：PnR 每次会在 `impl/pnr/<top>.p` 产出布局描述（本工程 2.7MB）。它就是增量输入的"上次布局快照"。
+- **适用条件（必须全部满足才有效，否则工具退回全量，时间不省）**：
+    1. **顶层接口/例化结构不变** —— 只改模块内部逻辑，不加/不减端口、不改例化。本次我给 ws2812_smoke 加了 `off` 端口并改了 top 例化 → 接口变了，**增量不适用**。
+    2. **同一工程目录**：必须复用上次工程（不能 `create_project -force` 重建，会清掉布局信息）。现有 build_periph_smoke.tcl 用 `-force` 重建 + `run all`，与增量冲突。
+    3. 改动是局部重映射/重定时，而非大面积结构调整。
+- **本次结论**：wy2812 亮度/颜色改动属"改接口+重构"，增量会失效退回全量，故本次仍全量 PnR。**下次纯逻辑微调（不改接口）再启用 `set_option -inc_pnr auto`**，且需去掉 create_project 的 -force 或改为 open 既有工程。
+## 2026-09-03 SDC 时钟约束：get_nets 必须用综合后 net 名 — 用户点名要记录
+- **现象**：SDC 里 `create_clock ... [get_nets {lcd_clk_35}]` 报错 `ERROR (TA2003) ... Can't set timing constraint to object` + `TA2004: Cannot get clock with name`，综合早通过但 Placement 阶段 64s 就 PnR DONE 失败退出。
+- **根因**：SDC 约束对象名取的是 **综合后网表** 里的 net 名，不是 RTL 里的 wire 名。综合器会把单 bit 中间链优化/合并改名：我在 top 里 `wire lcd_clk_35; wire lcd_pix_clk = lcd_clk_35;` 加进 Gowin_PLL 实例 clkout0 → OBUF → 输出端口，综合后这条链的 net 名被改写为 **Gowin_PLL 模块源码里的输出名 `lcd_clk_d`**（见 `impl/gwsynthesis/<top>.vg` 里 `.CLKOUT0(lcd_clk_d)`）。
+- **为什么 clk_200m 能用**：它恰好是唯一、最终也被保留成同名 net 的顶层直连 wire；而 lcd 那条链被 OBUF 又跨了 module 边界，名字不同。
+- **正确做法**：直接 grep 综合产物 `gwsynthesis/<top>.vg` 里 PLL 实例的 `.CLKOUT0(<net>)` 拿到真实 net 名，SDC 用 `[get_nets {<该名>}]`。本次把 lcd_clk_35 改为 lcd_clk_d 后 1225s 全量 PnR 成功、烧录 OK。
+- **通用判别**：凡 create_clock 报 TA2003/TA2004，先 `Select-String <top>.vg -Pattern "<疑似名>"` 确认网表里实际名字，再改 SDC；别在 RTL 里追。
+
+2026-09-03 增量PnR两连坑（CM2030真因 + auto无益）
+- CM2030文本:"Ignore incremental placement,due to specified incremental placement and routing."
+- 真因:工程 impl/*_process_config.json 里 INCREMENTAL_PLACE_ONLY 会历史残留="auto",
+  与 INCREMENTAL_PLACE_AND_ROUTING=auto 并存 => 工具判"placement AND routing 都指定"=> Ignore。
+- 只删 tcl 里的 -inc_place 无用:工具读持久化 config,不是当前行。必须显式 set_option -inc_place 0 清残留。
+- 修复后 CM2030 消失(综合后PnR入口不再报警)。但 auto 模式在 138K 大设计+综合有改动时
+  仍跑满/超全量(1515s+未结束),无任何加速收益 => 增量对本项目实际无益,放弃。
+- 经验:改PLL/顶层/大宏时老老实实全量;增量仅适合最小改动(单reg)且小设计才有意义。
+- 全量tcl(build_periph_smoke.tcl, -force重建)可靠:本次ws2812 LV 0x1A->0x06 全量882s出PNR-DONE。
