@@ -25,6 +25,7 @@
    - GW5AST-138 硬核支持 **RC+EP 双模式**；
    - 板载 **M.2 座 = Q1 通用 SerDes 2 lane**，**不在硬核上**；**硬核只到 PCIe 金手指（Q0, x4）**；
    - 目标形态：**T1 = FPGA 直挂 NVMe 盘优先**（M.2→PCIe x4 被动转接卡插金手指，FPGA=RC）；**T2 = PC 居中过渡**（SSD 在 PC M.2、FPGA 当 EP 插 PC 槽）。
+4. **研究→代码冷门收获（2026-09-07）**：MoE 专家缓存从读到写有一条**新可行线**——`moe-paging` 已把 L2 淘汰策略从纯 LRU 换成**累积热计数（predictive eviction）**，靠 k3 8 遍**单调超集**结构（pass_v⊆pass_v+1）把 HDD→SSD 复制/miss 从 LRU 的 ÷5.6（36.24%→88.46%）。这区别于 Qwen（无固定共享专家、跨 trace 热表迁移真机反亏 +10.3%）。**待真机验证，是论文候选题材。** 详见待办 10。
 
 ## 新接入主线：kimi-k3 大模型 ←→ FPGA GEMV（2026-09-03 侦察插入）
 
@@ -120,7 +121,21 @@
      - **保底客观事实**：e6m7(14bit) 本身就是字节不对齐位宽，直接存需打包(引回解压)；这条线最终停在 16bit 对齐存或接受有损 8bit。
    - **已入仓 `tools/codebook_format.py`**，真实 fixture 验证：唯一值28,722/熵5.49，k=32覆盖88.9%+逃逸11.1%→**平均7.00bit/权重=压缩2x，无损+无解压**。合成高斯唯一值29.9万→代码本无意义，**真实分布唯一值集中才有效**。
    - **存储落地（已拍板的优先级）**：瓶颈是 expert I/O 带宽非容量 → **9bit 对齐存优先（无解压），放弃位打包省2bit（会引回解压）**。fixture 已证 8bit 纯代码本无损不成立（唯一值>256 需15bit索引），**须逃逸**。桌面真实 dense 跑 `codebook_format.py` 拿到唯一值数后，若唯一值集中→7-9bit无损无解压成立；若散→回到二选一。
-   - 结论回传：`git commit`+`git push`，手机端 pull 判读。
+    - 结论回传：`git commit`+`git push`，手机端 pull 判读。
+
+10. **L2 专家缓存预测式淘汰（predictive eviction，2026-09-07）——真机内核已换 brain，待验证**：
+    - **一句话**：`moe-paging` 的 `choose_victim` 已从纯 LRU（按 `last_use`）改成累积热计数（按 `use_count`）。这是 L2 "预测式大脑"的真机移植，不是仿真。
+    - **为什么成立**：k3 专家请求带 8 遍结构，每遍专家集是上一遍的**单调超集**（pass0⊆...⊆pass7）→ 同一批专家被 8 遍反复激活 → 保留"热常客"（累积热度）而非"最近用"（LRU）能跨遍驻留工作集。
+    - **量化对比（sim_cache）**：LRU@150 槽 36.24%（miss 63,824）→ predictive 88.46%（miss 11,551）= **HDD→SSD 复制/磁盘读 ÷5.6**（1120GB→203GB）。复现 `python3 sim_cache.py data/expert_trace.bin --slots 150 --policy predictive`。
+    - **真机改动（已 commit 539bda1，自洽不添依赖）**：
+      - `sparkmoe-src/moe-paging/moe-cache.h`：`cache_entry` + `uint64_t use_count`
+      - `moe-cache.cpp:79`：`choose_victim` last_use→use_count（选热计数最低者淘汰）
+      - `moe-cache.cpp:141`：命中 ++use_count；`:166` 载入 use_count=1
+      - `MOE_PAGING.md`：policy 说明（predictive + 单调超集依据）
+    - **⚠️ 尚缺最关键一环（用户电脑验证）**：本机无 ggml header 无法编译。**用户下个会话在 PC llama.cpp 构建后跑真机，比 `moe_stats` 前后 miss/命中 → 验证 miss ÷5.6 是否在真实 runtime 兑现。** 这是论文证据链的敲门砖。
+    - **论文题材**：`notes/predictive-eviction-paper.md` 已写好定位（短文/实验小节，非主脑）。真正新点 = "单调超集会话 → 热计数淘汰在线可兑现、无跨分布风险"；与 Qwen 跨 trace 翻转（`l2-cache-records-verdict.md` +10.3% 反亏）形成正反对照。
+    - **诚实边界**：÷5.6 降的是 HDD→SSD 复制/miss 次数，**不改变 DRAM→GEMV 这个 t/s 主瓶颈**（那是 rtl/12、rtl/15 的活）。GPU 常驻显存时 trunk 税消失、本结论不适用。
+    - **关联记录**：`notes/k3-online-feasibility-terminus.md`（÷5.6 在线可行性终局）、`notes/predictive-eviction-paper.md`（论文素材+证据链）、`notes/l2-cache-records-verdict.md`（跨分布坍缩点真机记录）。
 
 ## 提交规范
 - message 风格参考 `git log --oneline -8`；只 stage 本任务文件；`master` 分支不动；push 仅当用户说。
