@@ -4,15 +4,15 @@ K3 共享池架构 · 真实 BOM + 吞吐
 2026-09-07 定案：226GB 共享 LPDDR5X 池，224颗子计算单元共享
 对比旧假设（128GB/颗 × ¥8/GB 便宜内存口径）
 """
-# ===== K3 实测参数 (k3-verdict.md + MoE-token-speed.md) =====
+# ===== K3 实测参数 (k3-verdict.md + MoE-token-speed.md + K3_MXFP8_ENTROPY.md) =====
 K3_EXPERT_PER_TOKEN_GB = 25.83   # 92层×16experts×17.55MB
-K3_TRUNK_PER_TOKEN_GB  = 113.49  # fp16，100%必读，不可缓存
-K3_TOTAL_PER_TOKEN_GB  = K3_EXPERT_PER_TOKEN_GB + K3_TRUNK_PER_TOKEN_GB  # 139.32
+K3_TRUNK_PER_TOKEN_GB  = 55.6    # MXFP8 trunk（trunk_mxfp8.bin 55.6GB, 1.92x压缩，每token全读）
+K3_TOTAL_PER_TOKEN_GB  = K3_EXPERT_PER_TOKEN_GB + K3_TRUNK_PER_TOKEN_GB  # 81.43
 
-# ===== 共享池容量 (lpddr-resident-architecture.md 226GB档) =====
-POOL_GB        = 226.0
-TRUNK_GB       = 55.0     # trunk 驻留（减半口径）
-EXPERT_POOL_GB = POOL_GB - TRUNK_GB  # 171GB = 工作集专家（10,010对×17.55MB）
+# ===== 共享池容量（--pool 可调） =====
+POOL_GB        = 192.0   # 用户主配置: 192GB = trunk 55.6 + 专家 136GB
+TRUNK_GB       = 55.6    # MXFP8 trunk 驻留
+EXPERT_POOL_GB = POOL_GB - TRUNK_GB
 
 # ===== 芯片参数 (calculation-formulas.md) =====
 N_CHIPS        = 224
@@ -21,12 +21,49 @@ CLOCK_GHZ      = 1.0      # 满档（prefill/突发）
 DIE_COST       = 91       # 14nm die+封装+PHY（量产）
 
 # ===== 用户可调频率 (超频) =====
-import argparse
-_p = argparse.ArgumentParser(description="K3 共享池：用户可自定 MAC 频率（超频/降压）")
+import argparse, math
+_p = argparse.ArgumentParser(description="K3 共享池：两墙模型（LPDDR带宽×PCIe补miss）× 突变点")
 _p.add_argument("--freq", type=float, default=None, nargs="+",
                 help="MAC 频率 GHz。默认 = DRAM 匹配档（~0.134，省电）；"
                      "超频示例: --freq 0.5 / 1.0 可对比满档")
+_p.add_argument("--pool", type=float, default=192.0,
+                help="共享池容量 GB（默认 192 = trunk 55.6 + 专家 136）")
+_p.add_argument("--pcie", type=float, default=60.0,
+                help="补 miss 的 PCIe 带宽 GB/s（默认 60 ≈ Gen5；Gen4≈30）")
+_p.add_argument("--scan", action="store_true",
+                help="扫容量找突变点（两墙交叉 → 吞吐台阶）")
+_p.add_argument("--tps", type=float, default=None,
+                help="目标吞吐 t/s → 反推组件清单（MAC颗数/LPDDR容量/PCIe/硬盘）")
 args = _p.parse_args()
+POOL_GB = args.pool
+EXPERT_POOL_GB = POOL_GB - TRUNK_GB
+
+# ===== 专家命中率模型 (lpddr-resident-architecture.md 表) =====
+# 专家池预算GB -> 命中%：9->18, 41->51, 73->67, 105->82, 145->97, 171->100
+# ⚠ 待真机验证：此表源于 fixtures 合成 trace, PC 真机长 trace (--gen 32+) 未回,
+#   容量拐点/命中曲线可能偏移（见 HANDOFF 待办10修正块）。当前为设计参考。
+_HIT = [(9,18),(41,51),(73,67),(105,82),(145,97),(171,100)]
+def hit_rate(exp_gb):
+    if exp_gb >= _HIT[-1][0]: return 100.0
+    if exp_gb <= _HIT[0][0]:  return _HIT[0][1]
+    for (a,ha),(b,hb) in zip(_HIT,_HIT[1:]):
+        if a <= exp_gb <= b:
+            return ha + (hb-ha)*(exp_gb-a)/(b-a)
+    return 100.0
+
+# ===== 两墙模型 =====
+def walls(pool_gb, pcie_bw):
+    """返回 (LPDDR带宽限t/s, PCIe补miss限t/s, 命中率)
+    LPDDR限: 池带宽/(trunk+专家×命中)  —— 热读喂 MAC
+    PCIe限 : pcie/(专家×(1-命中))       —— 冷专家实时补
+    实际吞吐 = min(两墙)"""
+    n_dies = pool_gb / MEM_GB_PER_DIE
+    pool_bw = n_dies * BWS_PER_DIE
+    h = hit_rate(pool_gb - TRUNK_GB) / 100.0
+    t_ldd = pool_bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
+    miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
+    t_pcie = pcie_bw / miss_pt if miss_pt > 1e-6 else 1e9
+    return t_ldd, t_pcie, h*100
 
 K3_MAC_PER_TOKEN = 1.12e11   # 每token MACs（trunk 1.48e10 + 专家 9.72e10）
 TOTAL_MAC = N_CHIPS * MAC_PER_CHIP
@@ -43,8 +80,9 @@ BWS_PER_DIE = 171.0        # 8ch LPDDR5X GB/s
 POOL_BW     = N_MEM_DIES * BWS_PER_DIE
 H200_BW     = 4800.0
 
-# ===== 吞吐 =====
-TPS_K3      = POOL_BW / K3_TOTAL_PER_TOKEN_GB
+# ===== 吞吐（两墙模型）=====
+T_LDD, T_PCIE, HIT_PCT = walls(POOL_GB, args.pcie)
+TPS_K3      = min(T_LDD, T_PCIE)          # 实际 = min(池带宽, PCIe补miss)
 TPS_H200    = H200_BW / K3_TOTAL_PER_TOKEN_GB
 
 # ===== 频率匹配档（DRAM 瓶颈 → MAC 降到刚好够吃的频率）=====
@@ -75,34 +113,124 @@ print("=" * 70)
 print("K3 共享池架构 · 真实 BOM + 吞吐 对照")
 print("=" * 70)
 
-print(f"\n--- K3 模型 ---")
+print(f"\n--- K3 模型 (trunk 用 MXFP8 55.6GB) ---")
 print(f"  专家/token : {K3_EXPERT_PER_TOKEN_GB} GB")
 print(f"  trunk/token: {K3_TRUNK_PER_TOKEN_GB} GB")
 print(f"  合计/token : {K3_TOTAL_PER_TOKEN_GB} GB")
 
-print(f"\n--- 共享池 {POOL_GB:.0f}GB (trunk {TRUNK_GB:.0f} + 工作集专家 {EXPERT_POOL_GB:.0f}) ---")
+print(f"\n--- 共享池 {POOL_GB:.0f}GB (trunk {TRUNK_GB:.0f} + 专家池 {EXPERT_POOL_GB:.0f}) ---")
 print(f"  形态: {N_MEM_DIES:.0f}颗 {MEM_GB_PER_DIE}GB LPDDR5X")
 print(f"  池带宽: {N_MEM_DIES:.0f}×{BWS_PER_DIE:.0f} = {POOL_BW:,.0f} GB/s")
+print(f"  命中率: 专家池 {EXPERT_POOL_GB:.0f}GB → {HIT_PCT:.0f}%（工作集命中）")
 
-print(f"\n--- 吞吐 ---")
-print(f"  K3 共享池: {TPS_K3:.1f} t/s")
+print(f"\n--- 两墙模型 (四路带宽分解) ---")
+hit = HIT_PCT/100.0
+miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-hit)
+print(f"  ① MAC吞  : {TPS_K3*K3_TOTAL_PER_TOKEN_GB:,.0f} GB/s = {K3_TOTAL_PER_TOKEN_GB:.1f}GB × {TPS_K3:.1f}t/s")
+print(f"  ② 热读LPDDR: {TPS_K3*(K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*hit):,.0f} GB/s  ← 池带宽喂 MAC")
+print(f"  ③ 补missPCIe: {TPS_K3*miss_pt:,.0f} GB/s ← {miss_pt:.2f}GB/token冷专家 从 PCIe({args.pcie:.0f}) 实时补")
+print(f"  ④ 冷灌入: 一次性 {POOL_GB:.0f}GB / Gen5≈{args.pcie:.0f}GB/s ≈ {POOL_GB/args.pcie:.0f}s（工作集切换时）")
+
+print(f"\n--- 吞吐（两墙取 min）---")
+print(f"  LPDDR 限: {T_LDD:,.1f} t/s  (池带宽/热读)")
+print(f"  PCIe 限 : {T_PCIE:,.1f} t/s  (补miss带宽/miss流量)")
+print(f"  K3 实际 : {TPS_K3:.1f} t/s  ← min(两墙), 瓶颈={'PCIe补miss' if T_PCIE<T_LDD else 'LPDDR池带宽'}")
 print(f"  H200 单卡: {TPS_H200:.1f} t/s")
-print(f"  相对: {TPS_K3/TPS_H200:.2f}x")
+print(f"  相对    : {TPS_K3/TPS_H200:.2f}x")
+
+if args.tps:
+    TGT = args.tps
+    print(f"\n--- 目标 {TGT:.1f} t/s → 组件清单反推 ---")
+
+    # ① MAC 颗数：算力 = 目标 × 每token MAC；每颗 128 MAC @freq
+    need_tmac = TGT * K3_MAC_PER_TOKEN / 1e12           # TMAC/s
+    n_chips = math.ceil(need_tmac * 1e12 / (MAC_PER_CHIP * 1e9 * (args.freq[0] if args.freq else 1.0)))
+    n_chips = max(n_chips, 1)
+    print(f"  ① MAC      : 需 {need_tmac:.1f} TMAC/s → {n_chips} 颗 × {MAC_PER_CHIP} MAC "
+          f"({n_chips*MAC_PER_CHIP:,} MAC)")
+    print(f"                满档 {n_chips*MAC_PER_CHIP*(args.freq[0] if args.freq else 1.0)/1e3:.0f} TMAC/s "
+          f"≧ {need_tmac:.1f} ✅")
+
+    # ② LPDDR 容量（含命中率→容量反查）：
+    #    目标吞吐必须同时满足两墙 → 找最小池容量使 min(墙) ≥ 目标
+    print(f"  ② LPDDR    : 按命中率表反查 专家池→容量, 要求池带宽与PCIe都 ≥ 目标")
+    found = None
+    for exp_gb in range(0, 200, 2):
+        pool = TRUNK_GB + exp_gb
+        dies = math.ceil(pool / MEM_GB_PER_DIE)
+        bw = dies * BWS_PER_DIE
+        h = hit_rate(exp_gb) / 100.0
+        miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
+        t_ldd = bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
+        t_pcie = args.pcie / miss_pt if miss_pt > 1e-6 else 1e9
+        if min(t_ldd, t_pcie) >= TGT:
+            found = (exp_gb, pool, dies, h, t_ldd, t_pcie, miss_pt)
+            break
+    if found:
+        exp_gb, pool, dies, h, t_ldd, t_pcie, miss_pt = found
+        print(f"                专家池 {exp_gb}GB + trunk {TRUNK_GB} = {pool}GB → {dies} 颗 8GB")
+        print(f"                带宽 {dies}×{BWS_PER_DIE} = {bw:,.0f} GB/s, 命中 {h*100:.0f}%")
+        print(f"                LPDDR限 {t_ldd:.1f} / PCIe限 {t_pcie:.1f} → min {min(t_ldd,t_pcie):.1f} ✅")
+    else:
+        print(f"                ✗ 扫到 200GB 专家池仍不够 → 需更大池或更高 PCIe")
+
+    # ③ PCIe
+    miss_bw = TGT * miss_pt if found else 0
+    print(f"  ③ PCIe     : 需补 miss {miss_bw:,.0f} GB/s (miss {miss_pt:.2f}GB/token × {TGT}t/s)")
+    for name, bw in [("Gen4×16",32),("Gen5×16",64),("Gen5×32",128)]:
+        mark = "✅" if bw >= miss_bw*1.05 else ("⚠" if bw >= miss_bw else "✗")
+        print(f"                {name}: {bw}GB/s {mark}")
+
+    # ④ 硬盘（冷灌入/工作集切换）
+    print(f"  ④ 硬盘     : 专家全量 82,432对×17.55MB ≈ 1413GB; 需 ≥ 池容量持续喂")
+    print(f"                冷灌入 {pool:.0f}GB / Gen5≈{args.pcie}GB/s ≈ {pool/args.pcie:.0f}s")
+
+    # ⑤ 成本
+    mem_cost = pool * LPDDR_PRICE_NEW
+    chip_cost = n_chips * DIE_COST
+    tot_cost = chip_cost + mem_cost + new_pcb
+    print(f"  ⑤ 成本     : {n_chips}颗×¥{DIE_COST}=¥{chip_cost:,} + {pool:.0f}GB×¥{LPDDR_PRICE_NEW}=¥{mem_cost:,} + PCB ¥{new_pcb:,}")
+    print(f"                合计 ¥{tot_cost:,.0f} = {tot_cost/1e4:.1f}万")
+    print(f"                每token成本效率: ¥{tot_cost/TGT:,.0f}/t/s")
+
+if args.scan:
+    print(f"\n--- 突变点扫描 (池容量→吞吐台阶, PCIe={args.pcie:.0f}GB/s) ---")
+    print(f"  {'池GB':>5} {'专家G':>5} {'命中%':>5} {'LPDDR限':>7} {'PCIe限':>7} {'实际':>6} {'突变?'}")
+    prev = None
+    rows = []
+    for pg in range(64, 234, 8):
+        t_ldd, t_pcie, h = walls(pg, args.pcie)
+        t = min(t_ldd, t_pcie)
+        rows.append((pg, t_ldd, t_pcie, t, h))
+    for i,(pg,t_ldd,t_pcie,t,h) in enumerate(rows):
+        jump = ""
+        if i>0:
+            prevt = rows[i-1][3]
+            if prevt>0 and (t-prevt)/prevt > 0.15:   # 台阶 >15%
+                jump = "  <-- 突变"
+        print(f"  {pg:>5} {pg-TRUNK_GB:>5.0f} {h:>5.0f} {t_ldd:>7.1f} {t_pcie:>7.1f} {t:>6.1f}{jump}")
+    # 找最大台阶
+    best = max((rows[i][3]-rows[i-1][3], i) for i in range(1,len(rows)))
+    print(f"  ── 最大台阶: +{best[0]:.1f} t/s @ 池 {rows[best[1]][0]}GB (命中 {rows[best[1]][4]:.0f}%)")
+    # 两墙交叉点：PCIe限首次 ≥ LPDDR限 的池容量
+    cross = next((pg for pg,t_ldd,t_pcie,t,h in rows if t_pcie >= t_ldd), None)
+    if cross:
+        print(f"  ── 两墙交叉: {cross:.0f}GB 之后 LPDDR 带宽成为瓶颈（PCIe补miss不再是墙）")
 
 print(f"\n--- 旧口径（每颗独立128GB × ¥8/GB）---")
 print(f"  内存: 224×128GB×¥8 = ¥{old_mem_total:>10,.0f} = {old_mem_total/1e4:.1f}万")
 print(f"  整卡: 224×¥1,174  = ¥{old_total:>10,.0f} = {old_total/1e4:.1f}万")
 
-print(f"\n--- 新口径（226GB共享池 × ¥60/GB）---")
+print(f"\n--- 新口径（{POOL_GB:.0f}GB共享池 × ¥60/GB）---")
 print(f"  芯片: 224×¥{DIE_COST}  = ¥{new_chip_cost:>10,.0f} = {new_chip_cost/1e4:.1f}万")
 print(f"  内存: {POOL_GB:.0f}GB×¥{LPDDR_PRICE_NEW} = ¥{new_mem_cost:>10,.0f} = {new_mem_cost/1e4:.1f}万")
 print(f"  PCB等:             = ¥{new_pcb:>10,}  = {new_pcb/1e4:.1f}万")
 print(f"  整卡:              = ¥{new_total:>10,.0f} = {new_total/1e4:.1f}万")
 print(f"  vs H200 ¥290万    = 1/{(290*1e4)/new_total:.0f}")
 
-print(f"\n--- 内存成本对比 ---")
+print(f"\n--- 内存成本对比 (内存总价 = 容量×¥60) ---")
 print(f"  旧: 224×128×¥8  = ¥{old_mem_total:>10,.0f} = {old_mem_total/1e4:.1f}万")
-print(f"  新: 226×¥60     = ¥{new_mem_cost:>10,.0f} = {new_mem_cost/1e4:.1f}万")
+print(f"  新: {POOL_GB:.0f}×¥60     = ¥{new_mem_cost:>10,.0f} = {new_mem_cost/1e4:.1f}万")
 print(f"  净省: ¥{old_mem_total-new_mem_cost:>10,.0f} = {(old_mem_total-new_mem_cost)/1e4:.1f}万")
 print(f"  原因: 单价×7.5 但总量缩 {old_mem_total/new_mem_cost:.0f}倍 → 内存反省 {(1-new_mem_cost/old_mem_total)*100:.0f}%")
 
@@ -127,18 +255,19 @@ for f in freqs:
     print(f"  {f:>7.3f}GHz {tmac:>10.2f} {pw:>8,.0f}W {pw:>6,.0f}W {speedup:>6.2f}x {note:>10}")
 print(f"  ↑ 匹配档仅是长期解码稳态频率；超频不提升稳态(K3受DRAM限), 但拉高prefill突发算力")
 
-# ===== PCB 面积预算 v2 (28-bank 近存) =====
-print(f"\n--- PCB 面积预算 v2 (28 bank × 8die合封 + 1 LPDDR) ---")
+# ===== PCB 面积预算 v2 (N_MEM_DIES bank × 8die合封 + 1 LPDDR) =====
+n_bk = int(round(N_MEM_DIES))
+print(f"\n--- PCB 面积预算 v2 ({n_bk} bank × 8die合封 + 1 LPDDR) ---")
 die_area = 5.6
 bank_pkg = 8 * die_area * 1.6
 lpddr_die = 100.0
 bank_total = bank_pkg + lpddr_die
-area_banks = 28 * bank_total
+area_banks = n_bk * bank_total
 extra = 2000 + 500 + 700 + 1200
 CARD = 33384
 tot = area_banks + extra
 print(f"  每bank: 8die合封 {bank_pkg:.0f}mm² + LPDDR {lpddr_die:.0f}mm² = {bank_total:.0f}mm²")
-print(f"  28 bank = {area_banks:,.0f}mm² + 走线/PCIe/电源 {extra}mm² = {tot:,.0f}mm²")
+print(f"  {n_bk} bank = {area_banks:,.0f}mm² + 走线/PCIe/电源 {extra}mm² = {tot:,.0f}mm²")
 print(f"  卡 {CARD:,}mm² 占用 {tot/CARD*100:.1f}%  ✅")
 print(f"  功耗: 匹配档 ≈{calc_power(F_MATCH_GHZ):,.0f}W / 满档 ≈{calc_power(1.0):,.0f}W (见上方超频档)")
 
