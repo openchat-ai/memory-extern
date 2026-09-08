@@ -8,7 +8,14 @@ Additional options:
 
 - `--moe-io-threads N`: file-read worker count.
 - `--moe-io-mode buffered`: the implemented I/O path.
-- `--moe-cache-policy lru`: the implemented policy.
+- `--moe-cache-policy predictive`: the implemented policy (cumulative per-expert use-count eviction; see note below).
+
+> **Eviction policy note.** `layer_cache::choose_victim` evicts the entry with the lowest
+> cumulative `use_count` (a per-expert heat counter that persists for the cache lifetime),
+> not the least-recently-used slot. For monotone-superset MoE sessions (e.g. kimi-k3's
+> pass-by-pass expert growth, where pass_v ⊆ pass_v+1) this cumulative-heat policy keeps the
+> frequently-reused expert working set resident across passes and cuts HDD→SSD re-reads from
+> the LRU baseline (sim_cache predictive ≈ 88% hit vs LRU ≈ 36% on the k3 trace).
 
 Direct I/O is rejected because correct cross-platform alignment and tail handling are not implemented.
 
