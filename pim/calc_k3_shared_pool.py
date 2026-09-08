@@ -44,7 +44,14 @@ _p.add_argument("--life", type=float, default=None,
                 help="设备寿命年 (默认: personal=5, dc=3)")
 _p.add_argument("--elec", type=float, default=0.6,
                 help="电价 ¥/kWh (默认 0.6)")
+_p.add_argument("--die", type=str, default="8,16,32",
+                help="LPDDR 颗粒容量档位 GB，逗号分隔（默认 8,16,32 三档枚举）；"
+                     "注意带宽=颗数×171 与颗粒容量无关，大颗粒省颗数但失带宽，"
+                     "8GB 颗粒通常是带宽约束下的最优档")
+_p.add_argument("--noise", action="store_true",
+                help="输出噪音估算（风冷 dBA，功耗/Pf模型）")
 args = _p.parse_args()
+DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
 EXPERT_POOL_GB = POOL_GB - TRUNK_GB
 
@@ -163,10 +170,20 @@ if args.bom:
         energy  = watts / tps * args.elec / 3.6e6        # W×s/token → kWh
         return amort + energy, amort, energy
 
-    # 扫描组合空间：MAC颗数(经济档) × LPDDR容量 × PCIe档
-    def design_bom(n_chips, pool_gb, pcie_bw):
-        dies = math.ceil(pool_gb / MEM_GB_PER_DIE)
-        bw = dies * BWS_PER_DIE
+    # 扫描组合空间：MAC颗数(经济档) × (LPDDR容量, 颗粒档位) × PCIe档
+    # 颗粒档位: 每档 8/16/32GB 离散; 带宽 = 颗数×171(颗定带宽), 与档位无关
+    # 噪音模型(风冷): 功耗→dBA 近似 Pf曲线 (TDP 越大越吵)
+    def noise_dba(watts, liquid=False):
+        if liquid: return 22.0                      # 液冷: 泵+低噪风扇, 恒定
+        return 15 + 18 * math.log10(max(watts,1))   # 风冷: 对数模型
+    def dies_for(pool_gb, die_gb):
+        return max(1, math.ceil(pool_gb / die_gb))
+    def bw_for(dies, die_gb):
+        return dies * BWS_PER_DIE
+
+    def design_bom(n_chips, pool_gb, pcie_bw, die_gb=8.0):
+        dies = dies_for(pool_gb, die_gb)
+        bw = bw_for(dies, die_gb)
         h = hit_rate(pool_gb - TRUNK_GB) / 100.0
         miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
         t_ldd  = bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
@@ -178,46 +195,53 @@ if args.bom:
         mac_dyn = 38.0 * n_chips * max(f_match, 0.01)**3
         watts  = mac_dyn + (2+2+2+1)*n_chips
         cost   = n_chips*DIE_COST + pool_gb*LPDDR_PRICE_NEW + new_pcb
-        return tps, watts, cost, h
+        return tps, watts, cost, h, dies
 
     # 个人用户：桌面单卡 —— 满足成本约束下, 取"性价比最优"（每元买到的 t/s 最高, 且整机可负担）
+    # 噪音：个人愿为静音买单 → 给出 风冷/液冷 两档（液冷+¥3000, dBA降~20）
     print(f"\n--- 场景A 个人用户 (单卡, 利用率25%, 寿命5年, Gen5×16=64GB/s) ---")
     util = args.util if args.util else 0.25
     life = args.life if args.life else 5.0
     cands_p = []
     for n in range(16, 225, 16):
         for pg in range(64, 233, 8):
-            tps, watts, cost, h = design_bom(n, pg, 64)
-            cp, am, en = cost_per_token(cost, tps, watts, util, life)
-            if tps >= 5 and cp <= args.tokcost:
-                cands_p.append((round(cp,12), n, pg, tps, watts, cost, h))
+            for die_gb in DIED_OPTS:
+                tps, watts, cost, h, dies = design_bom(n, pg, 64, die_gb)
+                cp, am, en = cost_per_token(cost, tps, watts, util, life)
+                if tps >= 5 and cp <= args.tokcost:
+                    cands_p.append((round(cp,12), n, pg, tps, watts, cost, h, die_gb, dies, am, en))
     if cands_p:
-        cp, n, pg, tps, watts, cost, h = max(cands_p, key=lambda r: r[3]/r[5])  # t/s per ¥
-        am = cp - en
-        print(f"  性价比解: {n}颗MAC + {pg:.0f}GB池({math.ceil(pg/8)}颗8GB), 命中{h*100:.0f}%")
+        cp, n, pg, tps, watts, cost, h, die_gb, dies, am, en = max(cands_p, key=lambda r: r[3]/r[5])  # t/s per ¥
+        print(f"  性价比解: {n}颗MAC + {pg:.0f}GB池({dies}颗{die_gb:.0f}GB), 命中{h*100:.0f}%")
         print(f"  吞吐 {tps:.1f} t/s | 功耗 {watts:.0f}W | 整机 ¥{cost/1e4:.1f}万")
+        if args.noise:
+            print(f"  噪音: 风冷 ≈{noise_dba(watts):.0f} dBA | 液冷 ≈{noise_dba(watts,True):.0f} dBA "
+                  f"(液冷+¥3000 → 个人静音项)")
         print(f"  每token: 摊销 ¥{am*1e4:.2f}万元/万token ≈ ¥{am*1e6:.1f}µ/千token | 电费 ¥{en*1e6:.1f}µ")
         print(f"  合计 ¥{cp*1e6:.1f}µ/token (限 ¥{args.tokcost*1e6:.0f}µ)  ✅")
     else:
         print(f"  ✗ 无解: 每token成本限 ¥{args.tokcost:.4f} 太紧（改高或降需求）")
 
     # 数据中心：多卡阵列 —— 满足成本约束下, 取"单卡摊销最低 + 吞吐够大"配置
+    # 噪音对机房不重要, 但功耗决定散热成本
     print(f"\n--- 场景B 数据中心 (机架阵列, 利用率85%, 寿命3年, Gen5×32=128GB/s) ---")
     util = args.util if args.util else 0.85
     life = args.life if args.life else 3.0
     cands_d = []
     for n in range(16, 225, 16):
         for pg in range(64, 233, 8):
-            tps, watts, cost, h = design_bom(n, pg, 128)
-            cp, am, en = cost_per_token(cost, tps, watts, util, life)
-            if tps >= 20 and cp <= args.tokcost:
-                cands_d.append((round(cp,12), n, pg, tps, watts, cost, h))
+            for die_gb in DIED_OPTS:
+                tps, watts, cost, h, dies = design_bom(n, pg, 128, die_gb)
+                cp, am, en = cost_per_token(cost, tps, watts, util, life)
+                if tps >= 20 and cp <= args.tokcost:
+                    cands_d.append((round(cp,12), n, pg, tps, watts, cost, h, die_gb, dies, am, en))
     if cands_d:
-        cp, n, pg, tps, watts, cost, h = min(cands_d, key=lambda r: r[0])  # 最低单token成本
-        am = cp - en
+        cp, n, pg, tps, watts, cost, h, die_gb, dies, am, en = min(cands_d, key=lambda r: r[0])  # 最低单token成本
         gpu_per_k = math.ceil(1000/tps)   # 1000t/s 需卡数
-        print(f"  单卡最优: {n}颗MAC + {pg:.0f}GB池({math.ceil(pg/8)}颗8GB), 命中{h*100:.0f}%")
+        print(f"  单卡最优: {n}颗MAC + {pg:.0f}GB池({dies}颗{die_gb:.0f}GB), 命中{h*100:.0f}%")
         print(f"  单卡吞吐 {tps:.1f} t/s | 功耗 {watts:.0f}W | 单卡 ¥{cost/1e4:.1f}万")
+        if args.noise:
+            print(f"  噪音(机房忽略): 风冷 ≈{noise_dba(watts):.0f} dBA | 集中水冷 ≈22 dBA（数据中心常态）")
         print(f"  每token: 摊销 ¥{am*1e6:.1f}µ | 电费 ¥{en*1e6:.1f}µ | 合计 ¥{cp*1e6:.1f}µ")
         print(f"  集群规模 (1000 t/s)：{gpu_per_k} 卡 ≈ ¥{cost*gpu_per_k/1e4:.0f}万, "
               f"{watts*gpu_per_k/1000:.0f} kW")
@@ -225,7 +249,8 @@ if args.bom:
         print(f"  ✗ 无解: 每token成本限 ¥{args.tokcost:.4f} 太紧")
 
     print(f"\n  注: 摊销假设利用率{util:.0%}×寿命{life:.0f}年；电价¥{args.elec}/kWh 可--elec调；"
-          f"命中率表为fixtures口径待真机验证")
+          f"命中率表为fixtures口径待真机验证；"
+          f"颗粒档 {args.die}GB（大颗粒省颗数但带宽同比例降, 性能折损）")
 
 if args.tps:
     TGT = args.tps
