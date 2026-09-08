@@ -152,15 +152,34 @@
     - **诚实边界**：÷5.6 降的是 HDD→SSD 复制/miss 次数，**不改变 DRAM→GEMV 这个 t/s 主瓶颈**（那是 rtl/12、rtl/15 的活）。GPU 常驻显存时 trunk 税消失、本结论不适用。
     - **关联记录**：`notes/k3-online-feasibility-terminus.md`（÷5.6 在线可行性终局）、`notes/predictive-eviction-paper.md`（论文素材+证据链）、`notes/l2-cache-records-verdict.md`（跨分布坍缩点真机记录）。
 
+## 隐藏笔记本（2026-09-07 梳理）
+
+> 近期工作是"排雷 + 收敛"，不是白折腾。已证伪的路线同样是有价值的确定性（省未来时间）。
+
+### 已收口的确定性结论（勿因"证伪"误判为失败）
+1. **主线（北极星）完整闭合**：K3 **28-bank 近存共享池** — ¥3.5万 BOM / 34.7 t/s ≈ H200 单卡 / 成本 1/83 / 占卡 27.6% / 超频档（用户 `--freq` 可调）。这是"让权重住进内存设备"的实际载体。
+2. **predictive-eviction 真机证伪（保住了论文）**：若拿旧 88.46% 去投稿必被真实 trace 打脸；自己先证伪 = 排雷。留下的可复现证据 + 诚实结论 = 资产。
+3. **head_saliency 真机三连否定**：剪头/剪专家/early-exit 全被 93 层数据否定 → 静态剪枝线彻底封存，省下未来所有在这三方向的时间。假爆点 MLA cv=4.39 修正为 0.105，避免研究误报。
+4. **K3 部署的真杠杆（替代淘汰算法之争）**：**L2 容量 + meta 持久化 = 100% 命中** >> 淘汰策略。这是比"该用 LRU 还是 heat"大得多的工程指导。
+5. **单调超集 92/92 层独立验证成立**（K3 路由流量客观结构）。
+6. **哨兵行结构**（MLA gate 0-44 行 exp==0xFF，trunk 固定打包结构）。
+7. **MXFP8 熵编码 trunk 1.92x**（独立压缩线，未受证伪影响）。
+
+### 工作法提醒
+- 真机验证常常**修正** sim/推演（predictive 就是例子）→ 数据 + track 优先于旧结论。
+- "证伪" = 排雷，是有价值的确定性；修正后即收口，不硬挺原结论（本仓一贯作风）。
+
 ## PC 待执行任务汇总（2026-09-07 梳理）
 
 > 全部任务执行完直接 `git commit`+`git push` 回传（<10KB 文本），手机端 pull 判读。避免文字回传。
 
-**A. Predictive eviction 真机验证（论文证据链，最高优先 [待办10]）**
-- [ ] **真机跑通 predictive eviction**（llama.cpp 构建后 `moe_stats` 前后对比，预期 miss ÷5.6）— 最关键，阻塞点 = PC 上 ggml header 构建
-- [ ] 真机每 pass 命中率曲线（pass0~0% → pass7~100%）
+**A. Predictive eviction 验证（已被 2026-09-08 PC 回传部分完成 + 重大修正，见待办10上方标注块）**
+- [x] 单调超集 92/92 层独立验证（`trace_monotone.py`）→ 成立
+- [x] sim_cache 全槽 heat 列梯度（LRU vs heat vs Belady）→ 修正卖点
+- [x] 真机 A/B（2 token + L2 持久化）→ heat 优于 LRU 但为持久化假象
+- [ ] （可选）`--gen 32+` 长真机 trace 再 sim，稳策略对比
 - [ ] （可选）Qwen 跨 trace 翻转复现
-- [ ] cap 63/150 → 满槽扫描，hit% vs 槽数曲线（论文图）
+- [ ] 论文改写：原"predictive ÷5.6"卖点作废 → 改"单调超集在线自适应 + L2 容量/持久化主导"（原 paper 文档待 PC 侧同步改写）
 
 **B. WSL 未验证 RTL（已偏向砍，可选）**
 - [ ] 数字外设 RTL（adder/scale/accumulator/dequant）——有 testbench，iverilog 未跑过（`memory-compute-notes.md:749`）
@@ -180,6 +199,6 @@
 ## 终点
 ~~13 board_top 真机冒烟 PASS（LED 心跳）~~ ✅ 已完成（2026-09-02，124.3MHz，LED 心跳+引擎半亮）。
 → **当前阻塞**：200MHz 签核死循环（Routing Phase 0 卡死），需决定是试官方 demo 工程验证工具极限，还是接受 124MHz 继续推进。
-→ **PC 唯一硬性关键路径**：predictive eviction 真机验证（改动已备好、只差 llama.cpp 构建一跑，miss ÷5.6）——见「PC 待执行任务汇总 A」。
+→ **PC 关键路径（2026-09-08 已完成）**：predictive eviction 真机验证 + 重大修正已落（单调超集成立、卖点推翻、L2 容量/持久化主导）——见「隐藏笔记本」+ 待办10 修正块，勿再引用旧 ÷5.6。
 → **新外围线（2026-09-03）**：kimi-k3 大模型接入 FPGA GEMV——接缝已侦察定死（`k3_matmul_mxfp4` 的 MXF4 与 `gemv_top.v` 输入同卵，见"新接入主线"）。起步只做软件基线 + 定物理通路，尚无代码。
 → 三方对接点清晰 → 14 PCIe 骨架/清单就绪，编译全过、14 回归 22/22 或更多全绿，给出用户 PC/板子上的完整验收步骤与预期数值（含下一次真机步骤）。
