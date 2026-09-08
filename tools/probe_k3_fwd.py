@@ -63,7 +63,9 @@ def bf16_to_f32(w):
     sign = ((u >> 15) & 1).astype(np.float32) * -2.0 + 1.0
     exp = (u >> 7) & 0xFF
     man = (u & 0x7F).astype(np.float32)
-    val = (1.0 + man / 128.0) * (2.0 ** (exp.astype(np.float32) - 127.0))
+    expf = exp.astype(np.float32)
+    expf = np.where(exp == 0xFF, np.float32(200.0), expf)  # inf/NaN → 饱和到 ~1e22,防范数溢出
+    val = (1.0 + man / 128.0) * (2.0 ** (expf - 127.0))
     val = np.where(exp == 0, 0.0, val * sign)
     return val
 
@@ -111,15 +113,36 @@ class Trunk:
         self._f = None
         self.map = {}
         items = []
-        if isinstance(data, dict):
-            items = [(k, v) for k, v in data.items() if k != "__metadata__"]
-        elif isinstance(data, list):
-            for e in data:
+
+        def _flatten_layers(layers):
+            out = []
+            for e in layers:
                 if not isinstance(e, dict):
                     continue
-                nm = e.get("name") or e.get("key") or next((v for k, v in e.items()
-                       if k in ("tensor", "tensor_name", "id")), "<anon>")
-                items.append((nm, e))
+                tens = e.get("tensors") if isinstance(e.get("tensors"), dict) else e
+                if not isinstance(tens, dict):
+                    continue
+                for k, v in tens.items():
+                    if isinstance(v, dict):
+                        out.append((k, v))
+            return out
+
+        if isinstance(data, dict):
+            fst = data.get("layers")
+            if isinstance(fst, list) and fst and isinstance(fst[0], dict) and "tensors" in fst[0]:
+                items = _flatten_layers(fst)
+            else:
+                items = [(k, v) for k, v in data.items() if k != "__metadata__"]
+        elif isinstance(data, list):
+            if data and isinstance(data[0], dict) and isinstance(data[0].get("layers"), list):
+                items = _flatten_layers(data[0]["layers"])
+            else:
+                for e in data:
+                    if not isinstance(e, dict):
+                        continue
+                    nm = e.get("name") or e.get("key") or next((v for k, v in e.items()
+                           if k in ("tensor", "tensor_name", "id")), "<anon>")
+                    items.append((nm, e))
         for name, v in items:
             shape = None
             if isinstance(v, dict):

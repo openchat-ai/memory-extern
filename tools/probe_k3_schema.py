@@ -137,28 +137,58 @@ def main():
     print(f"顶层类型: {top}")
 
     # 收集"条目"：dict → 值条目；list → 元素
+    # 兼容真实 trunk.json 的三种结构:
+    #   A. 顶层 {tensor_name: meta}                  (safetensors 索引)
+    #   B. 顶层 {layers:[{tensors:{tensor_name: meta}}]}   (本项目 trunk.json)
+    #   C. 顶层 [ {tensor_name: meta} | {name, meta...} ] (分片索引列表)
     entries = []          # (name, meta_dict)
-    if isinstance(data, dict):
-        for k, v in data.items():
-            if k == "__metadata__" or k.startswith("_"):
-                continue
-            # v 可能是 meta dict、或直接是 shape list、或 {"shape":..., ...}
-            if isinstance(v, dict):
-                entries.append((k, v))
-            else:
-                entries.append((k, {}))
-    elif isinstance(data, list):
-        for e in data:
+
+    def flatten_layers(layers):
+        out = []
+        for e in layers:
             if not isinstance(e, dict):
                 continue
-            name = None
-            meta = {}
-            for k, v in e.items():
-                if k in NAME_KEYS and isinstance(v, (str,)):
-                    name = v
+            tens = e.get("tensors") if isinstance(e.get("tensors"), dict) else e
+            if not isinstance(tens, dict):
+                continue
+            for k, v in tens.items():
+                if isinstance(v, dict):
+                    out.append((k, v))
                 else:
-                    meta[k] = v
-            entries.append((name or f"<list-entry>", meta))
+                    out.append((k, {}))
+        return out
+
+    if isinstance(data, dict):
+        if isinstance(data.get("layers"), list) and "tensors" in (
+                data["layers"][0] if data["layers"] and isinstance(data["layers"][0], dict) else {}):
+            # 结构 B: trunk.json
+            entries = flatten_layers(data["layers"])
+        else:
+            for k, v in data.items():
+                if k == "__metadata__" or k.startswith("_"):
+                    continue
+                # v 可能是 meta dict、或直接是 shape list、或 {"shape":..., ...}
+                if isinstance(v, dict):
+                    entries.append((k, v))
+                else:
+                    entries.append((k, {}))
+    elif isinstance(data, list):
+        # 结构 C: 可能是 [ {"layers":...} ] 或直接分片；先探测
+        first = data[0] if data else None
+        if isinstance(first, dict) and isinstance(first.get("layers"), list):
+            entries = flatten_layers(first["layers"])
+        else:
+            for e in data:
+                if not isinstance(e, dict):
+                    continue
+                name = None
+                meta = {}
+                for k, v in e.items():
+                    if k in NAME_KEYS and isinstance(v, (str,)):
+                        name = v
+                    else:
+                        meta[k] = v
+                entries.append((name or f"<list-entry>", meta))
 
     print(f"识别到张量条目: {len(entries)}")
 
