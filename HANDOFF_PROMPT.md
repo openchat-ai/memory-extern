@@ -133,9 +133,32 @@
       - `moe-cache.cpp:141`：命中 ++use_count；`:166` 载入 use_count=1
       - `MOE_PAGING.md`：policy 说明（predictive + 单调超集依据）
     - **⚠️ 尚缺最关键一环（用户电脑验证）**：本机无 ggml header 无法编译。**用户下个会话在 PC llama.cpp 构建后跑真机，比 `moe_stats` 前后 miss/命中 → 验证 miss ÷5.6 是否在真实 runtime 兑现。** 这是论文证据链的敲门砖。
+    - **PC 后续实验清单（真机 llama.cpp 构建后，一次跑齐）**：
+      1. **真机跑通 predictive eviction**，对比 `moe_stats` hits/misses（预期 miss ÷5.6）— 最关键
+      2. 真机每 pass 命中率曲线（验证单调超集：pass0~0% → pass7~100%）
+      3. （可选）Qwen 跨 trace 翻转复现（确认方向性失败被 predictive 规避）
+      4. 控制变量：cap 从 63/150 扫到满槽，画 hit% vs 槽数曲线（论文图 2）
     - **论文题材**：`notes/predictive-eviction-paper.md` 已写好定位（短文/实验小节，非主脑）。真正新点 = "单调超集会话 → 热计数淘汰在线可兑现、无跨分布风险"；与 Qwen 跨 trace 翻转（`l2-cache-records-verdict.md` +10.3% 反亏）形成正反对照。
     - **诚实边界**：÷5.6 降的是 HDD→SSD 复制/miss 次数，**不改变 DRAM→GEMV 这个 t/s 主瓶颈**（那是 rtl/12、rtl/15 的活）。GPU 常驻显存时 trunk 税消失、本结论不适用。
     - **关联记录**：`notes/k3-online-feasibility-terminus.md`（÷5.6 在线可行性终局）、`notes/predictive-eviction-paper.md`（论文素材+证据链）、`notes/l2-cache-records-verdict.md`（跨分布坍缩点真机记录）。
+
+## PC 待执行任务汇总（2026-09-07 梳理）
+
+> 全部任务执行完直接 `git commit`+`git push` 回传（<10KB 文本），手机端 pull 判读。避免文字回传。
+
+**A. Predictive eviction 真机验证（论文证据链，最高优先 [待办10]）**
+- [ ] **真机跑通 predictive eviction**（llama.cpp 构建后 `moe_stats` 前后对比，预期 miss ÷5.6）— 最关键，阻塞点 = PC 上 ggml header 构建
+- [ ] 真机每 pass 命中率曲线（pass0~0% → pass7~100%）
+- [ ] （可选）Qwen 跨 trace 翻转复现
+- [ ] cap 63/150 → 满槽扫描，hit% vs 槽数曲线（论文图）
+
+**B. WSL 未验证 RTL（已偏向砍，可选）**
+- [ ] 数字外设 RTL（adder/scale/accumulator/dequant）——有 testbench，iverilog 未跑过（`memory-compute-notes.md:749`）
+- [ ] 调度器 sched3/sched4——有 testbench，未验证（`:750`）
+> PIM-DIMM 路线已取代 CIM/GEMV，此档仅为追踪。
+
+**C. head_saliency（深度精简立项，已封存）**
+- 静态探针已写好且真机跑完（`results/head_saliency_*.json`）。**结论：层剪枝/early-exit 属质量换带宽，K3 top-16 已到下限，不构成主方向**（`independent-stack.md:604`）。跑完留档即可，**不再主动推进**；除非用户重启"深度精简"立项。
 
 ## 提交规范
 - message 风格参考 `git log --oneline -8`；只 stage 本任务文件；`master` 分支不动；push 仅当用户说。
@@ -143,5 +166,6 @@
 ## 终点
 ~~13 board_top 真机冒烟 PASS（LED 心跳）~~ ✅ 已完成（2026-09-02，124.3MHz，LED 心跳+引擎半亮）。
 → **当前阻塞**：200MHz 签核死循环（Routing Phase 0 卡死），需决定是试官方 demo 工程验证工具极限，还是接受 124MHz 继续推进。
+→ **PC 唯一硬性关键路径**：predictive eviction 真机验证（改动已备好、只差 llama.cpp 构建一跑，miss ÷5.6）——见「PC 待执行任务汇总 A」。
 → **新外围线（2026-09-03）**：kimi-k3 大模型接入 FPGA GEMV——接缝已侦察定死（`k3_matmul_mxfp4` 的 MXF4 与 `gemv_top.v` 输入同卵，见"新接入主线"）。起步只做软件基线 + 定物理通路，尚无代码。
 → 三方对接点清晰 → 14 PCIe 骨架/清单就绪，编译全过、14 回归 22/22 或更多全绿，给出用户 PC/板子上的完整验收步骤与预期数值（含下一次真机步骤）。
