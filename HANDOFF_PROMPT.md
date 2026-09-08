@@ -141,11 +141,15 @@
 
 > ### ⚠️ 重大修正（2026-09-08 PC 回传，推翻 predictive 原卖点）
 > **"predictive ÷5.6（88.46% vs 36.24%）"在 K3 完整 trace 上不成立，必须按以下真机裁决修正，勿再引用旧数字。**
-> - **核心发现**：LFU（heat）在 K3 单调超集 trace 上**退化**——8 遍 pass 是集合超集但**个体专家会退役**，count 高的老常客锁死槽位、新 pass 专家进不来 → 小容量命中崩（2.6GB: heat 3.28% vs LRU 36.24%，差 11 倍）。
+> - **核心发现**：LFU（heat）在 K3 单调超集 trace 上**退化**——8 遍 pass 是集合超集但**个体专家会退役**，count 高的老常客锁死槽位、新 pass 专家进不来 → 小容量命中崩。
+> - **策略对比（两版 trace 方向一致，但绝对数字不同，勿混用）**：
+>   - **真机 trace（`K3_L2_TRACE_COMPARISON.md`，~8 token 短 trace，更可信）**：
+>     2.6GB 双 0%（太短装不进）；32GB heat 10.32% vs LRU 3.44%；**64GB heat 56.98% vs LRU 35.67%（反超）**；128+GB 都到 64.31% 上限。
+>   - fixtures 合成 trace（`K3_HEAT_VS_LRU.md`，~68 token）：2.6GB LRU 36% >> heat 3.28%（差异最极端）；128GB heat 82.5% vs 49.2%。**仅作长 trace 参考，勿当真机结论。**
+>   - **方向一致**：小容量 LRU 不劣于 heat、**中容量（64-128GB 级）heat 反超 LRU**、极端容量差别消失。
 > - **真机 A/B**（2 token, L2 持久化）：heat 赢是 **L2 文件跨运行 meta 恢复的假象**，不代表策略本身更优。
 > - **首要结论**：K3 部署 **L2 容量 + meta 持久化 >> 淘汰策略**。200GB 大 L2 + 跨运行复用 = **100% 命中**（0 miss），heat/lru 差别被完全淹没 → `--l2-policy` 默认值对真实吞吐几乎无影响，不着急改。
 > - **单调超集本身仍成立**：`trace_monotone.py` 独立直读验证 **92/92 层 pass_i⊆pass_{i+1} 无一违反**（这是 trace 客观属性，非 sim 推断）——但"单调超集"不再能支撑"predictive 更优"的卖点，只能支撑"predictive 在线同 session 自适应"的机制描述。
-> - **sim_cache 全槽梯度**（`sim_cache.py` 补 heat 列后）：小容量 LRU 优、中容量（64-128GB）heat 反超、≥192GB 全部顶到 compulsory 90% 上限——策略相对优劣方向在 fixtures/真机两种 trace 下一致，但绝对数字严重依赖 trace 结构，不可跨 trace 外推。
 > - **论文定位需改**：原"predictive beats LRU"卖点作废；可落地的诚实表述是"单调超集会话的在线自适应淘汰" + "L2 容量/持久化主导命中"。证据：`docs/k3/K3_HEAT_VS_LRU.md`、`docs/k3/K3_L2_TRACE_COMPARISON.md`、`notes/moe-paging-repro-and-monotone-verification.md`（含 `trace_monotone.py` 复现）。
 > - **遗留**：fixtures `expert_trace.bin` 真实来源未确认；真机 trace 仅 ~8 token 样本短，如需更稳策略对比跑 `--gen 32+` 导出长 trace 再 sim。
     - **论文题材**：~~`notes/predictive-eviction-paper.md` 已写好定位（短文/实验小节，非主脑）。真正新点 = "单调超集会话 → 热计数淘汰在线可兑现、无跨分布风险"；与 Qwen 跨 trace 翻转（`l2-cache-records-verdict.md` +10.3% 反亏）形成正反对照。~~ **【已修正】新卖点作废，诚实定位改为："单调超集会话的在线自适应淘汰机制"（LFU 会退化、LRU 更稳、L2 容量/持久化主导命中），见上方重大修正。原 paper 文档待 PC 侧同步改写。**
