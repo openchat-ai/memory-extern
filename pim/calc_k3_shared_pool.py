@@ -44,10 +44,10 @@ _p.add_argument("--life", type=float, default=None,
                 help="设备寿命年 (默认: personal=5, dc=3)")
 _p.add_argument("--elec", type=float, default=0.6,
                 help="电价 ¥/kWh (默认 0.6)")
-_p.add_argument("--die", type=str, default="8,16,32",
-                help="LPDDR 颗粒容量档位 GB，逗号分隔（默认 8,16,32 三档枚举）；"
-                     "注意带宽=颗数×171 与颗粒容量无关，大颗粒省颗数但失带宽，"
-                     "8GB 颗粒通常是带宽约束下的最优档")
+_p.add_argument("--die", type=str, default="8",
+                help="LPDDR 单颗容量 GB（默认 8；带宽=颗数×171 与容量无关）")
+_p.add_argument("--capstep", type=float, default=32,
+                help="池容量阶梯 GB（默认 32 → 只枚举 64/96/128/160/192…；8GB颗粒凑整档数）")
 _p.add_argument("--noise", action="store_true",
                 help="输出噪音估算（风冷 dBA，功耗/Pf模型）")
 args = _p.parse_args()
@@ -204,7 +204,7 @@ if args.bom:
     life = args.life if args.life else 5.0
     cands_p = []
     for n in range(16, 225, 16):
-        for pg in range(64, 233, 8):
+        for pg in range(64, 256, int(args.capstep)):
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 64, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -229,7 +229,7 @@ if args.bom:
     life = args.life if args.life else 3.0
     cands_d = []
     for n in range(16, 225, 16):
-        for pg in range(64, 233, 8):
+        for pg in range(64, 256, int(args.capstep)):
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 128, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -250,7 +250,7 @@ if args.bom:
 
     print(f"\n  注: 摊销假设利用率{util:.0%}×寿命{life:.0f}年；电价¥{args.elec}/kWh 可--elec调；"
           f"命中率表为fixtures口径待真机验证；"
-          f"颗粒档 {args.die}GB（大颗粒省颗数但带宽同比例降, 性能折损）")
+          f"容量按 {args.capstep:.0f}GB 阶梯枚举（单颗{die_gb:.0f}GB）")
 
 if args.tps:
     TGT = args.tps
