@@ -34,6 +34,16 @@ _p.add_argument("--scan", action="store_true",
                 help="扫容量找突变点（两墙交叉 → 吞吐台阶）")
 _p.add_argument("--tps", type=float, default=None,
                 help="目标吞吐 t/s → 反推组件清单（MAC颗数/LPDDR容量/PCIe/硬盘）")
+_p.add_argument("--bom", action="store_true",
+                help="按 每token成本 目标推出 个人/数据中心 BOM 清单")
+_p.add_argument("--tokcost", type=float, default=3e-5,
+                help="每 token 成本上限 ¥(单位µ, 默认 30µ=0.003厘, 摊销+电费)")
+_p.add_argument("--util", type=float, default=None,
+                help="卡利用率 (默认: personal=0.25, dc=0.85)")
+_p.add_argument("--life", type=float, default=None,
+                help="设备寿命年 (默认: personal=5, dc=3)")
+_p.add_argument("--elec", type=float, default=0.6,
+                help="电价 ¥/kWh (默认 0.6)")
 args = _p.parse_args()
 POOL_GB = args.pool
 EXPERT_POOL_GB = POOL_GB - TRUNK_GB
@@ -137,6 +147,85 @@ print(f"  PCIe 限 : {T_PCIE:,.1f} t/s  (补miss带宽/miss流量)")
 print(f"  K3 实际 : {TPS_K3:.1f} t/s  ← min(两墙), 瓶颈={'PCIe补miss' if T_PCIE<T_LDD else 'LPDDR池带宽'}")
 print(f"  H200 单卡: {TPS_H200:.1f} t/s")
 print(f"  相对    : {TPS_K3/TPS_H200:.2f}x")
+
+if args.bom:
+    print(f"\n{'='*70}")
+    print(f"按每token成本 ≤ ¥{args.tokcost*1e6:.0f}µ 推 BOM（摊销+电费）")
+    print(f"{'='*70}")
+    # 每 token 成本 = 摊销(整机价/寿命内token数) + 电费(功率/吞吐 × 电价)
+    # token 数 = 吞吐×秒×利用率；摊销 = 价 / (t/s×寿命秒×利用率)
+    HOURS = 365*24*3600
+    K3_MAC = K3_MAC_PER_TOKEN
+
+    def cost_per_token(total_cost, tps, watts, util, life_y):
+        life_s = life_y * HOURS
+        amort   = total_cost / (tps * life_s * util)
+        energy  = watts / tps * args.elec / 3.6e6        # W×s/token → kWh
+        return amort + energy, amort, energy
+
+    # 扫描组合空间：MAC颗数(经济档) × LPDDR容量 × PCIe档
+    def design_bom(n_chips, pool_gb, pcie_bw):
+        dies = math.ceil(pool_gb / MEM_GB_PER_DIE)
+        bw = dies * BWS_PER_DIE
+        h = hit_rate(pool_gb - TRUNK_GB) / 100.0
+        miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
+        t_ldd  = bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
+        t_pcie = pcie_bw / miss_pt if miss_pt > 1e-6 else 1e9
+        t_mac  = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC   # 满档算力
+        tps = min(t_ldd, t_pcie, t_mac)
+        # 匹配档频率（够吃 tps 即可）
+        f_match = tps * K3_MAC / (n_chips * MAC_PER_CHIP * 1e9)
+        mac_dyn = 38.0 * n_chips * max(f_match, 0.01)**3
+        watts  = mac_dyn + (2+2+2+1)*n_chips
+        cost   = n_chips*DIE_COST + pool_gb*LPDDR_PRICE_NEW + new_pcb
+        return tps, watts, cost, h
+
+    # 个人用户：桌面单卡 —— 满足成本约束下, 取"性价比最优"（每元买到的 t/s 最高, 且整机可负担）
+    print(f"\n--- 场景A 个人用户 (单卡, 利用率25%, 寿命5年, Gen5×16=64GB/s) ---")
+    util = args.util if args.util else 0.25
+    life = args.life if args.life else 5.0
+    cands_p = []
+    for n in range(16, 225, 16):
+        for pg in range(64, 233, 8):
+            tps, watts, cost, h = design_bom(n, pg, 64)
+            cp, am, en = cost_per_token(cost, tps, watts, util, life)
+            if tps >= 5 and cp <= args.tokcost:
+                cands_p.append((round(cp,12), n, pg, tps, watts, cost, h))
+    if cands_p:
+        cp, n, pg, tps, watts, cost, h = max(cands_p, key=lambda r: r[3]/r[5])  # t/s per ¥
+        am = cp - en
+        print(f"  性价比解: {n}颗MAC + {pg:.0f}GB池({math.ceil(pg/8)}颗8GB), 命中{h*100:.0f}%")
+        print(f"  吞吐 {tps:.1f} t/s | 功耗 {watts:.0f}W | 整机 ¥{cost/1e4:.1f}万")
+        print(f"  每token: 摊销 ¥{am*1e4:.2f}万元/万token ≈ ¥{am*1e6:.1f}µ/千token | 电费 ¥{en*1e6:.1f}µ")
+        print(f"  合计 ¥{cp*1e6:.1f}µ/token (限 ¥{args.tokcost*1e6:.0f}µ)  ✅")
+    else:
+        print(f"  ✗ 无解: 每token成本限 ¥{args.tokcost:.4f} 太紧（改高或降需求）")
+
+    # 数据中心：多卡阵列 —— 满足成本约束下, 取"单卡摊销最低 + 吞吐够大"配置
+    print(f"\n--- 场景B 数据中心 (机架阵列, 利用率85%, 寿命3年, Gen5×32=128GB/s) ---")
+    util = args.util if args.util else 0.85
+    life = args.life if args.life else 3.0
+    cands_d = []
+    for n in range(16, 225, 16):
+        for pg in range(64, 233, 8):
+            tps, watts, cost, h = design_bom(n, pg, 128)
+            cp, am, en = cost_per_token(cost, tps, watts, util, life)
+            if tps >= 20 and cp <= args.tokcost:
+                cands_d.append((round(cp,12), n, pg, tps, watts, cost, h))
+    if cands_d:
+        cp, n, pg, tps, watts, cost, h = min(cands_d, key=lambda r: r[0])  # 最低单token成本
+        am = cp - en
+        gpu_per_k = math.ceil(1000/tps)   # 1000t/s 需卡数
+        print(f"  单卡最优: {n}颗MAC + {pg:.0f}GB池({math.ceil(pg/8)}颗8GB), 命中{h*100:.0f}%")
+        print(f"  单卡吞吐 {tps:.1f} t/s | 功耗 {watts:.0f}W | 单卡 ¥{cost/1e4:.1f}万")
+        print(f"  每token: 摊销 ¥{am*1e6:.1f}µ | 电费 ¥{en*1e6:.1f}µ | 合计 ¥{cp*1e6:.1f}µ")
+        print(f"  集群规模 (1000 t/s)：{gpu_per_k} 卡 ≈ ¥{cost*gpu_per_k/1e4:.0f}万, "
+              f"{watts*gpu_per_k/1000:.0f} kW")
+    else:
+        print(f"  ✗ 无解: 每token成本限 ¥{args.tokcost:.4f} 太紧")
+
+    print(f"\n  注: 摊销假设利用率{util:.0%}×寿命{life:.0f}年；电价¥{args.elec}/kWh 可--elec调；"
+          f"命中率表为fixtures口径待真机验证")
 
 if args.tps:
     TGT = args.tps
