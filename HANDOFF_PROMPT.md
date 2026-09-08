@@ -126,7 +126,7 @@
 10. **L2 专家缓存预测式淘汰（predictive eviction，2026-09-07）——真机内核已换 brain，待验证**：
     - **一句话**：`moe-paging` 的 `choose_victim` 已从纯 LRU（按 `last_use`）改成累积热计数（按 `use_count`）。这是 L2 "预测式大脑"的真机移植，不是仿真。
     - **为什么成立**：k3 专家请求带 8 遍结构，每遍专家集是上一遍的**单调超集**（pass0⊆...⊆pass7）→ 同一批专家被 8 遍反复激活 → 保留"热常客"（累积热度）而非"最近用"（LRU）能跨遍驻留工作集。
-    - **量化对比（sim_cache）**：LRU@150 槽 36.24%（miss 63,824）→ predictive 88.46%（miss 11,551）= **HDD→SSD 复制/磁盘读 ÷5.6**（1120GB→203GB）。复现 `python3 sim_cache.py data/expert_trace.bin --slots 150 --policy predictive`。
+    - **量化对比（sim_cache）**：~~LRU@150 槽 36.24%（miss 63,824）→ predictive 88.46%（miss 11,551）= HDD→SSD 复制/磁盘读 ÷5.6~~ **【已推翻，见上方重大修正】现真机判为：小容量 LRU 优、中容量 heat 优、L2 容量+持久化才是主导**。复现 `python3 tools/sim_cache.py tests/fixtures/expert_trace.bin`（tools/ 版含 heat 列）。
     - **真机改动（已 commit 539bda1，自洽不添依赖）**：
       - `sparkmoe-src/moe-paging/moe-cache.h`：`cache_entry` + `uint64_t use_count`
       - `moe-cache.cpp:79`：`choose_victim` last_use→use_count（选热计数最低者淘汰）
@@ -138,7 +138,17 @@
       2. 真机每 pass 命中率曲线（验证单调超集：pass0~0% → pass7~100%）
       3. （可选）Qwen 跨 trace 翻转复现（确认方向性失败被 predictive 规避）
       4. 控制变量：cap 从 63/150 扫到满槽，画 hit% vs 槽数曲线（论文图 2）
-    - **论文题材**：`notes/predictive-eviction-paper.md` 已写好定位（短文/实验小节，非主脑）。真正新点 = "单调超集会话 → 热计数淘汰在线可兑现、无跨分布风险"；与 Qwen 跨 trace 翻转（`l2-cache-records-verdict.md` +10.3% 反亏）形成正反对照。
+
+> ### ⚠️ 重大修正（2026-09-08 PC 回传，推翻 predictive 原卖点）
+> **"predictive ÷5.6（88.46% vs 36.24%）"在 K3 完整 trace 上不成立，必须按以下真机裁决修正，勿再引用旧数字。**
+> - **核心发现**：LFU（heat）在 K3 单调超集 trace 上**退化**——8 遍 pass 是集合超集但**个体专家会退役**，count 高的老常客锁死槽位、新 pass 专家进不来 → 小容量命中崩（2.6GB: heat 3.28% vs LRU 36.24%，差 11 倍）。
+> - **真机 A/B**（2 token, L2 持久化）：heat 赢是 **L2 文件跨运行 meta 恢复的假象**，不代表策略本身更优。
+> - **首要结论**：K3 部署 **L2 容量 + meta 持久化 >> 淘汰策略**。200GB 大 L2 + 跨运行复用 = **100% 命中**（0 miss），heat/lru 差别被完全淹没 → `--l2-policy` 默认值对真实吞吐几乎无影响，不着急改。
+> - **单调超集本身仍成立**：`trace_monotone.py` 独立直读验证 **92/92 层 pass_i⊆pass_{i+1} 无一违反**（这是 trace 客观属性，非 sim 推断）——但"单调超集"不再能支撑"predictive 更优"的卖点，只能支撑"predictive 在线同 session 自适应"的机制描述。
+> - **sim_cache 全槽梯度**（`sim_cache.py` 补 heat 列后）：小容量 LRU 优、中容量（64-128GB）heat 反超、≥192GB 全部顶到 compulsory 90% 上限——策略相对优劣方向在 fixtures/真机两种 trace 下一致，但绝对数字严重依赖 trace 结构，不可跨 trace 外推。
+> - **论文定位需改**：原"predictive beats LRU"卖点作废；可落地的诚实表述是"单调超集会话的在线自适应淘汰" + "L2 容量/持久化主导命中"。证据：`docs/k3/K3_HEAT_VS_LRU.md`、`docs/k3/K3_L2_TRACE_COMPARISON.md`、`notes/moe-paging-repro-and-monotone-verification.md`（含 `trace_monotone.py` 复现）。
+> - **遗留**：fixtures `expert_trace.bin` 真实来源未确认；真机 trace 仅 ~8 token 样本短，如需更稳策略对比跑 `--gen 32+` 导出长 trace 再 sim。
+    - **论文题材**：~~`notes/predictive-eviction-paper.md` 已写好定位（短文/实验小节，非主脑）。真正新点 = "单调超集会话 → 热计数淘汰在线可兑现、无跨分布风险"；与 Qwen 跨 trace 翻转（`l2-cache-records-verdict.md` +10.3% 反亏）形成正反对照。~~ **【已修正】新卖点作废，诚实定位改为："单调超集会话的在线自适应淘汰机制"（LFU 会退化、LRU 更稳、L2 容量/持久化主导命中），见上方重大修正。原 paper 文档待 PC 侧同步改写。**
     - **诚实边界**：÷5.6 降的是 HDD→SSD 复制/miss 次数，**不改变 DRAM→GEMV 这个 t/s 主瓶颈**（那是 rtl/12、rtl/15 的活）。GPU 常驻显存时 trunk 税消失、本结论不适用。
     - **关联记录**：`notes/k3-online-feasibility-terminus.md`（÷5.6 在线可行性终局）、`notes/predictive-eviction-paper.md`（论文素材+证据链）、`notes/l2-cache-records-verdict.md`（跨分布坍缩点真机记录）。
 
