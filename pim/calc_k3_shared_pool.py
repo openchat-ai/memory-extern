@@ -204,7 +204,7 @@ if args.bom:
     life = args.life if args.life else 5.0
     cands_p = []
     for n in range(16, 225, 16):
-        for pg in range(64, 256, int(args.capstep)):
+        for pg in range(64, 257, int(args.capstep)):
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 64, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -229,7 +229,7 @@ if args.bom:
     life = args.life if args.life else 3.0
     cands_d = []
     for n in range(16, 225, 16):
-        for pg in range(64, 256, int(args.capstep)):
+        for pg in range(64, 257, int(args.capstep)):
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 128, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
