@@ -54,6 +54,8 @@ _p.add_argument("--qtty", type=float, default=0.5,
                 help="降频静音档频率比例 ×匹配档 (默认 0.5 → P降为1/8, tps降为一半, 噪音骤降)")
 _p.add_argument("--cooling", type=str, default="both",
                 help="DC散热方案对比: air|liquid|both (默认both, 算TCO与回本期)")
+_p.add_argument("--room", type=float, default=16.0,
+                help="机房室温 ℃ (默认16 = 冷信道; 影响风冷PUE: 16℃→1.32, 22℃→1.50)")
 args = _p.parse_args()
 DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
@@ -260,14 +262,15 @@ if args.bom:
 
         # 散热方案成本效益：液冷 vs 风冷 (DC 3年 85%利用率)
         if args.cooling in ("air","liquid","both"):
-            PUE_AIR, PUE_LIQ = 1.5, 1.1           # 整机房/IT功率
+            PUE_LIQ = 1.1                        # 液冷固定
+            PUE_AIR = 1.05 + 0.45*(args.room/22.0)**1.6   # 风冷随室温: 22℃→1.50, 19→1.41, 16→1.32
             en_air = en * PUE_AIR                 # 每token电费含空调分摊
             en_liq = en * PUE_LIQ
             # 液冷初装溢价: 冷板+CDU+管路 ≈ ¥800/kW·年 (经验: ¥2000/kW资本, 3年摊)
             liq_hw = watts * 3.0                   # ¥ per 卡 (2000/kW)
             amort_liq_hw = liq_hw / (tps * life*HOURS * util)   # 每token摊销
-            print(f"\n  ── 散热方案 TCO (每token, 电价¥{args.elec}/kWh) ──")
-            print(f"  风冷: 电费 ¥{en_air*1e6:.1f}µ/token (PUE {PUE_AIR}) | 初装低(热管+风扇)")
+            print(f"\n  ── 散热方案 TCO (每token, 电价¥{args.elec}/kWh, 室温{args.room:.0f}℃) ──")
+            print(f"  风冷: 电费 ¥{en_air*1e6:.1f}µ/token (PUE {PUE_AIR:.2f}) | 初装低(热管+风扇)")
             print(f"  液冷: 电费 ¥{en_liq*1e6:.1f}µ/token (PUE {PUE_LIQ}) + 摊销 ¥{amort_liq_hw*1e6:.1f}µ"
                   f" → 合计 ¥{(en_liq+amort_liq_hw)*1e6:.1f}µ")
             diff = en_air*1e6 - (en_liq+amort_liq_hw)*1e6
@@ -278,7 +281,8 @@ if args.bom:
             # 液冷盈亏平衡点: en·PUE_EQ = en·PUE_LIQ + 摊销
             pue_eq = PUE_LIQ + amort_liq_hw / en if en > 0 else 99.0
             print(f"  液冷盈亏平衡: 风冷PUE需 ≥ {pue_eq:.2f}（液冷PUE {PUE_LIQ} + 初装摊销）")
-            print(f"  → 高效机房PUE≤1.3用风冷; PUE≥1.4再考虑液冷")
+            verdict = "液冷划算" if PUE_AIR >= pue_eq else "风冷划算"
+            print(f"  → 室温{args.room:.0f}℃: 风冷PUE={PUE_AIR:.2f} {'>' if PUE_AIR>pue_eq else '<'} 平衡{pue_eq:.2f} → {verdict}")
     else:
         print(f"  ✗ 无解: 每token成本限 ¥{args.tokcost:.4f} 太紧")
 
