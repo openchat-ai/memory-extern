@@ -40,14 +40,44 @@ def row_norms(W, blk=1):
     n, d = W.shape
     if n % blk != 0:
         blk = 1
-    return np.linalg.norm(W.reshape(n // blk, blk, d).reshape(n // blk, blk * d), axis=1)
+    v = W.reshape(n // blk, blk, d).astype(np.float64).reshape(n // blk, blk * d)
+    return np.sqrt((v * v).sum(axis=1))
 
 def col_norms(W, blk):
     """按每 blk 列一组 → [d/blk]。o_proj 输出维度按 head 分组。"""
     n, d = W.shape
     if d % blk != 0:
         blk = 1
-    return np.linalg.norm(W.reshape(n, d // blk, blk), axis=(0, 2))
+    v = W.reshape(n, d // blk, blk).astype(np.float64)
+    return np.sqrt((v * v).sum(axis=(0, 2)))
+
+def gate_row_norms_clean(ti, gname):
+    """读 gate.weight 原始 BF16，剔除含 exp==0xFF 哨兵行后算行范数。
+    返回 (row_norms_clean, n_sentinel_rows, sentinel_rows)。哨兵行是 trun/bin 异常位，非有效权重。"""
+    m = ti.map[gname]
+    n, d = m["shape"]
+    with open(ti.binpath, "rb") as f:
+        f.seek(m["off"])
+        raw = f.read(int(np.prod(m["shape"], dtype=np.int64)) * m["dbytes"])
+    u = np.frombuffer(raw, dtype=np.uint16).reshape(n, d)
+    exp = (u >> 7) & 0xFF
+    sent_rows = np.nonzero((exp == 0xFF).sum(axis=1) > 0)[0]
+    keep = np.ones(n, dtype=bool)
+    keep[sent_rows] = False
+    u_clean = u[keep]
+    W = bf16_to_f32_export(u_clean)
+    rw = np.sqrt((W.astype(np.float64) ** 2).sum(axis=1))
+    return rw, len(sent_rows), sent_rows.tolist()
+
+def bf16_to_f32_export(w):
+    u = w.astype(np.uint32)
+    sign = ((u >> 15) & 1).astype(np.float32) * -2.0 + 1.0
+    exp = (u >> 7) & 0xFF
+    man = (u & 0x7F).astype(np.float32)
+    expf = exp.astype(np.float32)
+    expf = np.where(exp == 0xFF, np.float32(200.0), expf)
+    val = (1.0 + man / 128.0) * (2.0 ** (expf - 127.0))
+    return np.where(exp == 0, 0.0, val * sign)
 
 def stats(v):
     """非负数组 (范数) 的统计 + 剪枝代理。"""
@@ -173,16 +203,18 @@ def probe_moe(ti, L, ns):
             if n.endswith(sfx):
                 return ti.tensor(n)
         return None
-    g = get(".block_sparse_moe.gate.weight")
+    gname = next((n for n in ns if n.endswith(".block_sparse_moe.gate.weight")), None)
     gm = get(".mlp.gate_proj.weight")         # dense 层 (layer 0)
-    if g is None and gm is None:
+    if gname is None and gm is None:
         return None
     out["type"] = "dense_mlp" if gm is not None else "latent_moe"
-    if g is not None:
-        rw = row_norms(g, 1)                   # 896 专家路由行范数
+    if gname is not None:
+        rw, n_sent, sent_rows = gate_row_norms_clean(ti, gname)
         out["gate"] = {
             "expert_row_norm": stats(rw),
-            "gat_param": {"shape": list(g.shape)},
+            "n_sentinel_rows": n_sent,
+            "sentinel_rows": sent_rows[:20],
+            "gat_param": {"shape": list(ti.map[gname]["shape"])},
         }
     rd = get(".block_sparse_moe.routed_expert_down_proj.weight")
     ru = get(".block_sparse_moe.routed_expert_up_proj.weight")
