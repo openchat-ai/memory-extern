@@ -84,6 +84,21 @@ print(f"  新: 226×¥60     = ¥{new_mem_cost:>10,.0f} = {new_mem_cost/1e4:.1f}
 print(f"  净省: ¥{old_mem_total-new_mem_cost:>10,.0f} = {(old_mem_total-new_mem_cost)/1e4:.1f}万")
 print(f"  原因: 单价×7.5 但总量缩 {old_mem_total/new_mem_cost:.0f}倍 → 内存反省 {(1-new_mem_cost/old_mem_total)*100:.0f}%")
 
+# ===== PCB 面积预算 v2 (28-bank 近存) =====
+print(f"\n--- PCB 面积预算 v2 (28 bank × 8die合封 + 1 LPDDR) ---")
+die_area = 5.6
+bank_pkg = 8 * die_area * 1.6
+lpddr_die = 100.0
+bank_total = bank_pkg + lpddr_die
+area_banks = 28 * bank_total
+extra = 2000 + 500 + 700 + 1200
+CARD = 33384
+tot = area_banks + extra
+print(f"  每bank: 8die合封 {bank_pkg:.0f}mm² + LPDDR {lpddr_die:.0f}mm² = {bank_total:.0f}mm²")
+print(f"  28 bank = {area_banks:,.0f}mm² + 走线/PCIe/电源 {extra}mm² = {tot:,.0f}mm²")
+print(f"  卡 {CARD:,}mm² 占用 {tot/CARD*100:.1f}%  ✅")
+print(f"  ⚠️ 223颗×30W = {N_CHIPS*30/1000:.1f}kW 需液冷")
+
 print(f"\n{'='*70}")
 print(f"结论: ¥{new_total/1e4:.1f}万 / {TPS_K3:.1f}t/s ≈ H200 / 1/{(290*1e4)/new_total:.0f} 成本")
 print(f"{'='*70}")
