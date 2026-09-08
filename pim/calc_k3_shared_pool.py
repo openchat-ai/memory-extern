@@ -50,6 +50,8 @@ _p.add_argument("--capstep", type=float, default=32,
                 help="池容量阶梯 GB（默认 32 → 只枚举 64/96/128/160/192…；8GB颗粒凑整档数）")
 _p.add_argument("--noise", action="store_true",
                 help="输出噪音估算（风冷 dBA，功耗/Pf模型）")
+_p.add_argument("--qtty", type=float, default=0.5,
+                help="降频静音档频率比例 ×匹配档 (默认 0.5 → P降为1/8, tps降为一半, 噪音骤降)")
 args = _p.parse_args()
 DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
@@ -176,6 +178,11 @@ if args.bom:
     def noise_dba(watts, liquid=False):
         if liquid: return 22.0                      # 液冷: 泵+低噪风扇, 恒定
         return 15 + 18 * math.log10(max(watts,1))   # 风冷: 对数模型
+    def quiet_profile(n_chips, tps, watts, qtty):
+        """降频静音档: 频率×qtty → tps×qtty, 动态功率×(qtty³)"""
+        static = (2+2+2+1)*n_chips
+        mac_dyn = watts - static                       # 动态部分
+        return tps*qtty, mac_dyn*(qtty**3) + static
     def dies_for(pool_gb, die_gb):
         return max(1, math.ceil(pool_gb / die_gb))
     def bw_for(dies, die_gb):
@@ -215,15 +222,18 @@ if args.bom:
         print(f"  性价比解: {n}颗MAC + {pg:.0f}GB池({dies}颗{die_gb:.0f}GB), 命中{h*100:.0f}%")
         print(f"  吞吐 {tps:.1f} t/s | 功耗 {watts:.0f}W | 整机 ¥{cost/1e4:.1f}万")
         if args.noise:
-            print(f"  噪音: 风冷 ≈{noise_dba(watts):.0f} dBA | 液冷 ≈{noise_dba(watts,True):.0f} dBA "
-                  f"(液冷+¥3000 → 个人静音项)")
+            q_tps, q_watts = quiet_profile(n, tps, watts, args.qtty)
+            print(f"  噪音: 满吞吐 风冷≈{noise_dba(watts):.0f}dBA / "
+                  f"降频静音({args.qtty:.1f}×→{q_tps:.1f}t/s) 风冷≈{noise_dba(q_watts):.0f}dBA / "
+                  f"液冷≈{noise_dba(watts,True):.0f}dBA (+¥3000)")
+            print(f"        ↓ 降频 P∝f³: 功耗 {watts:.0f}W→{q_watts:.0f}W, 噪音 -{noise_dba(watts)-noise_dba(q_watts):.0f}dBA")
         print(f"  每token: 摊销 ¥{am*1e4:.2f}万元/万token ≈ ¥{am*1e6:.1f}µ/千token | 电费 ¥{en*1e6:.1f}µ")
         print(f"  合计 ¥{cp*1e6:.1f}µ/token (限 ¥{args.tokcost*1e6:.0f}µ)  ✅")
     else:
         print(f"  ✗ 无解: 每token成本限 ¥{args.tokcost:.4f} 太紧（改高或降需求）")
 
-    # 数据中心：多卡阵列 —— 满足成本约束下, 取"单卡摊销最低 + 吞吐够大"配置
-    # 噪音对机房不重要, 但功耗决定散热成本
+    # 数据中心：多卡阵列 —— 满足成本+单卡可承载约束下, 取"每卡吞吐最大"（高端导向）
+    # DC 追求机架吞吐密度, 能用高档配置就用; 噪音对机房不重要但功耗决定散热
     print(f"\n--- 场景B 数据中心 (机架阵列, 利用率85%, 寿命3年, Gen5×32=128GB/s) ---")
     util = args.util if args.util else 0.85
     life = args.life if args.life else 3.0
@@ -236,9 +246,9 @@ if args.bom:
                 if tps >= 20 and cp <= args.tokcost:
                     cands_d.append((round(cp,12), n, pg, tps, watts, cost, h, die_gb, dies, am, en))
     if cands_d:
-        cp, n, pg, tps, watts, cost, h, die_gb, dies, am, en = min(cands_d, key=lambda r: r[0])  # 最低单token成本
+        cp, n, pg, tps, watts, cost, h, die_gb, dies, am, en = max(cands_d, key=lambda r: r[3])  # 每卡吞吐最大
         gpu_per_k = math.ceil(1000/tps)   # 1000t/s 需卡数
-        print(f"  单卡最优: {n}颗MAC + {pg:.0f}GB池({dies}颗{die_gb:.0f}GB), 命中{h*100:.0f}%")
+        print(f"  高端解: {n}颗MAC + {pg:.0f}GB池({dies}颗{die_gb:.0f}GB), 命中{h*100:.0f}%")
         print(f"  单卡吞吐 {tps:.1f} t/s | 功耗 {watts:.0f}W | 单卡 ¥{cost/1e4:.1f}万")
         if args.noise:
             print(f"  噪音(机房忽略): 风冷 ≈{noise_dba(watts):.0f} dBA | 集中水冷 ≈22 dBA（数据中心常态）")
