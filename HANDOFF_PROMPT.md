@@ -157,8 +157,12 @@
 - [ ] 调度器 sched3/sched4——有 testbench，未验证（`:750`）
 > PIM-DIMM 路线已取代 CIM/GEMV，此档仅为追踪。
 
-**C. head_saliency（深度精简立项，已封存）**
-- 静态探针已写好且真机跑完（`results/head_saliency_*.json`）。**结论：层剪枝/early-exit 属质量换带宽，K3 top-16 已到下限，不构成主方向**（`independent-stack.md:604`）。跑完留档即可，**不再主动推进**；除非用户重启"深度精简"立项。
+**C. head_saliency（深度精简立项，已封存 → 真机已完成，结论定案）**
+- **真机全 93 层已跑完（2026-09-08，PC 回传）**，结论三连否定：剪头（W_o cv=0.003，无死头）/ 剪专家（gate cv≈0.105-0.15 均匀，无静态弱专家）/ early-exit（斜率≈0）→ **"深度精简"静态剪枝线彻底封存，别再跑**。
+- **发现哨兵行结构**：MLA 层 gate 前 45 行含 `exp==0xFF` 异常位（trunk 固定结构，非损坏），已用 `gate_row_norms_clean` 剔除。证据：`docs/k3/K3_HEAD_SALIENCY_GATE_SENTINEL.md` + `docs/k3/K3_SALIENCY_FULL_TABLE.md`。
+- **装载线交叉利好**：范数均匀=无静态热点 → 动态热度（predictive-eviction）才是唯一可动杠杆，LPDDR 按热度驻留自洽。
+- 遗留：哨兵行是否真实不可选专家 → 激活侧 H2 探针（可选）。
+- 关键文件顺序：`docs/k3/K3_SALIENCY_FULL_TABLE.md`（结论表）→ `K3_HEAD_SALIENCY_GATE_SENTINEL.md`（哨兵细节）→ `results/head_saliency_*.md`（原始）。
 
 ## 提交规范
 - message 风格参考 `git log --oneline -8`；只 stage 本任务文件；`master` 分支不动；push 仅当用户说。
