@@ -56,6 +56,8 @@ _p.add_argument("--cooling", type=str, default="both",
                 help="DC散热方案对比: air|liquid|both (默认both, 算TCO与回本期)")
 _p.add_argument("--room", type=float, default=16.0,
                 help="机房室温 ℃ (默认16 = 冷信道; 影响风冷PUE: 16℃→1.32, 22℃→1.50)")
+_p.add_argument("--summary", action="store_true",
+                help="输出决策总表（一页看全: 模型/池/两墙/BOM双场景/散热/结论）")
 args = _p.parse_args()
 DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
@@ -161,52 +163,52 @@ print(f"  K3 实际 : {TPS_K3:.1f} t/s  ← min(两墙), 瓶颈={'PCIe补miss' i
 print(f"  H200 单卡: {TPS_H200:.1f} t/s")
 print(f"  相对    : {TPS_K3/TPS_H200:.2f}x")
 
+# ===== 共享 BOM 计算函数（--bom / --summary 都用） =====
+HOURS = 365*24*3600
+
+def cost_per_token(total_cost, tps, watts, util, life_y):
+    life_s = life_y * HOURS
+    amort   = total_cost / (tps * life_s * util)
+    energy  = watts / tps * args.elec / 3.6e6        # W×s/token → kWh
+    return amort + energy, amort, energy
+
+def noise_dba(watts, liquid=False):
+    if liquid: return 22.0                      # 液冷: 泵+低噪风扇, 恒定
+    return 15 + 18 * math.log10(max(watts,1))   # 风冷: 对数模型
+
+def quiet_profile(n_chips, tps, watts, qtty=0.5):
+    """降频静音档: 频率×qtty → tps×qtty, 动态功率×(qtty³)"""
+    static = (2+2+2+1)*n_chips
+    mac_dyn = watts - static                       # 动态部分
+    return tps*qtty, mac_dyn*(qtty**3) + static
+
+def dies_for(pool_gb, die_gb=8.0):
+    return max(1, math.ceil(pool_gb / die_gb))
+
+def bw_for(dies, die_gb=8.0):
+    return dies * BWS_PER_DIE
+
+def design_bom(n_chips, pool_gb, pcie_bw, die_gb=8.0):
+    dies = dies_for(pool_gb, die_gb)
+    bw = bw_for(dies, die_gb)
+    h = hit_rate(pool_gb - TRUNK_GB) / 100.0
+    miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
+    t_ldd  = bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
+    t_pcie = pcie_bw / miss_pt if miss_pt > 1e-6 else 1e9
+    t_mac  = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN   # 满档算力
+    tps = min(t_ldd, t_pcie, t_mac)
+    # 匹配档频率（够吃 tps 即可）
+    f_match = tps * K3_MAC_PER_TOKEN / (n_chips * MAC_PER_CHIP * 1e9)
+    mac_dyn = 38.0 * n_chips * max(f_match, 0.01)**3
+    watts  = mac_dyn + (2+2+2+1)*n_chips
+    cost   = n_chips*DIE_COST + pool_gb*LPDDR_PRICE_NEW + new_pcb
+    return tps, watts, cost, h, dies
+
 if args.bom:
     print(f"\n{'='*70}")
     print(f"按每token成本 ≤ ¥{args.tokcost*1e6:.0f}µ 推 BOM（摊销+电费）")
     print(f"{'='*70}")
-    # 每 token 成本 = 摊销(整机价/寿命内token数) + 电费(功率/吞吐 × 电价)
-    # token 数 = 吞吐×秒×利用率；摊销 = 价 / (t/s×寿命秒×利用率)
-    HOURS = 365*24*3600
     K3_MAC = K3_MAC_PER_TOKEN
-
-    def cost_per_token(total_cost, tps, watts, util, life_y):
-        life_s = life_y * HOURS
-        amort   = total_cost / (tps * life_s * util)
-        energy  = watts / tps * args.elec / 3.6e6        # W×s/token → kWh
-        return amort + energy, amort, energy
-
-    # 扫描组合空间：MAC颗数(经济档) × (LPDDR容量, 颗粒档位) × PCIe档
-    # 颗粒档位: 每档 8/16/32GB 离散; 带宽 = 颗数×171(颗定带宽), 与档位无关
-    # 噪音模型(风冷): 功耗→dBA 近似 Pf曲线 (TDP 越大越吵)
-    def noise_dba(watts, liquid=False):
-        if liquid: return 22.0                      # 液冷: 泵+低噪风扇, 恒定
-        return 15 + 18 * math.log10(max(watts,1))   # 风冷: 对数模型
-    def quiet_profile(n_chips, tps, watts, qtty):
-        """降频静音档: 频率×qtty → tps×qtty, 动态功率×(qtty³)"""
-        static = (2+2+2+1)*n_chips
-        mac_dyn = watts - static                       # 动态部分
-        return tps*qtty, mac_dyn*(qtty**3) + static
-    def dies_for(pool_gb, die_gb):
-        return max(1, math.ceil(pool_gb / die_gb))
-    def bw_for(dies, die_gb):
-        return dies * BWS_PER_DIE
-
-    def design_bom(n_chips, pool_gb, pcie_bw, die_gb=8.0):
-        dies = dies_for(pool_gb, die_gb)
-        bw = bw_for(dies, die_gb)
-        h = hit_rate(pool_gb - TRUNK_GB) / 100.0
-        miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
-        t_ldd  = bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
-        t_pcie = pcie_bw / miss_pt if miss_pt > 1e-6 else 1e9
-        t_mac  = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC   # 满档算力
-        tps = min(t_ldd, t_pcie, t_mac)
-        # 匹配档频率（够吃 tps 即可）
-        f_match = tps * K3_MAC / (n_chips * MAC_PER_CHIP * 1e9)
-        mac_dyn = 38.0 * n_chips * max(f_match, 0.01)**3
-        watts  = mac_dyn + (2+2+2+1)*n_chips
-        cost   = n_chips*DIE_COST + pool_gb*LPDDR_PRICE_NEW + new_pcb
-        return tps, watts, cost, h, dies
 
     # 个人用户：桌面单卡 —— 满足成本约束下, 取"性价比最优"（每元买到的 t/s 最高, 且整机可负担）
     # 噪音：个人愿为静音买单 → 给出 风冷/液冷 两档（液冷+¥3000, dBA降~20）
@@ -426,3 +428,64 @@ print(f"  功耗: 匹配档 ≈{calc_power(F_MATCH_GHZ):,.0f}W / 满档 ≈{calc
 print(f"\n{'='*70}")
 print(f"结论: ¥{new_total/1e4:.1f}万 / {TPS_K3:.1f}t/s ≈ H200 / 1/{(290*1e4)/new_total:.0f} 成本")
 print(f"{'='*70}")
+
+# ===== 决策总表 (--summary) =====
+if args.summary:
+    def _best(mode, pcie_bw, tps_min, util, life):
+        best = None
+        for n in range(16, 225, 16):
+            for pg in range(64, 257, int(args.capstep)):
+                for die_gb in DIED_OPTS:
+                    tps, watts, cost, h, dies = design_bom(n, pg, pcie_bw, die_gb)
+                    cp, am, en = cost_per_token(cost, tps, watts, util, life)
+                    if tps < tps_min or cp > args.tokcost:
+                        continue
+                    key = tps/cost if mode=="bprice" else tps   # 个人: 性价比; DC: 高端
+                    if best is None or key > best[0]:
+                        best = (key, n, pg, tps, watts, cost, h, dies, cp, am, en)
+        return best
+
+    bp = _best("bprice", 64, 5, 0.25, 5.0)     # 个人
+    bd = _best("high",   128, 20, 0.85, 3.0)   # DC
+    PUE_AIR = 1.05 + 0.45*(args.room/22.0)**1.6
+    PUE_LIQ = 1.1
+    liq_hw = bd[4]*3.0 if bd else 0
+    amort_liq = liq_hw/(bd[3]*3*HOURS*0.85) if bd else 0
+    pue_eq = PUE_LIQ + amort_liq/bd[10] if bd and bd[10]>0 else 99
+
+    W = 72
+    line = lambda c="": "| " + c.center(W-4) + " |"
+    print("\n" + "="*W)
+    print(line("K3 共享池 决策总表"))
+    print("="*W)
+    f2 = lambda v: f"{v:.1f}".rjust(6)
+    print(f"| {'项':<26} {'默认口径':>20} |")
+    print(f"|{'─'*(28)}|{'─'*(26)}|")
+    print(f"| {'trunk/token (MXFP8)':<26} {f2(K3_TRUNK_PER_TOKEN_GB)} GB |")
+    print(f"| {'专家/token':<26} {f2(K3_EXPERT_PER_TOKEN_GB)} GB |")
+    print(f"| {'合计/token':<26} {f2(K3_TOTAL_PER_TOKEN_GB)} GB |")
+    print(f"| {'池容量(默认)':<26} {POOL_GB:.0f} GB = {N_MEM_DIES:.0f}颗 → {N_MEM_DIES*BWS_PER_DIE:.0f} GB/s |")
+    print(f"| {'命中率(默认池)':<26} {HIT_PCT:.0f}% (fixtures, 待真机) |")
+    print(f"| {'瓶颈墙':<26} {'PCIe补miss↔LPDDR池'} |")
+    tps_ref = args.tps if args.tps else TPS_K3
+    print(f"| {'K3 实际 t/s':<26} {f2(TPS_K3)} t/s |")
+    print("="*W)
+    print(f"| {'构件':<10} {'个人单卡':>18} {'数据中心':>18} |")
+    print(f"|{'─'*(12)}|{'─'*(20)}|{'─'*(20)}|")
+    r = lambda x, d=0: f"{x:.{d}f}".rjust(18)
+    print(f"| {'MAC':<10} {str(bp[1])+'颗':>18} {str(bd[1])+'颗':>18} |")
+    print(f"| {'池容量':<10} {str(int(bp[2]))+'GB/'+str(bp[7])+'颗':>18} {str(int(bd[2]))+'GB/'+str(bd[7])+'颗':>18} |")
+    print(f"| {'命中率':<10} {str(bp[6]*100)+'%':>18} {str(bd[6]*100)+'%':>18} |")
+    print(f"| {'吞吐':<10} {r(bp[3])+' t/s':>18} {r(bd[3])+' t/s':>18} |")
+    print(f"| {'功耗':<10} {r(bp[4])+' W':>18} {r(bd[4])+' W':>18} |")
+    print(f"| {'整机价':<10} {('¥%.1f万'%(bp[5]/1e4)).rjust(18)} {('¥%.1f万'%(bd[5]/1e4)).rjust(18)} |")
+    print(f"| {'摊销/电费':<10} ¥{bp[9]*1e6:.1f}/{bp[10]*1e6:.1f}µ{'':>8} ¥{bd[9]*1e6:.1f}/{bd[10]*1e6:.1f}µ{'':>8} |")
+    print(f"| {'每token':<10} ¥{bp[8]*1e6:.1f}µ{'':>12} ¥{bd[8]*1e6:.1f}µ{'':>12} |")
+    print(f"| {'1000t/s卡数':<10} {'—':>18} {math.ceil(1000/bd[3])}卡 ≈ ¥{bd[5]*math.ceil(1000/bd[3])/1e4:.0f}万 |")
+    print("="*W)
+    print(f"绝缘: 室温{args.room:.0f}℃ → 风冷PUE {PUE_AIR:.2f}, 液冷PUE {PUE_LIQ}; "
+          f"盈亏平衡风冷PUE≥{pue_eq:.2f} → {'液冷' if PUE_AIR>=pue_eq else '风冷'}划算; "
+          f"纯中央空调需卡级风排(自然对流不可行)")
+    if args.noise:
+        q_tps, q_w = quiet_profile(bp[1], bp[3], bp[4], args.qtty)
+        print(f"增益: 个人降频静音 {args.qtty:.1f}×→{q_tps:.1f}t/s {noise_dba(q_w):.0f}dBA (满{noise_dba(bp[4]):.0f}dBA), 液冷22dBA+¥3000")
