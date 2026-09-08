@@ -17,8 +17,19 @@ EXPERT_POOL_GB = POOL_GB - TRUNK_GB  # 171GB = 工作集专家（10,010对×17.5
 # ===== 芯片参数 (calculation-formulas.md) =====
 N_CHIPS        = 224
 MAC_PER_CHIP   = 128
-CLOCK_GHZ      = 1.0
+CLOCK_GHZ      = 1.0      # 满档（prefill/突发）
 DIE_COST       = 91       # 14nm die+封装+PHY（量产）
+
+# ===== 用户可调频率 (超频) =====
+import argparse
+_p = argparse.ArgumentParser(description="K3 共享池：用户可自定 MAC 频率（超频/降压）")
+_p.add_argument("--freq", type=float, default=None, nargs="+",
+                help="MAC 频率 GHz。默认 = DRAM 匹配档（~0.134，省电）；"
+                     "超频示例: --freq 0.5 / 1.0 可对比满档")
+args = _p.parse_args()
+
+K3_MAC_PER_TOKEN = 1.12e11   # 每token MACs（trunk 1.48e10 + 专家 9.72e10）
+TOTAL_MAC = N_CHIPS * MAC_PER_CHIP
 
 # ===== 内存参数 =====
 LPDDR_PRICE_OLD = 8       # ¥/GB（旧便宜假设）
@@ -35,6 +46,17 @@ H200_BW     = 4800.0
 # ===== 吞吐 =====
 TPS_K3      = POOL_BW / K3_TOTAL_PER_TOKEN_GB
 TPS_H200    = H200_BW / K3_TOTAL_PER_TOKEN_GB
+
+# ===== 频率匹配档（DRAM 瓶颈 → MAC 降到刚好够吃的频率）=====
+F_MATCH_GHZ = TPS_K3 * K3_MAC_PER_TOKEN / (TOTAL_MAC * 1e9)   # GHz
+
+def calc_power(freq_ghz):
+    """对齐 calc_performance.py 功耗模型（单颗）：
+       MAC_POWER=38W@1GHz(f³) + 漏电2W + SRAM2 + SerDes2 + 其他1 = 静态7W
+       动态随频率降, 静态(漏电)不降"""
+    mac_dyn = 38.0 * N_CHIPS * (freq_ghz / 1.0) ** 3
+    static = (2 + 2 + 2 + 1) * N_CHIPS
+    return mac_dyn + static
 
 # ===== 成本 =====
 # 旧口径（每颗独立含内存）
@@ -84,6 +106,27 @@ print(f"  新: 226×¥60     = ¥{new_mem_cost:>10,.0f} = {new_mem_cost/1e4:.1f}
 print(f"  净省: ¥{old_mem_total-new_mem_cost:>10,.0f} = {(old_mem_total-new_mem_cost)/1e4:.1f}万")
 print(f"  原因: 单价×7.5 但总量缩 {old_mem_total/new_mem_cost:.0f}倍 → 内存反省 {(1-new_mem_cost/old_mem_total)*100:.0f}%")
 
+# ===== 功耗/超频 (用户可调 --freq) =====
+print(f"\n--- 功耗 / 超频 (--freq {args.freq or '默认匹配档'}) ---")
+print(f"  DRAM 匹配档: MAC 最低频率 = {F_MATCH_GHZ*1000:.0f} MHz (P∝f³, 省电)")
+print(f"  满档:        1.0 GHz (prefill/突发 = 100 档)")
+
+freqs = args.freq if args.freq else [F_MATCH_GHZ, 0.5, 1.0]
+print(f"  {'频率':>8} {'算力TMAC/s':>10} {'MAC功耗W':>9} {'总功耗W':>8} {'vs匹配':>7} {'速度影响':>10}")
+for f in freqs:
+    tmac = TOTAL_MAC * f / 1e3
+    pw = calc_power(f)
+    speedup = f / F_MATCH_GHZ
+    need = TPS_K3 * K3_MAC_PER_TOKEN / 1e12
+    if tmac >= need * 1.05:
+        note = "DRAM瓶颈"
+    elif tmac >= need * 0.95:
+        note = "平衡≈匹配档"
+    else:
+        note = "MAC瓶颈←算力不足"
+    print(f"  {f:>7.3f}GHz {tmac:>10.2f} {pw:>8,.0f}W {pw:>6,.0f}W {speedup:>6.2f}x {note:>10}")
+print(f"  ↑ 匹配档仅是长期解码稳态频率；超频不提升稳态(K3受DRAM限), 但拉高prefill突发算力")
+
 # ===== PCB 面积预算 v2 (28-bank 近存) =====
 print(f"\n--- PCB 面积预算 v2 (28 bank × 8die合封 + 1 LPDDR) ---")
 die_area = 5.6
@@ -97,7 +140,7 @@ tot = area_banks + extra
 print(f"  每bank: 8die合封 {bank_pkg:.0f}mm² + LPDDR {lpddr_die:.0f}mm² = {bank_total:.0f}mm²")
 print(f"  28 bank = {area_banks:,.0f}mm² + 走线/PCIe/电源 {extra}mm² = {tot:,.0f}mm²")
 print(f"  卡 {CARD:,}mm² 占用 {tot/CARD*100:.1f}%  ✅")
-print(f"  ⚠️ 223颗×30W = {N_CHIPS*30/1000:.1f}kW 需液冷")
+print(f"  功耗: 匹配档 ≈{calc_power(F_MATCH_GHZ):,.0f}W / 满档 ≈{calc_power(1.0):,.0f}W (见上方超频档)")
 
 print(f"\n{'='*70}")
 print(f"结论: ¥{new_total/1e4:.1f}万 / {TPS_K3:.1f}t/s ≈ H200 / 1/{(290*1e4)/new_total:.0f} 成本")
