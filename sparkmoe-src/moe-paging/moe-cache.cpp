@@ -76,7 +76,7 @@ ggml_tensor * layer_cache::bind_tensor(const ggml_tensor * original, const tenso
 
 int32_t layer_cache::choose_victim(const std::vector<bool> & reserved) const {
     int32_t victim = -1;
-    uint64_t oldest = UINT64_MAX;
+    uint64_t coldest = UINT64_MAX;
     for (int32_t slot = 0; slot < n_slots; ++slot) {
         const auto & entry = entries[slot];
         if (reserved[slot] || entry.pinned || entry.active_refs != 0 || entry.state == entry_state::loading) {
@@ -85,8 +85,8 @@ int32_t layer_cache::choose_victim(const std::vector<bool> & reserved) const {
         if (entry.state == entry_state::empty || entry.state == entry_state::error) {
             return slot;
         }
-        if (entry.last_use < oldest) {
-            oldest = entry.last_use;
+        if (entry.use_count < coldest) {
+            coldest = entry.use_count;
             victim = slot;
         }
     }
@@ -139,6 +139,7 @@ void layer_cache::resolve(const int32_t * expert_ids, size_t count, int32_t * sl
         int32_t slot = expert_to_slot[expert];
         if (slot >= 0 && entries[slot].state == entry_state::ready) {
             entries[slot].last_use = ++clock;
+            entries[slot].use_count++;
             entries[slot].active_refs++;
             reserved[slot] = true;
             request_slots[expert] = slot;
@@ -162,6 +163,7 @@ void layer_cache::resolve(const int32_t * expert_ids, size_t count, int32_t * sl
         entry.active_refs = 1;
         entry.generation++;
         entry.last_use = ++clock;
+        entry.use_count = 1;
         reserved[slot] = true;
         request_slots[expert] = slot;
         misses.push_back({expert, slot, old_expert});

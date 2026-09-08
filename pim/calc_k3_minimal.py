@@ -120,7 +120,7 @@ print(f"功耗         : ~{n_dice_b * 28 + 50:.0f} W")
 
 # ===== 对标 =====
 h200_k3 = 4800 / K3_TRAFFIC_GB
-h200_cards_needed = math.ceil(K3_MODEL_GB / 141)  # H200 141GB each
+h200_cards_needed = math.ceil(K3_WEIGHT_GB / 141)  # H200 141GB each
 h200_total = h200_cards_needed * 350_000
 
 print(f"\n--- 对标 H200 ---")
