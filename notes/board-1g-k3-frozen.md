@@ -85,10 +85,11 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 ⇒ decode 每字回写 ≈ **3.4MB(KDA)+ 27.7KB(KV)≈ 3.43MB**, 全部只进主机 RAM。
 
 **板→主机写回路径(2026-09-09 改: 转载站 → DMA 弹性 FIFO)**: 片上不再攒批 ——
-  每层 diff(49KB)算完即推 DMA 弹性 FIFO(16-64KB, 异步无阻塞), 攒批/合并搬去主机侧。
-  49KB 已是高效 PCIe burst, 板上 0.5MB/s(3.43MB/token×0.15t/s)的涓流不需要大数组
-  (承 SRAM 域预算: 慢任务不许绑快资源)。⚠ 边界: S_b(48MB)与当前层 S(3MB)都进不了
-  765KB —— SRAM 是 MAC 热存储池, 不是家。
+  每层 diff(49KB)算完即推 DMA 弹性 FIFO(**128KB ≥ 单笔最大 payload 49KB**, 异步无阻塞),
+  攒批/合并搬去主机侧。49KB 已是高效 PCIe burst, 板上 0.5MB/s(3.43MB/token×0.15t/s)
+  的涓流不需要大数组(承 SRAM 域预算: 慢任务不许绑快资源); sim 验证:
+  FIFO<单笔49KB 结构性顶穿, 主机写 ≥ 266MB/s(预填峰产出率)即零停顿, decode 仅 0.3MB/s。
+  ⚠ 边界: S_b(48MB)与当前层 S(3MB)都进不了 765KB —— SRAM 是 MAC 热存储池, 不是家。
 
 **层流写回协议 v0(2026-09-09 草案, 喂 P1 SDMA / 主机模拟器):**
 
@@ -114,7 +115,7 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** ~512KB
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
   B-SRAM 300GB/s 级, 当 FIFO 是拿跑车拉砖): 转载站砍到 DMA 侧弹性 FIFO。
-  = 转载站 16-64KB(DMA 弹性缓冲, 攒批靠主机写合并, 不靠大数组)
+  = 转载站 128KB(DMA 弹性 FIFO: 单笔最大 payload 49KB, sim 验证最小=单笔; 攒批靠主机写合并, 不靠大数组)
   + **MAC 热存储池 ~320-416KB**(操作数 tile 多pass重用 / 当前层S头窗 / 草稿内部 —— RTL 按需分配)
   + scratch 96KB(router 排序 / softmax 分块 / ROPE·熵查表)
   铁律: SRAM 只放"单层一跳内、不随上下文/批次膨胀"的; 随流的(层切片/KV/重状态)全部走 bulk。
@@ -196,8 +197,10 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
       **已用真形状核对通过(§5 表)**, 只剩"输出头是否 tied"待全分片扫 output.weight
 - [ ] **词表剪枝质量**(`--head prune`): top-16K 保不保 argmax / PPL 不降
 - [ ] **草稿模型(EAGLE-3 内置)接受率 λ 实测**: 2-3× 目标调用减少, 杠杆未验证
-- [ ] **层流协议 spec + 主机模拟器**: 写回协议 v0 已在 §5(层序/FIFO流控/逐层物化/barrier),
-      预填批量 vs 生成 的字节序先跑对, 输出喂 P2 RTL + P1 SDMA
+- [x] **层流协议 spec + 主机模拟器**: v0 spec 在 §5, sim 在 `tools/sim_layer_flow.py`
+      —— 字节序对账(预填 3.2GB/decode 3.4MB 每字)与"批==生成"数学等价已 PASS;
+      FIFO=128KB(≥单笔49KB)/主机写≥266MB/s 零停顿已实测; 输出喂 P2 RTL + P1 SDMA
+      (V1 前缀含 69 层序) —— 2026-09-09 sim 落地
 - [ ] **DDR3 控制器实测**: 高云 IP 1333MT/s 满带宽是否真达 5.3GB/s(P1 第一关, 卡住全吹)
 - [ ] **M.2 NVMe 实测**: 槽是否真通 + 独立读带宽(3.5GB/s 目前是纸面)
 - [ ] **端到端验收**: 板 vs PC 引擎 logits 对比(沿用 rel<10% / argmax SAME 基线)
