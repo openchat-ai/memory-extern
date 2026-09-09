@@ -58,6 +58,8 @@ _p.add_argument("--room", type=float, default=16.0,
                 help="机房室温 ℃ (默认16 = 冷信道; 影响风冷PUE: 16℃→1.32, 22℃→1.50)")
 _p.add_argument("--summary", action="store_true",
                 help="输出决策总表（一页看全: 模型/池/两墙/BOM双场景/散热/结论）")
+_p.add_argument("--tiers", action="store_true",
+                help="产品线矩阵: 个人4档(微边/入门/大众/豪华) × 数据中心2×2(常规/豪华 × 风冷/液冷)")
 args = _p.parse_args()
 DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
@@ -489,3 +491,58 @@ if args.summary:
     if args.noise:
         q_tps, q_w = quiet_profile(bp[1], bp[3], bp[4], args.qtty)
         print(f"增益: 个人降频静音 {args.qtty:.1f}×→{q_tps:.1f}t/s {noise_dba(q_w):.0f}dBA (满{noise_dba(bp[4]):.0f}dBA), 液冷22dBA+¥3000")
+
+# ===== 产品线矩阵 (--tiers) =====
+if args.tiers:
+    def _tier_search(pcie_bw, tps_min, util, life, goal, pg_lo=64, pg_hi=257):
+        """goal: 'mincost'(整机¥最少) | 'high'(max t/s) | 'mincp'(min ¥/token)"""
+        best = None
+        for n in range(16, 225, 16):
+            for pg in range(pg_lo, pg_hi, int(args.capstep)):
+                for die_gb in DIED_OPTS:
+                    tps, watts, cost, h, dies = design_bom(n, pg, pcie_bw, die_gb)
+                    if tps < tps_min:
+                        continue
+                    cp, am, en = cost_per_token(cost, tps, watts, util, life)
+                    if cp > args.tokcost:
+                        continue
+                    key = {"mincost": 1/cost, "high": tps, "mincp": 1/cp}[goal]
+                    if best is None or key > best[0]:
+                        best = (key, n, pg, tps, watts, cost, h, dies, cp, am, en)
+        return best
+
+    print(f"\n{'='*70}")
+    print("产品线矩阵 (个人4档 × 数据中心 2×2)")
+    print(f"{'='*70}")
+
+    # ── 个人 4 档：按目标吞吐锚定（微型边缘/入门/大众/豪华） ──
+    print("\n--- 个人用户产品线 (单卡, Gen5×16, 25%利用率, 5年) ---")
+    tiers_p = [("微型边缘", 10), ("入门版", 30), ("大众版", 50), ("豪华版", 60)]
+    print(f"  {'档位':<10} {'MAC':>4} {'池GB/颗数':>10} {'命中%':>5} {'t/s':>6} {'功耗W':>7} {'整机¥':>4} {'每tokenµ':>8}")
+    for name, tgt in tiers_p:
+        goal = "high" if name == "豪华版" else "mincost"
+        b = _tier_search(64, tgt, 0.25, 5.0, goal, pg_hi=257)
+        if b is None:
+            print(f"  {name:<10}   无解 (≥{tgt}t/s 或 ≤¥{args.tokcost*1e6:.0f}µ)  ✗"); continue
+        _, n, pg, tps, watts, cost, h, dies, cp, am, en = b
+        print(f"  {name:<10} {n:>4}颗 {int(pg):>5}GB/{dies:>2}颗 {h*100:>4.0f}% {tps:>6.1f} {watts:>7.0f} ¥{cost/1e4:>3.1f}万 {cp*1e6:>7.1f}")
+
+    # ── 数据中心 2×2：常规=mincp / 豪华=max t/s × 风冷/液冷 ──
+    print("\n--- 数据中心产品线 (机架阵列, Gen5×32, 85%利用率, 3年) ---")
+    print("  散热: 风冷 = 中央空调+卡级风排 (卡自身风机, 非靠空调直接吹卡)")
+    PUE_AIR = 1.05 + 0.45*(args.room/22.0)**1.6
+    PUE_LIQ = 1.1
+    liq_hw_per_w = 3.0        # ¥2000/kW 冷板+CDU, 3年摊
+    for tier, goal in [("常规版", "mincp"), ("豪华版", "high")]:
+        b = _tier_search(128, 20, 0.85, 3.0, goal)
+        if b is None:
+            print(f"  {tier:<6} 无解 ✗"); continue
+        _, n, pg, tps, watts, cost, h, dies, cp, am, en = b
+        print(f"\n  {tier}: {n}颗MAC + {int(pg)}GB({dies}颗8GB) 命中{h*100:.0f}% → {tps:.1f}t/s")
+        print(f"     功耗 {watts:.0f}W | 整机 ¥{cost/1e4:.1f}万 | {math.ceil(1000/tps)}卡/1000t/s")
+        lihwa = watts*liq_hw_per_w/(tps*3*HOURS*0.85)    # 液冷初装摊销/卡/token
+        en_air = en*PUE_AIR; en_liq = en*PUE_LIQ
+        print(f"     风冷: 电费 ¥{en_air*1e6:.1f}µ (PUE {PUE_AIR:.2f}) 无初装费")
+        print(f"     液冷: 电费 ¥{en_liq*1e6:.1f}µ + 摊销 ¥{lihwa*1e6:.1f}µ (PUE {PUE_LIQ}) → 合计 ¥{(en_liq+lihwa)*1e6:.1f}µ")
+        d = en_air*1e6 - (en_liq+lihwa)*1e6
+        print(f"     → {'液冷省 ¥%.1fµ/token'%d if d>0 else '风冷省 ¥%.1fµ/token'%(-d)} (室温{args.room:.0f}℃)")
