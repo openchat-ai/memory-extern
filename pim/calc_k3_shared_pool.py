@@ -36,8 +36,8 @@ _p.add_argument("--tps", type=float, default=None,
                 help="目标吞吐 t/s → 反推组件清单（MAC颗数/LPDDR容量/PCIe/硬盘）")
 _p.add_argument("--bom", action="store_true",
                 help="按 每token成本 目标推出 个人/数据中心 BOM 清单")
-_p.add_argument("--tokcost", type=float, default=3e-5,
-                help="每 token 成本上限 ¥(单位µ, 默认 30µ=0.003厘, 摊销+电费)")
+_p.add_argument("--tokcost", type=float, default=8e-5,
+                help="每 token 成本上限 ¥(默认 80µ: 个人25%%利用率+¥60/GB池物理底, 2026-09-09改)")
 _p.add_argument("--util", type=float, default=None,
                 help="卡利用率 (默认: personal=0.25, dc=0.85)")
 _p.add_argument("--life", type=float, default=None,
@@ -114,7 +114,11 @@ MEM_GB_PER_DIE  = 8        # GB（新：共享池 226GB = 28颗 8GB）
 N_MEM_DIES      = POOL_GB / MEM_GB_PER_DIE
 
 # ===== 带宽计算 =====
-BWS_PER_DIE = 171.0        # 8ch LPDDR5X GB/s
+# 2026-09-09 修正: BWS_PER_DIE 之前误设为 171(那是"整 8ch 子系统"带宽)。
+# LPDDR5X die 是 16bit/通道: 10667MT/s×16bit/8 = 21.3 GB/s 每 die(通道)。
+# 参考: chip-count-calculation.md 每通道 21.3 GB/s; accelerator-plan V1-128G
+#       = 8ch 128GB 171GB/s 是整套卡。bandwidth 与 die 数 = 通道数对等(每 die 1ch)。
+BWS_PER_DIE = 21.3         # GB/s per 16bit lane (10667MT/s), 每 die 一通道
 POOL_BW     = N_MEM_DIES * BWS_PER_DIE
 H200_BW     = 4800.0
 
@@ -259,7 +263,7 @@ if args.bom:
     life = args.life if args.life else 5.0
     cands_p = []
     for n in range(16, 225, 16):
-        for pg in range(64, 257, int(args.capstep)):
+        for pg in range(64, 2049, int(args.capstep)):
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 64, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -287,7 +291,7 @@ if args.bom:
     life = args.life if args.life else 3.0
     cands_d = []
     for n in range(16, 225, 16):
-        for pg in range(64, 257, int(args.capstep)):
+        for pg in range(64, 2049, int(args.capstep)):
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 128, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -351,7 +355,7 @@ if args.tps:
     #    目标吞吐必须同时满足两墙 → 找最小池容量使 min(墙) ≥ 目标
     print(f"  ② LPDDR    : 按命中率表反查 专家池→容量, 要求池带宽与PCIe都 ≥ 目标")
     found = None
-    for exp_gb in range(0, 200, 2):
+    for exp_gb in range(0, 4000, 2):
         pool = TRUNK_GB + exp_gb
         dies = math.ceil(pool / MEM_GB_PER_DIE)
         bw = dies * BWS_PER_DIE
@@ -394,7 +398,7 @@ if args.scan:
     print(f"  {'池GB':>5} {'专家G':>5} {'命中%':>5} {'LPDDR限':>7} {'PCIe限':>7} {'实际':>6} {'突变?'}")
     prev = None
     rows = []
-    for pg in range(64, 234, 8):
+    for pg in range(64, 2049, 8):
         t_ldd, t_pcie, h = walls(pg, args.pcie)
         t = min(t_ldd, t_pcie)
         rows.append((pg, t_ldd, t_pcie, t, h))
@@ -476,7 +480,7 @@ if args.summary:
     def _best(mode, pcie_bw, tps_min, util, life):
         best = None
         for n in range(16, 225, 16):
-            for pg in range(64, 257, int(args.capstep)):
+            for pg in range(64, 2049, int(args.capstep)):
                 for die_gb in DIED_OPTS:
                     tps, watts, cost, h, dies = design_bom(n, pg, pcie_bw, die_gb)
                     cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -534,7 +538,7 @@ if args.summary:
 
 # ===== 产品线矩阵 (--tiers) =====
 if args.tiers:
-    def _tier_search(pcie_bw, tps_min, util, life, goal, pg_lo=64, pg_hi=257,
+    def _tier_search(pcie_bw, tps_min, util, life, goal, pg_lo=64, pg_hi=2049,
                      n_lo=8, n_step=8, pg_step=None, no_cpcap=False,
                      cost_lo=0, cost_hi=9e9):
         """goal: 'mincost'(整机¥最少) | 'high'(max t/s) | 'mincp'(min ¥/token)
@@ -588,15 +592,15 @@ if args.tiers:
             if _best_s is None or st > _best_s[3]:
                 _best_s = (0, sl_m, sl_gb, st, sw, sc, sh, 0, 0, 0, 1e-6)
     _print_tier("加速棒", _best_s, form=f"{int(_best_s[2])}GB DDR" if _best_s else "DDR池")
-    # 入门: ¥5k±10% → 64GB池 2-5t/s(命中18-40%)
+    # 入门: ¥5k±10% → 64GB池 2.8t/s(命中18%)  (物理: 池带宽8×21.3=170GB/s→2.1t/s)
     _print_tier("入门版", _tier_search(64, 2, 0.25, 5.0, "high",
                   pg_lo=64, n_lo=2, no_cpcap=True, cost_lo=4500, cost_hi=6000))
-    # 大众: ¥1-3万
-    _print_tier("大众版", _tier_search(64, 30, 0.25, 5.0, "high",
+    # 大众: ¥1-3万 → 池~150-480GB → 5-16t/s (物理: 每die 21.3GB/s, 命中满)
+    _print_tier("大众版", _tier_search(64, 5, 0.25, 5.0, "high",
                   pg_lo=160, n_lo=8, cost_lo=10000, cost_hi=35000))
-    # 豪华: ≥¥5万, 池凑整 1TB(1024GB=128颗8GB). 池到这个量已超算力墙需求, 整性好记
-    _print_tier("豪华版", _tier_search(64, 60, 0.25, 5.0, "high",
-                  pg_lo=1024, pg_hi=1025, n_lo=16, cost_lo=50000))
+    # 豪华: ≥¥5万, 池 1TB(1024GB=128die) → 33.5t/s 物理封顶 (更多池=线性加带宽)
+    _print_tier("豪华版", _tier_search(64, 20, 0.25, 5.0, "high",
+                  pg_lo=768, n_lo=16, cost_lo=50000, pg_hi=2049))
 
     # ── 数据中心 2×2：常规=mincp / 豪华=max t/s × 风冷/液冷 ──
     print("\n--- 数据中心产品线 (机架阵列, Gen5×32, 85%利用率, 3年) ---")
@@ -605,7 +609,7 @@ if args.tiers:
     PUE_LIQ = 1.1
     liq_hw_per_w = 3.0        # ¥2000/kW 冷板+CDU, 3年摊
     for tier, goal in [("常规版", "mincp"), ("豪华版", "high")]:
-        b = _tier_search(128, 20, 0.85, 3.0, goal)
+        b = _tier_search(128, 20, 0.85, 3.0, goal, pg_hi=2049)
         if b is None:
             print(f"  {tier:<6} 无解 ✗"); continue
         _, n, pg, tps, watts, cost, h, dies, cp, am, en = b
@@ -659,7 +663,7 @@ if args.cabinet:
         ctrl_name = "FPGA 调度器"
         ctrl_cost = 3000.0
         ctrl_note = "FPGA只管调度+IO, 推理运行时由外接电脑CPU执行"
-    mem_price = dies*LPDDR_PRICE_NEW
+    mem_price = pg*LPDDR_PRICE_NEW
     mac_price = nm*DIE_COST
     chassis   = 2000.0
     total = dsk_cost + mem_price + mac_price + ctrl_cost + chassis

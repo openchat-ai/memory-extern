@@ -41,8 +41,9 @@ K3 = dict(
 )
 
 # ───────── 2. 带宽常量 (与已有脚本一致) ─────────
+# LPDDR5X 每 die(16bit通道) 21.3GB/s @10667MT/s (chip-count-calculation.md)
 MEM_GB_PER_DIE = 8
-BWS_PER_DIE = 171.0          # GB/s LPDDR5X
+BWS_PER_DIE = 21.3           # GB/s 每 16bit lane (非 171: 那是整 8ch 子系统)
 PCIEX4 = 2.95                # GB/s PCIe x4 有效 (FPGA 板上)
 SFP20G = 2.5                 # GB/s 2×10GbE 全双工 (SFP+ 理论 2.5GB/s, 保守 0.8→2.0)
 GBE    = 0.125               # GB/s 1GbE
@@ -141,7 +142,7 @@ def main():
     bpe_table = vocab * 32 + merges * 8          # 词元表 32B/词 + merge pair 8B
     print(f"  词表 {vocab:,} + merge {merges:,} → 表 {bpe_table/1e6:.0f}MB (放 DDR3, 表驱动)")
     print(f"  查找引擎 LUT ~6K (哈希查表), 每 token 输出 = 1 token 但输入瞬态仅 ~KB 级,")
-    print(f"  DDR3 表读带宽 5.3GB/s 撑 {5.3e9/4:.0f} tok/s BP\|字/s ≫ {tps:.0f} t/s — 非墙")
+    print(f"  DDR3 表读带宽 5.3GB/s 撑 {5.3e9/4:.0f} tok/s, 非墙 (BPE 查表)")
 
     # KV 端
     print(f"\n-- KV cache 总账 (MLA latent, KDA 无) --")
