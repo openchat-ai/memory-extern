@@ -24,6 +24,8 @@
 元素→字节: × 8.0625/8(每元素 8bit 码 + per-128 scale)。
 对账: 69×632 + 24×419 ≈ 52.5GB 量化主体 + 白名单 BF16/F32 ≈ 55.6GB ✓
 
+> 注: 632/419 未含 router gate(每层 896×7168≈6.5MB BF16 白名单)与 e_score 偏置, 在 1.2GB 白名单余量内。
+
 ## 3. 头/实体分离(eere 修正, 冻结)
 
 trunk 内每层 `routed_expert [3584×7168]×2 ≈ 51M` 元素是**路由头/索引**(记录本层 896 专家在实体库的 offset)。
@@ -76,5 +78,16 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 - [ ] **拆 trunk**: `tools/trunk2layers.py` 把 MXFP8 trunk 按 93 层切成独立切片文件
       (v1 632MB / v2 419MB) + 每层清单(张量/形状/offset/路由头→专家实体 offset),
       供板子逐层流式取数; 顺带在 PC 上实测 93 层逐层字节, 核 632/419 与外推误差
+- [ ] **专家库侧索引/装配**: 1413GB 实体库按(层→offset)建索引 + 按 top-16 装配流, 与拆 trunk 配套
+- [ ] **router 先行**: 每层 gate(6.5MB)+e_score 装载 → top-16 选择必须先于专家抽取(读 12.8MB 后拉实体)
+- [ ] **embed/output 接入**: 4.4GB 超出 1GB, tokenizer+embed 查表方案未定(分块/SSD 直查)
 - [ ] `--gen 32+` 真机 trace: 专家频率/union → 定 281MB 槽命中率与预取策略
+- [ ] **端到端验收**: 板 vs PC 引擎 logits 对比(沿用 rel<10% / argmax SAME 基线)
 - [ ] 书场景: KV 迁主机后的 PCIe 双流(权重+KV)吞吐实测
+
+## 10. 工程阶段(缺口: 文档此前只有数据准备, 没写"算")
+
+- **P0 数据**: 拆 trunk / 专家库索引 / PC trace —— 第 9 节全部
+- **P1 搬运**: DDR3 控制器(高云 IP 1333MT/s) + M.2 NVMe 读引擎(按层流 + 张量微流水双缓冲)
+- **P2 算(最大头)**: 推理引擎 RTL —— 93 层循环 + 69 KDA/24 MLA + router + 采样; 138K LUT 预算
+- **P3 端到端**: tokenizer/embed 接入 + KV 落区 + 验收(第 9 节 logits 对比)
