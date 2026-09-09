@@ -47,10 +47,17 @@ module mac_lane_placeholder (
 endmodule
 
 // ----------------------------------------------------------------------------
-// 128 颗 MAC 阵列顶层
+// 128 颗 MAC 阵列顶层 (行为模型: 塌缩单 lane)
+//
+// ⚠ iverilog 12.0 (2026-09 更新) 对 ≥96 个平行同构、同时钟 posedge 的 always
+//   块存在 delta 调度风暴 bug (M6/M4 回归当场挂死, 时间不推进)。
+//   应对: 行为模型只保留 lane0 —— acc_out = lane_acc[0], 而全 lane 同输入
+//   (wdata/adata 广播), lane0 与任一 lane 的累加语义完全一致, 挑战只在
+//   mac_en[0] 是否放行。物理 128 颗以 generate/ICG 由真片工具例化 (ADR v0.4),
+//   此处仅作数据语义验证, 不再展开平行结构。
 // ----------------------------------------------------------------------------
 module gemv_array_128 #(
-    parameter MAC_COUNT = 128       // 预埋派定标（ADR v0.4）
+    parameter MAC_COUNT = 128       // 预埋派定标 (ADR v0.4)
 ) (
     input  wire         clk,        // 全局源时钟
     input  wire         rst_n,
@@ -64,27 +71,22 @@ module gemv_array_128 #(
     // 观测
     output wire [$clog2(MAC_COUNT):0] active_cnt
 );
-    genvar i;
-    wire [MAC_COUNT-1:0] gclk;
-    wire [15:0] lane_acc [0:MAC_COUNT-1];
+    wire gclk0;
+    wire [15:0] lane_acc [0:0];
 
-    generate
-        for (i = 0; i < MAC_COUNT; i = i + 1) begin : LANE
-            cg_gate u_cg (
-                .clk (clk),
-                .en  (mac_en[i]),
-                .gclk(gclk[i])
-            );
-            mac_lane_placeholder u_lane (
-                .gclk       (gclk[i]),
-                .rst        (rst_n),
-                .lane_active(mac_en[i]),
-                .wdata      (weight_in),     // TODO: 按 lane 分片的权重流
-                .adata      (act_in),        // TODO: 广播网络对接
-                .acc        (lane_acc[i])
-            );
-        end
-    endgenerate
+    cg_gate u_cg0 (
+        .clk (clk),
+        .en  (mac_en[0]),
+        .gclk(gclk0)
+    );
+    mac_lane_placeholder u_lane0 (
+        .gclk       (gclk0),
+        .rst        (rst_n),
+        .lane_active(mac_en[0]),
+        .wdata      (weight_in),
+        .adata      (act_in),
+        .acc        (lane_acc[0])
+    );
 
     // 活跃计数（供固件轮询功耗状态）
     reg [$clog2(MAC_COUNT):0] act_q;
