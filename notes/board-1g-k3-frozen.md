@@ -218,6 +218,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 ## 10. 工程阶段(缺口: 文档此前只有数据准备, 没写"算")
 
 - **P0 数据**: 拆 trunk / 专家库索引 / PC trace —— 第 9 节全部
-- **P1 搬运**: DDR3 控制器(高云 IP 1333MT/s) + M.2 NVMe 读引擎(按层流 + 张量微流水双缓冲)
+- **P1 搬运**: DDR3 控制器(高云 IP 1333MT/s) + M.2 NVMe 读引擎(按层流 + 张量微流水双缓冲);
+  结构校验已落地 `tools/sim_prefill_pipe.py`(A-tile 复用 2.27→0.93GB、736≤765、NVMe 稳坐墙)
 - **P2 算(最大头)**: 推理引擎 RTL —— 93 层循环 + 69 KDA/24 MLA + router + 采样; 138K LUT 预算(账: 图执行器~27%, 能装下)
 - **P3 端到端**: tokenizer/embed 接入 + 状态的家落位(S 主机/NVMe, S_b 板上)+ 验收(第 9 节 logits 对比)
