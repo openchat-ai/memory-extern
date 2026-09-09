@@ -52,28 +52,38 @@ COMPONENT = {
 # ═══════════════════════ 2b. 图执行器（泛化控制面）成本模型 ════════════════════
 # 泛化 = 把「写死单模型的 FSM」换成「指令驱动的数据流调度器」。
 # 固定开销从 ~29,700（写死FSM）涨到图执行器；每多一项通用性 = 多一截解码/调度逻辑。
+# ⚠️ 出处诚实标注: 下表为「按 simd_mac_array.v 同类控制逻辑经验」的 3× 假设区间，
+#    非实测 —— 需要 RTL 综合后才钉死。数值取乐观/中估/悲观三行, 结论条用中估。
 GRAPH = {
-    "fsm_k3_lut":          29_700,  # 原固定开销：只跑 K3 的 FSM
+    "fsm_k3_lut":          29_700,  # 原固定开销：只跑 K3 的 FSM（simd_mac_array 累计）
     # 图执行器新增组件（都是「读指令→分发→等完成」的通用骨架，与具体模型无关）
-    "instr_fetch_decode":   6_000,  # 指令取指/解码（定长指令字 → 算子id/维度/地址三元组）
-    "scheduler_queues":     8_000,  # 多算子就绪队列 + 优先级仲裁（数据流依赖分析）
-    "tensor_addr_engine":   5_000,  # 维度→地址生成（张量布局基址+步长，参数表驱动）
-    "obj_registers":        3_000,  # 模型描述表 / 算子表缓存读口（DDR3 里的模型描述）
-    "overlay_mux":          1_500,  # 算子结果回写路选（残差/中间缓冲布局）
-    "per_op_lut":             120,  # 每增加一种算子类型：解码分支 + 数据通路
+    # 每项 = [乐观, 中估, 悲观]，来源: lane LUT 12/54/90 的换算孔径(每 lane 含控制器~2-4%)
+    "instr_fetch_decode":   [4_000,  6_000,  10_000],  # 指令取指/解码（定长指令字）
+    "scheduler_queues":     [5_000,  8_000,  14_000],  # 就绪队列 + 优先级仲裁
+    "tensor_addr_engine":   [3_000,  5_000,   9_000],  # 维度→地址生成
+    "obj_registers":        [2_000,  3_000,   5_000],  # 模型描述表缓存读口
+    "overlay_mux":          [1_000,  1_500,   2_500],  # 算子结果回写路选
+    "per_op_lut":           [  40,    120,     300],   # 每算子解码分支
     "ops_k3_core":             8,   # K3 需要的核心算子集（GEMV/Router-GEMV/ROPE/
-                                     #   SiTU-GLU/RMSNorm/Dequant/KV-save/KV-load）
+                                     #   SiTU-GLU/RRMSNorm/Dequant/KV-save/KV-load）
 }
+GRAPH_MODE = "mid"   # 用乐观/中估/悲观哪一列: opt/mid/pes
+
+def graph_lut_item(key):
+    """取值并标注来源区间。key 是 GRAPH 里的数组项名。"""
+    v = GRAPH[key]
+    if isinstance(v, list):
+        idx = {"opt": 0, "mid": 1, "pes": 2}[GRAPH_MODE]
+        return v[idx]
+    return v
 
 def graph_engine_lut(n_core_ops, n_extra_ops=0):
-    """图执行器固定开销。operator集判断是「覆盖范围」的通用选择，
-    与运行哪个模型无关——这是它与 FSM 的本质区别。"""
-    fixed = (GRAPH["instr_fetch_decode"] + GRAPH["scheduler_queues"]
-             + GRAPH["tensor_addr_engine"] + GRAPH["obj_registers"]
-             + GRAPH["overlay_mux"])
-    total = fixed + GRAPH["per_op_lut"] * (n_core_ops + n_extra_ops)
-    return dict(fixed=fixed, per_op=GRAPH["per_op_lut"] * (n_core_ops + n_extra_ops),
-                total=total)
+    """图执行器固定开销（按 GRAPH_MODE 取 opt/mid/pes 一列）。"""
+    fixed = (graph_lut_item("instr_fetch_decode") + graph_lut_item("scheduler_queues")
+             + graph_lut_item("tensor_addr_engine") + graph_lut_item("obj_registers")
+             + graph_lut_item("overlay_mux"))
+    per = graph_lut_item("per_op_lut") * (n_core_ops + n_extra_ops)
+    return dict(fixed=fixed, per_op=per, total=fixed+per)
 
 # ═══════════════════════ 3. K3-MoE 流量账（k3-verdict 实测）═══════════════════
 # 2026-08-29 修正④：trunk 保留 fp16 → 108.8GB/pass（原始字节），不再是量化 36GB。
@@ -227,17 +237,17 @@ def main():
     print("G. 图执行器 RTL: 泛化换模型的资源账 (把 FSM 换成指令驱动调度器)")
     print("─" * 76)
     print(f"  原 K3 写死 FSM 固定开销:        {GRAPH['fsm_k3_lut']:,} LUT")
-    print(f"  图执行器固定开销 (读指令→调度→发MAC):")
-    print(f"    指令取指/解码                {GRAPH['instr_fetch_decode']:,}")
-    print(f"    调度队列/仲裁                {GRAPH['scheduler_queues']:,}")
-    print(f"    张量地址生成                  {GRAPH['tensor_addr_engine']:,}")
-    print(f"    模型描述表缓存口              {GRAPH['obj_registers']:,}")
-    print(f"    算子结果回写路选              {GRAPH['overlay_mux']:,}")
-    fixed_graph = (GRAPH["instr_fetch_decode"] + GRAPH["scheduler_queues"]
-                   + GRAPH["tensor_addr_engine"] + GRAPH["obj_registers"]
-                   + GRAPH["overlay_mux"])
+    print(f"  图执行器固定开销 (读指令→调度→发MAC) [Graph mode={GRAPH_MODE}, 假设区间见 GRAPH dict]:")
+    print(f"    指令取指/解码                {graph_lut_item('instr_fetch_decode'):,}")
+    print(f"    调度队列/仲裁                {graph_lut_item('scheduler_queues'):,}")
+    print(f"    张量地址生成                  {graph_lut_item('tensor_addr_engine'):,}")
+    print(f"    模型描述表缓存口              {graph_lut_item('obj_registers'):,}")
+    print(f"    算子结果回写路选              {graph_lut_item('overlay_mux'):,}")
+    fixed_graph = (graph_lut_item("instr_fetch_decode") + graph_lut_item("scheduler_queues")
+                   + graph_lut_item("tensor_addr_engine") + graph_lut_item("obj_registers")
+                   + graph_lut_item("overlay_mux"))
     print(f"    小计                         {fixed_graph:,} LUT")
-    print(f"    + 每算子解码分支              {GRAPH['per_op_lut']}/算子")
+    print(f"    + 每算子解码分支              {graph_lut_item('per_op_lut')}/算子 (乐观{GRAPH['per_op_lut'][0]} / 悲观{GRAPH['per_op_lut'][2]})")
     ops_add = GRAPH["ops_k3_core"] + 2   # +Router/GEMV/Dequant 各算通用算子
     core_g = graph_engine_lut(ops_add)
     print(f"  [仅覆盖 K3 核心算子 {ops_add} 种] 合计 "
@@ -250,8 +260,12 @@ def main():
         print(f"  {label:30s} = {r['total']:5,} LUT "
               f"(固定{fixed_graph:,} + 算子{r['per_op']:,}) = {lut_pct(r['total']):.1f}%")
     diff = core_g["total"] - GRAPH["fsm_k3_lut"]
-    print(f"\n  泛化代价 (图执行器 − 写死FSM) = +{diff:,} LUT "
-          f"(+{lut_pct(diff):.1f}个百分点)")
+    if diff >= 0:
+        print(f"\n  泛化代价 (图执行器 − 写死FSM) = +{diff:,} LUT "
+              f"(+{lut_pct(diff):.1f}个百分点)")
+    else:
+        print(f"\n  泛化反而省 {abs(diff):,} LUT "
+              f"(-{lut_pct(abs(diff)):.1f}个百分点): 通用调度器固定开销 < 专用FAM映射")
     print(f"  交换: 换模型从「重烧位流/重综合」→「换 DDR3 模型描述表」.")
 
     # ── H. 图执行器 × MAC 面积联合 ──
