@@ -206,6 +206,18 @@ def design_bom(n_chips, pool_gb, pcie_bw, die_gb=8.0):
     cost   = n_chips*DIE_COST + pool_gb*LPDDR_PRICE_NEW + new_pcb
     return tps, watts, cost, h, dies
 
+def design_edge(n_chips, pcie_bw, pcb_cost=150):
+    """无池纯流式(微边): 每token整读81.43GB从PCIe实时拉, 卡上只MAC+邮票PCB
+       → tps = min(PCIe带宽/81.43, MAC满档算力), 价格极限低几百块"""
+    t_pcie = pcie_bw / K3_TOTAL_PER_TOKEN_GB
+    t_mac  = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN
+    tps = min(t_pcie, t_mac)
+    f_match = tps * K3_MAC_PER_TOKEN / (n_chips * MAC_PER_CHIP * 1e9)
+    mac_dyn = 38.0 * n_chips * max(f_match, 0.01)**3
+    watts  = mac_dyn + (2+2+2+1)*n_chips
+    cost   = n_chips*DIE_COST + pcb_cost
+    return tps, watts, cost, 0.0, 0
+
 if args.bom:
     print(f"\n{'='*70}")
     print(f"按每token成本 ≤ ¥{args.tokcost*1e6:.0f}µ 推 BOM（摊销+电费）")
@@ -495,16 +507,18 @@ if args.summary:
 # ===== 产品线矩阵 (--tiers) =====
 if args.tiers:
     def _tier_search(pcie_bw, tps_min, util, life, goal, pg_lo=64, pg_hi=257,
-                     n_lo=8, n_step=8, pg_step=None, no_cpcap=False):
+                     n_lo=8, n_step=8, pg_step=None, no_cpcap=False,
+                     cost_lo=0, cost_hi=9e9):
         """goal: 'mincost'(整机¥最少) | 'high'(max t/s) | 'mincp'(min ¥/token)
-           no_cpcap: 豁免每token成本上限(微型档: 能跑就卖, 摊销不设限)"""
+           no_cpcap: 豁免每token成本上限(微型档: 能跑就卖, 摊销不设限)
+           cost_lo/cost_hi: 价位窗(整机¥, 挡价位锚定产品线)"""
         pg_step = pg_step or int(args.capstep)
         best = None
         for n in range(n_lo, 225, n_step):
             for pg in range(pg_lo, pg_hi, pg_step):
                 for die_gb in DIED_OPTS:
                     tps, watts, cost, h, dies = design_bom(n, pg, pcie_bw, die_gb)
-                    if tps < tps_min:
+                    if tps < tps_min or not (cost_lo <= cost <= cost_hi):
                         continue
                     cp, am, en = cost_per_token(cost, tps, watts, util, life)
                     if not no_cpcap and cp > args.tokcost:
@@ -518,20 +532,32 @@ if args.tiers:
     print("产品线矩阵 (个人4档 × 数据中心 2×2)")
     print(f"{'='*70}")
 
-    # ── 个人 4 档：按目标吞吐锚定（微型边缘/入门/大众/豪华） ──
-    print("\n--- 个人用户产品线 (单卡, Gen5×16, 25%利用率, 5年) ---")
-    tiers_p = [("微型边缘", 3, dict(pg_lo=64, n_lo=8, no_cpcap=True)),
-               ("入门版", 30, dict(pg_lo=160)),
-               ("大众版", 50, dict(pg_lo=192)),
-               ("豪华版", 60, dict(pg_lo=224))]
-    print(f"  {'档位':<10} {'MAC':>4} {'池GB/颗数':>10} {'命中%':>5} {'t/s':>6} {'功耗W':>7} {'整机¥':>4} {'每tokenµ':>8}")
-    for name, tgt, kw in tiers_p:
-        goal = "high" if name == "豪华版" else "mincost"
-        b = _tier_search(64, tgt, 0.25, 5.0, goal, **kw)
+    # ── 个人 4 档：按价位锚定 ──
+    print("\n--- 个人用户产品线 (单卡/卡, 25%利用率, 5年) ---")
+    print("  价位锚定: 微型≤¥1000(纯流式无池) | 入门¥5k | 大众¥1-3万 | 豪华≥¥5万")
+    print(f"  {'档位':<10} {'形态':>6} {'MAC':>4} {'池':>7} {'命中%':>5} {'t/s':>6} {'功耗W':>6} {'整机¥':>6}")
+
+    def _print_tier(name, b, edge=False):
         if b is None:
-            print(f"  {name:<10}   无解 (≥{tgt}t/s 或 ≤¥{args.tokcost*1e6:.0f}µ)  ✗"); continue
+            print(f"  {name:<10}   无解(价位+吞吐不可兼)  ✗"); return
         _, n, pg, tps, watts, cost, h, dies, cp, am, en = b
-        print(f"  {name:<10} {n:>4}颗 {int(pg):>5}GB/{dies:>2}颗 {h*100:>4.0f}% {tps:>6.1f} {watts:>7.0f} ¥{cost/1e4:>3.1f}万 {cp*1e6:>7.1f}")
+        form = "纯流式" if edge else f"{int(pg)}GB"
+        hit = "—" if edge else f"{h*100:.0f}%"
+        print(f"  {name:<10} {form:>6} {n:>4}颗 {hit:>6} {tps:>6.1f} {watts:>6.0f} ¥{cost/1e4:>5.2f}万")
+
+    # 微型边缘: 纯流式(无池), 券价极限. PCIe=Gen5×16(64GB/s)宿主主机 → tps=64/81.43=0.79
+    # 只需1颗MAC凑算力(t_mac=1×128e9/1.12e11=1.14t/s > 0.79), 成本=DIE+邮票PCB
+    edge_tps, edge_w, edge_cost, _, _ = design_edge(1, 64)
+    _print_tier("微型边缘", (0, 1, 0, edge_tps, edge_w, edge_cost, 0, 0, 0, 0, 1e-6), edge=True)
+    # 入门: ¥5k±10% → 64GB池 2-5t/s(命中18-40%)
+    _print_tier("入门版", _tier_search(64, 2, 0.25, 5.0, "high",
+                  pg_lo=64, n_lo=2, no_cpcap=True, cost_lo=4500, cost_hi=6000))
+    # 大众: ¥1-3万
+    _print_tier("大众版", _tier_search(64, 30, 0.25, 5.0, "high",
+                  pg_lo=160, n_lo=8, cost_lo=10000, cost_hi=35000))
+    # 豪华: ≥¥5万, 池加大到1TB
+    _print_tier("豪华版", _tier_search(64, 60, 0.25, 5.0, "high",
+                  pg_lo=224, n_lo=16, cost_lo=50000, pg_hi=1040))
 
     # ── 数据中心 2×2：常规=mincp / 豪华=max t/s × 风冷/液冷 ──
     print("\n--- 数据中心产品线 (机架阵列, Gen5×32, 85%利用率, 3年) ---")
