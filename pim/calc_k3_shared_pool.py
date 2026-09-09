@@ -584,9 +584,9 @@ if args.tiers:
     # 大众: ¥1-3万
     _print_tier("大众版", _tier_search(64, 30, 0.25, 5.0, "high",
                   pg_lo=160, n_lo=8, cost_lo=10000, cost_hi=35000))
-    # 豪华: ≥¥5万, 池加大到1TB
+    # 豪华: ≥¥5万, 池凑整 1TB(1024GB=128颗8GB). 池到这个量已超算力墙需求, 整性好记
     _print_tier("豪华版", _tier_search(64, 60, 0.25, 5.0, "high",
-                  pg_lo=224, n_lo=16, cost_lo=50000, pg_hi=1040))
+                  pg_lo=1024, pg_hi=1025, n_lo=16, cost_lo=50000))
 
     # ── 数据中心 2×2：常规=mincp / 豪华=max t/s × 风冷/液冷 ──
     print("\n--- 数据中心产品线 (机架阵列, Gen5×32, 85%利用率, 3年) ---")
