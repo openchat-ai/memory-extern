@@ -68,6 +68,8 @@ _p.add_argument("--cabpool", type=float, default=None,
                 help="移动柜内存池 GB (默认扫 192-1024 找最优)")
 _p.add_argument("--cabmac", type=int, default=None,
                 help="移动柜 MAC 颗数 (默认扫 64-1024)")
+_p.add_argument("--ctrl", type=str, default="fpga", choices=["fpga", "host"],
+                help="柜子控制面: fpga=纯FPGA硬状态机(134K LUT, 免主机/免OS, C代码不跑); host=外接电脑跑运行时")
 args = _p.parse_args()
 DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
@@ -649,16 +651,23 @@ if args.cabinet:
     # 最优: 加FPGA/机柜成本算 BOM
     best = max(results, key=lambda r: r[0])
     _, pg, nm, t_ldd, t_mac, dies = best
-    fpga = 3000.0
+    if args.ctrl == "fpga":
+        ctrl_name = "Tang 138K Pro (GW5AST-138)"
+        ctrl_cost = 2000.0
+        ctrl_note = "纯FPGA硬状态机 138K LUT: tokenizer/路由/采样/层循环全RTL; 免主机/免OS; C不跑; 路由GEMV丢MAC阵列"
+    else:
+        ctrl_name = "FPGA 调度器"
+        ctrl_cost = 3000.0
+        ctrl_note = "FPGA只管调度+IO, 推理运行时由外接电脑CPU执行"
     mem_price = dies*LPDDR_PRICE_NEW
     mac_price = nm*DIE_COST
     chassis   = 2000.0
-    total = dsk_cost + mem_price + mac_price + fpga + chassis
+    total = dsk_cost + mem_price + mac_price + ctrl_cost + chassis
     print(f"\n--③ BOM (取最高 t/s 组合) --")
     print(f"  硬盘 {args.dsk/1024:.1f}TB  = ¥{dsk_cost/1e4:.2f}万   (模型库, {n_models}模型)")
     print(f"  LPDDR池 {pg}GB ({dies:.0f}颗) = ¥{mem_price/1e4:.2f}万   (吞吐墙)")
     print(f"  MAC {nm}颗                 = ¥{mac_price/1e4:.2f}万  (算力墙)")
-    print(f"  FPGA 调度                  = ¥{fpga/1e4:.2f}万")
+    print(f"  控制面 {ctrl_name:<22} = ¥{ctrl_cost/1e4:.2f}万  ({ctrl_note})")
     print(f"  机柜/背板/供电             = ¥{chassis/1e4:.2f}万")
     print(f"  ─────────────────────────────────")
     print(f"  整机 {total/1e4:.2f}万 → {tps:.1f}t/s (瓶颈: {'池带宽' if t_ldd<t_mac else 'MAC算力'})")
