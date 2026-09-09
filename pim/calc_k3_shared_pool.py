@@ -98,6 +98,7 @@ TOTAL_MAC = N_CHIPS * MAC_PER_CHIP
 # ===== 内存参数 =====
 LPDDR_PRICE_OLD = 8       # ¥/GB（旧便宜假设）
 LPDDR_PRICE_NEW = 60      # ¥/GB（LPDDR5X 实际）
+HOST_DDR_PRICE  = 20      # ¥/GB（主机DDR, FPGA加速棒用, 便宜~3倍）
 LPDDR_PER_CHIP_OLD = 128  # GB（旧：每颗独立128GB）
 MEM_GB_PER_DIE  = 8        # GB（新：共享池 226GB = 28颗 8GB）
 N_MEM_DIES      = POOL_GB / MEM_GB_PER_DIE
@@ -217,6 +218,23 @@ def design_edge(n_chips, pcie_bw, pcb_cost=150):
     watts  = mac_dyn + (2+2+2+1)*n_chips
     cost   = n_chips*DIE_COST + pcb_cost
     return tps, watts, cost, 0.0, 0
+
+def design_stick(n_chips, host_gb, pcie_bw, ssd_bw=8.0, pcb_cost=150):
+    """PC加速棒(FPGA式): 权重驻主机DDR(¥20/GB便宜3倍), 卡走PCIe读
+       两墙: ①PCIe到主机DDR读墙 = pcie/(trunk+专家h)
+             ②专家miss从SSD补 = ssd_bw/(专家×(1-h))"""
+    h = hit_rate(max(0.0, host_gb - TRUNK_GB)) / 100.0
+    read_pt = K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h
+    t_ddr = pcie_bw / read_pt
+    miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
+    t_ssd = ssd_bw / miss_pt if miss_pt > 1e-6 else 1e9
+    t_mac = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN
+    tps = min(t_ddr, t_ssd, t_mac)
+    f_match = tps * K3_MAC_PER_TOKEN / (n_chips * MAC_PER_CHIP * 1e9)
+    mac_dyn = 38.0 * n_chips * max(f_match, 0.01)**3
+    watts = mac_dyn + (2+2+2+1)*n_chips
+    cost = n_chips*DIE_COST + host_gb*HOST_DDR_PRICE + pcb_cost
+    return tps, watts, cost, h, 0
 
 if args.bom:
     print(f"\n{'='*70}")
@@ -537,18 +555,29 @@ if args.tiers:
     print("  价位锚定: 微型≤¥1000(纯流式无池) | 入门¥5k | 大众¥1-3万 | 豪华≥¥5万")
     print(f"  {'档位':<10} {'形态':>6} {'MAC':>4} {'池':>7} {'命中%':>5} {'t/s':>6} {'功耗W':>6} {'整机¥':>6}")
 
-    def _print_tier(name, b, edge=False):
+    def _print_tier(name, b, form="池", strike_hit=False):
         if b is None:
             print(f"  {name:<10}   无解(价位+吞吐不可兼)  ✗"); return
         _, n, pg, tps, watts, cost, h, dies, cp, am, en = b
-        form = "纯流式" if edge else f"{int(pg)}GB"
-        hit = "—" if edge else f"{h*100:.0f}%"
+        form = form if form else (f"{int(pg)}GB池" if pg > 0 else "纯流式")
+        hit = "—" if strike_hit else f"{h*100:.0f}%"
         print(f"  {name:<10} {form:>6} {n:>4}颗 {hit:>6} {tps:>6.1f} {watts:>6.0f} ¥{cost/1e4:>5.2f}万")
 
     # 微型边缘: 纯流式(无池), 券价极限. PCIe=Gen5×16(64GB/s)宿主主机 → tps=64/81.43=0.79
     # 只需1颗MAC凑算力(t_mac=1×128e9/1.12e11=1.14t/s > 0.79), 成本=DIE+邮票PCB
     edge_tps, edge_w, edge_cost, _, _ = design_edge(1, 64)
-    _print_tier("微型边缘", (0, 1, 0, edge_tps, edge_w, edge_cost, 0, 0, 0, 0, 1e-6), edge=True)
+    _print_tier("微型边缘", (0, 1, 0, edge_tps, edge_w, edge_cost, 0, 0, 0, 0, 1e-6),
+                form="纯流式", strike_hit=True)
+    # 加速棒(FPGA式): 权重驻主机DDR(¥20/GB), 卡走PCIe读
+    _best_s = None
+    for sl_m in range(1, 17):
+        for sl_gb in range(128, 385, int(args.capstep)):
+            st, sw, sc, sh, _ = design_stick(sl_m, sl_gb, 64)
+            if sc > 12000 or st < 0.6:
+                continue
+            if _best_s is None or st > _best_s[3]:
+                _best_s = (0, sl_m, sl_gb, st, sw, sc, sh, 0, 0, 0, 1e-6)
+    _print_tier("加速棒", _best_s, form=f"{int(_best_s[2])}GB DDR" if _best_s else "DDR池")
     # 入门: ¥5k±10% → 64GB池 2-5t/s(命中18-40%)
     _print_tier("入门版", _tier_search(64, 2, 0.25, 5.0, "high",
                   pg_lo=64, n_lo=2, no_cpcap=True, cost_lo=4500, cost_hi=6000))
