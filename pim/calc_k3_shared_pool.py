@@ -6,7 +6,10 @@ K3 共享池架构 · 真实 BOM + 吞吐
 """
 # ===== K3 实测参数 (k3-verdict.md + MoE-token-speed.md + K3_MXFP8_ENTROPY.md) =====
 K3_EXPERT_PER_TOKEN_GB = 25.83   # 92层×16experts×17.55MB
-K3_TRUNK_PER_TOKEN_GB  = 55.6    # MXFP8 trunk（trunk_mxfp8.bin 55.6GB, 1.92x压缩，每token全读）
+# trunk 原生 = BF16 108.8GB（官方从不量化非专家成分, ARCHITECTURE_BASELINE §2.1）。
+# 55.6 = 我们自制 MXFP8_E8M7_128 熵压缩 1.92x（2026-09-08, 引擎 rel<10%/argmax SAME 验证）。
+# → MXFP4 trunk (27.8GB) 是"新有损研究步", 不是还原格式, 别当免费。
+K3_TRUNK_PER_TOKEN_GB  = 55.6    # 我们的 MXFP8 trunk（每token全读）
 K3_TOTAL_PER_TOKEN_GB  = K3_EXPERT_PER_TOKEN_GB + K3_TRUNK_PER_TOKEN_GB  # 81.43
 
 # ===== 共享池容量（--pool 可调） =====
@@ -70,10 +73,18 @@ _p.add_argument("--cabmac", type=int, default=None,
                 help="移动柜 MAC 颗数 (默认扫 64-1024)")
 _p.add_argument("--ctrl", type=str, default="fpga", choices=["fpga", "host"],
                 help="柜子控制面: fpga=纯FPGA硬状态机(134K LUT, 免主机/免OS, C代码不跑); host=外接电脑跑运行时")
+_p.add_argument("--batch", type=int, default=1,
+                help="批量摊销: trunk/token = 55.6/N (层组装+组GEMM: N个token共享一次trunk读; 专家保守不摊)")
+_p.add_argument("--stall", type=float, default=1.0,
+                help="stream 无停顿系数: 1.0=拆层双缓冲流水吃满带宽; 0.5=平扫串行丢一半")
 args = _p.parse_args()
 DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
 EXPERT_POOL_GB = POOL_GB - TRUNK_GB
+
+# ===== 批量摊销 + 无停顿系数 (2026-09-09: 拆层组装/双缓冲口径) =====
+TRUNK_PT = K3_TRUNK_PER_TOKEN_GB / max(1, args.batch)   # 批量后 trunk/token
+STALL    = max(0.01, min(1.0, args.stall))               # stream 带宽交付率
 
 # ===== 专家命中率模型 (lpddr-resident-architecture.md 表) =====
 # 专家池预算GB -> 命中%：9->18, 41->51, 73->67, 105->82, 145->97, 171->100
@@ -93,13 +104,13 @@ def walls(pool_gb, pcie_bw):
     """返回 (LPDDR带宽限t/s, PCIe补miss限t/s, 命中率)
     LPDDR限: 池带宽/(trunk+专家×命中)  —— 热读喂 MAC
     PCIe限 : pcie/(专家×(1-命中))       —— 冷专家实时补
-    实际吞吐 = min(两墙)"""
+    实际吞吐 = min(两墙) × 无停顿系数(层组装双缓冲)"""
     n_dies = pool_gb / MEM_GB_PER_DIE
     pool_bw = n_dies * BWS_PER_DIE
     h = hit_rate(pool_gb - TRUNK_GB) / 100.0
-    t_ldd = pool_bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
+    t_ldd = pool_bw * STALL / (TRUNK_PT + K3_EXPERT_PER_TOKEN_GB*h)
     miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
-    t_pcie = pcie_bw / miss_pt if miss_pt > 1e-6 else 1e9
+    t_pcie = pcie_bw * STALL / miss_pt if miss_pt > 1e-6 else 1e9
     return t_ldd, t_pcie, h*100
 
 K3_MAC_PER_TOKEN = 1.12e11   # 每token MACs（trunk 1.48e10 + 专家 9.72e10）
@@ -155,21 +166,22 @@ print("=" * 70)
 print("K3 共享池架构 · 真实 BOM + 吞吐 对照")
 print("=" * 70)
 
-print(f"\n--- K3 模型 (trunk 用 MXFP8 55.6GB) ---")
+print(f"\n--- K3 模型 (trunk: 我们的 MXFP8 55.6GB / 原生 BF16 108.8; --batch {args.batch}) ---")
 print(f"  专家/token : {K3_EXPERT_PER_TOKEN_GB} GB")
-print(f"  trunk/token: {K3_TRUNK_PER_TOKEN_GB} GB")
-print(f"  合计/token : {K3_TOTAL_PER_TOKEN_GB} GB")
+print(f"  trunk/token: {K3_TRUNK_PER_TOKEN_GB} GB → 批量摊销后 {TRUNK_PT:.2f} GB")
+print(f"  有效/token : {K3_TOTAL_PER_TOKEN_GB:.2f} → {TRUNK_PT + K3_EXPERT_PER_TOKEN_GB:.2f} GB")
 
 print(f"\n--- 共享池 {POOL_GB:.0f}GB (trunk {TRUNK_GB:.0f} + 专家池 {EXPERT_POOL_GB:.0f}) ---")
 print(f"  形态: {N_MEM_DIES:.0f}颗 {MEM_GB_PER_DIE}GB LPDDR5X")
 print(f"  池带宽: {N_MEM_DIES:.0f}×{BWS_PER_DIE:.0f} = {POOL_BW:,.0f} GB/s")
 print(f"  命中率: 专家池 {EXPERT_POOL_GB:.0f}GB → {HIT_PCT:.0f}%（工作集命中）")
 
-print(f"\n--- 两墙模型 (四路带宽分解) ---")
+print(f"\n--- 两墙模型 (四路带宽分解; 无停顿系数 {STALL:.2f}) ---")
 hit = HIT_PCT/100.0
 miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-hit)
-print(f"  ① MAC吞  : {TPS_K3*K3_TOTAL_PER_TOKEN_GB:,.0f} GB/s = {K3_TOTAL_PER_TOKEN_GB:.1f}GB × {TPS_K3:.1f}t/s")
-print(f"  ② 热读LPDDR: {TPS_K3*(K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*hit):,.0f} GB/s  ← 池带宽喂 MAC")
+eff_pt = TRUNK_PT + K3_EXPERT_PER_TOKEN_GB*hit
+print(f"  ① MAC吞  : {TPS_K3*eff_pt:,.0f} GB/s = {eff_pt:.1f}GB × {TPS_K3:.1f}t/s")
+print(f"  ② 热读LPDDR: {TPS_K3*(TRUNK_PT + K3_EXPERT_PER_TOKEN_GB*hit):,.0f} GB/s ← 池带宽喂 MAC")
 print(f"  ③ 补missPCIe: {TPS_K3*miss_pt:,.0f} GB/s ← {miss_pt:.2f}GB/token冷专家 从 PCIe({args.pcie:.0f}) 实时补")
 print(f"  ④ 冷灌入: 一次性 {POOL_GB:.0f}GB / Gen5≈{args.pcie:.0f}GB/s ≈ {POOL_GB/args.pcie:.0f}s（工作集切换时）")
 
@@ -210,8 +222,8 @@ def design_bom(n_chips, pool_gb, pcie_bw, die_gb=8.0):
     bw = bw_for(dies, die_gb)
     h = hit_rate(pool_gb - TRUNK_GB) / 100.0
     miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
-    t_ldd  = bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
-    t_pcie = pcie_bw / miss_pt if miss_pt > 1e-6 else 1e9
+    t_ldd  = bw * STALL / (TRUNK_PT + K3_EXPERT_PER_TOKEN_GB*h)
+    t_pcie = pcie_bw * STALL / miss_pt if miss_pt > 1e-6 else 1e9
     t_mac  = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN   # 满档算力
     tps = min(t_ldd, t_pcie, t_mac)
     # 匹配档频率（够吃 tps 即可）
@@ -239,7 +251,7 @@ def pcb_max_gb():
 def design_edge(n_chips, pcie_bw, pcb_cost=150):
     """无池纯流式(微边): 每token整读81.43GB从PCIe实时拉, 卡上只MAC+邮票PCB
        → tps = min(PCIe带宽/81.43, MAC满档算力), 价格极限低几百块"""
-    t_pcie = pcie_bw / K3_TOTAL_PER_TOKEN_GB
+    t_pcie = pcie_bw * STALL / (TRUNK_PT + K3_EXPERT_PER_TOKEN_GB)
     t_mac  = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN
     tps = min(t_pcie, t_mac)
     f_match = tps * K3_MAC_PER_TOKEN / (n_chips * MAC_PER_CHIP * 1e9)
@@ -253,10 +265,10 @@ def design_stick(n_chips, host_gb, pcie_bw, ssd_bw=8.0, pcb_cost=150):
        两墙: ①PCIe到主机DDR读墙 = pcie/(trunk+专家h)
              ②专家miss从SSD补 = ssd_bw/(专家×(1-h))"""
     h = hit_rate(max(0.0, host_gb - TRUNK_GB)) / 100.0
-    read_pt = K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h
-    t_ddr = pcie_bw / read_pt
+    read_pt = TRUNK_PT + K3_EXPERT_PER_TOKEN_GB*h
+    t_ddr = pcie_bw * STALL / read_pt
     miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
-    t_ssd = ssd_bw / miss_pt if miss_pt > 1e-6 else 1e9
+    t_ssd = ssd_bw * STALL / miss_pt if miss_pt > 1e-6 else 1e9
     t_mac = n_chips * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN
     tps = min(t_ddr, t_ssd, t_mac)
     f_match = tps * K3_MAC_PER_TOKEN / (n_chips * MAC_PER_CHIP * 1e9)
@@ -380,8 +392,8 @@ if args.tps:
         bw = dies * BWS_PER_DIE
         h = hit_rate(exp_gb) / 100.0
         miss_pt = K3_EXPERT_PER_TOKEN_GB * (1-h)
-        t_ldd = bw / (K3_TRUNK_PER_TOKEN_GB + K3_EXPERT_PER_TOKEN_GB*h)
-        t_pcie = args.pcie / miss_pt if miss_pt > 1e-6 else 1e9
+        t_ldd = bw * STALL / (TRUNK_PT + K3_EXPERT_PER_TOKEN_GB*h)
+        t_pcie = args.pcie * STALL / miss_pt if miss_pt > 1e-6 else 1e9
         if min(t_ldd, t_pcie) >= TGT:
             found = (exp_gb, pool, dies, h, t_ldd, t_pcie, miss_pt)
             break
@@ -530,7 +542,7 @@ if args.summary:
     f2 = lambda v: f"{v:.1f}".rjust(6)
     print(f"| {'项':<26} {'默认口径':>20} |")
     print(f"|{'─'*(28)}|{'─'*(26)}|")
-    print(f"| {'trunk/token (MXFP8)':<26} {f2(K3_TRUNK_PER_TOKEN_GB)} GB |")
+    print(f"| {'trunk/token 摊销':<26} {f2(TRUNK_PT)} GB ×{args.batch} |")
     print(f"| {'专家/token':<26} {f2(K3_EXPERT_PER_TOKEN_GB)} GB |")
     print(f"| {'合计/token':<26} {f2(K3_TOTAL_PER_TOKEN_GB)} GB |")
     print(f"| {'池容量(默认)':<26} {POOL_GB:.0f} GB = {N_MEM_DIES:.0f}颗 → {N_MEM_DIES*BWS_PER_DIE:.0f} GB/s |")
@@ -672,7 +684,7 @@ if args.cabinet:
         for nm in macs:
             dies = pg / MEM_GB_PER_DIE
             pbw  = dies * BWS_PER_DIE
-            t_ldd = pbw / K3_TOTAL_PER_TOKEN_GB          # 命中100%单模型
+            t_ldd = pbw * STALL / (TRUNK_PT + K3_EXPERT_PER_TOKEN_GB)   # 命中100%单模型(批量摊销trunk)
             t_mac = nm * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN
             tps = min(t_ldd, t_mac)
             results.append((tps, pg, nm, t_ldd, t_mac, dies))
