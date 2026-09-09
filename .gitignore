@@ -77,3 +77,10 @@ pim/research-cli/chip-backend/*.so
 # Gowin PnR 输出 / 工具链位流（数GB）
 out/
 vendor/
+
+# 上游开源克隆（内嵌 .git，本地依赖不入库；同 rtl/07_phy_wavious 惯例）
+LLCBench/
+
+# 路演交付产物
+项目路演.html
+项目路演PPT.pptx
