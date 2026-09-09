@@ -49,6 +49,32 @@ COMPONENT = {
     "dsp_per_bf16_mac":   1,        # bf16 需要 1 DSP/通道
 }
 
+# ═══════════════════════ 2b. 图执行器（泛化控制面）成本模型 ════════════════════
+# 泛化 = 把「写死单模型的 FSM」换成「指令驱动的数据流调度器」。
+# 固定开销从 ~29,700（写死FSM）涨到图执行器；每多一项通用性 = 多一截解码/调度逻辑。
+GRAPH = {
+    "fsm_k3_lut":          29_700,  # 原固定开销：只跑 K3 的 FSM
+    # 图执行器新增组件（都是「读指令→分发→等完成」的通用骨架，与具体模型无关）
+    "instr_fetch_decode":   6_000,  # 指令取指/解码（定长指令字 → 算子id/维度/地址三元组）
+    "scheduler_queues":     8_000,  # 多算子就绪队列 + 优先级仲裁（数据流依赖分析）
+    "tensor_addr_engine":   5_000,  # 维度→地址生成（张量布局基址+步长，参数表驱动）
+    "obj_registers":        3_000,  # 模型描述表 / 算子表缓存读口（DDR3 里的模型描述）
+    "overlay_mux":          1_500,  # 算子结果回写路选（残差/中间缓冲布局）
+    "per_op_lut":             120,  # 每增加一种算子类型：解码分支 + 数据通路
+    "ops_k3_core":             8,   # K3 需要的核心算子集（GEMV/Router-GEMV/ROPE/
+                                     #   SiTU-GLU/RMSNorm/Dequant/KV-save/KV-load）
+}
+
+def graph_engine_lut(n_core_ops, n_extra_ops=0):
+    """图执行器固定开销。operator集判断是「覆盖范围」的通用选择，
+    与运行哪个模型无关——这是它与 FSM 的本质区别。"""
+    fixed = (GRAPH["instr_fetch_decode"] + GRAPH["scheduler_queues"]
+             + GRAPH["tensor_addr_engine"] + GRAPH["obj_registers"]
+             + GRAPH["overlay_mux"])
+    total = fixed + GRAPH["per_op_lut"] * (n_core_ops + n_extra_ops)
+    return dict(fixed=fixed, per_op=GRAPH["per_op_lut"] * (n_core_ops + n_extra_ops),
+                total=total)
+
 # ═══════════════════════ 3. K3-MoE 流量账（k3-verdict 实测）═══════════════════
 # 2026-08-29 修正④：trunk 保留 fp16 → 108.8GB/pass（原始字节），不再是量化 36GB。
 # 专家层仍 mxfp4 落盘 → 25.83 GB/token。
@@ -195,6 +221,53 @@ def main():
           f"{tps_from(btl, b2):.3f} t/s")
     print(f"  ⇒ 逻辑不是瓶颈（C 段 LUT≈<40%）；带宽链（主机NAND→PCIe→DDR3）才是。")
     print(f"  ⇒ 138K 真实可达 < 0.1 t/s，只能当链路/逻辑验证平台。")
+
+    # ── G. 图执行器（泛化控制面）资源账 ──
+    print("\n" + "─" * 76)
+    print("G. 图执行器 RTL: 泛化换模型的资源账 (把 FSM 换成指令驱动调度器)")
+    print("─" * 76)
+    print(f"  原 K3 写死 FSM 固定开销:        {GRAPH['fsm_k3_lut']:,} LUT")
+    print(f"  图执行器固定开销 (读指令→调度→发MAC):")
+    print(f"    指令取指/解码                {GRAPH['instr_fetch_decode']:,}")
+    print(f"    调度队列/仲裁                {GRAPH['scheduler_queues']:,}")
+    print(f"    张量地址生成                  {GRAPH['tensor_addr_engine']:,}")
+    print(f"    模型描述表缓存口              {GRAPH['obj_registers']:,}")
+    print(f"    算子结果回写路选              {GRAPH['overlay_mux']:,}")
+    fixed_graph = (GRAPH["instr_fetch_decode"] + GRAPH["scheduler_queues"]
+                   + GRAPH["tensor_addr_engine"] + GRAPH["obj_registers"]
+                   + GRAPH["overlay_mux"])
+    print(f"    小计                         {fixed_graph:,} LUT")
+    print(f"    + 每算子解码分支              {GRAPH['per_op_lut']}/算子")
+    ops_add = GRAPH["ops_k3_core"] + 2   # +Router/GEMV/Dequant 各算通用算子
+    core_g = graph_engine_lut(ops_add)
+    print(f"  [仅覆盖 K3 核心算子 {ops_add} 种] 合计 "
+          f"{core_g['total']:,} LUT = {lut_pct(core_g['total']):.1f}%")
+    # 扩展不同模型覆盖
+    for label, extra in [("+Qwen/LLaMA dense (~12 算子)", 4),
+                         ("+混入 Mamba/SSM (~14 算子)", 6),
+                         ("+多模态/视觉后端 (~16 算子)", 8)]:
+        r = graph_engine_lut(ops_add, extra)
+        print(f"  {label:30s} = {r['total']:5,} LUT "
+              f"(固定{fixed_graph:,} + 算子{r['per_op']:,}) = {lut_pct(r['total']):.1f}%")
+    diff = core_g["total"] - GRAPH["fsm_k3_lut"]
+    print(f"\n  泛化代价 (图执行器 − 写死FSM) = +{diff:,} LUT "
+          f"(+{lut_pct(diff):.1f}个百分点)")
+    print(f"  交换: 换模型从「重烧位流/重综合」→「换 DDR3 模型描述表」.")
+
+    # ── H. 图执行器 × MAC 面积联合 ──
+    print("\n" + "─" * 76)
+    print("H. 图执行器 × lane 联合占用 (推理引擎合体够不够 138K)")
+    print("─" * 76)
+    avail = FPGA["lut"]
+    for name, mac_lut, nmac in [("mxfp4 乘核 A (12/lane)", 12, 128),
+                                ("完整 lane B (90/lane)",   90, 128),
+                                ("bf16 MAC (150/MAC)",    150,  64)]:
+        left = avail - core_g["total"] - mac_lut * nmac
+        # 若 trunc 走 bf16 通道另扣
+        left_no_trunk = left - 0
+        print(f"  {name:28s} × {nmac:3d}: 图执行器{core_g['total']:,} + "
+              f"{mac_lut*nmac:,} = {core_g['total']+mac_lut*nmac:,} "
+              f"({lut_pct(core_g['total']+mac_lut*nmac):.0f}%), 剩 {left_no_trunk:,} LUT")
 
 if __name__ == "__main__":
     main()
