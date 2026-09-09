@@ -59,8 +59,10 @@ module gemv_rail_tb;
     reg [31:0] gold_chk = 0;
 
     // 镜像累加器: 与 MAC lane 逐沿同递推 (仅观测, 不接入回路)
+    // 复位门: 防止复位前沿抢跑吃 x (与 ctl 复位赋值/观测沿竞态)
     always @(posedge clk)
-        gold_chk <= (gold_chk + ($signed(act_in) * $signed(weight_in))) & 16'hFFFF;
+        if (rst_n)
+            gold_chk <= (gold_chk + ($signed(act_in) * $signed(weight_in))) & 16'hFFFF;
 
     function [15:0] w16(input integer v);
         begin w16 = v[15:0]; end
