@@ -60,6 +60,14 @@ _p.add_argument("--summary", action="store_true",
                 help="输出决策总表（一页看全: 模型/池/两墙/BOM双场景/散热/结论）")
 _p.add_argument("--tiers", action="store_true",
                 help="产品线矩阵: 个人4档(微边/入门/大众/豪华) × 数据中心2×2(常规/豪华 × 风冷/液冷)")
+_p.add_argument("--cabinet", action="store_true",
+                help="移动柜: 硬盘(模型库) + 内存池(吞吐墙) + MAC阵列 + FPGA调度 — 三级存储BOM")
+_p.add_argument("--dsk", type=int, default=4096,
+                help="移动柜硬盘容量 GB (默认 4096=4TB, 模型库)")
+_p.add_argument("--cabpool", type=float, default=None,
+                help="移动柜内存池 GB (默认扫 192-1024 找最优)")
+_p.add_argument("--cabmac", type=int, default=None,
+                help="移动柜 MAC 颗数 (默认扫 64-1024)")
 args = _p.parse_args()
 DIED_OPTS = [float(x) for x in args.die.split(",") if float(x) >= 2]
 POOL_GB = args.pool
@@ -607,3 +615,51 @@ if args.tiers:
         print(f"     液冷: 电费 ¥{en_liq*1e6:.1f}µ + 摊销 ¥{lihwa*1e6:.1f}µ (PUE {PUE_LIQ}) → 合计 ¥{(en_liq+lihwa)*1e6:.1f}µ")
         d = en_air*1e6 - (en_liq+lihwa)*1e6
         print(f"     → {'液冷省 ¥%.1fµ/token'%d if d>0 else '风冷省 ¥%.1fµ/token'%(-d)} (室温{args.room:.0f}℃)")
+
+# ===== 移动柜 (--cabinet): 三级存储 =====
+if args.cabinet:
+    print(f"\n{'='*70}")
+    print(f"移动柜 · 三级存储推理 (硬盘模型库 → LPDDR池 → MAC阵列, FPGA调度)")
+    print(f"{'='*70}")
+
+    # 每模型驻留权重 = trunk(55.6) + 全量专家(92×16×17.55MB≈25.8GB) ≈ 81.4GB
+    MODEL_WEIGHT_GB = K3_TOTAL_PER_TOKEN_GB
+    n_models = args.dsk // int(MODEL_WEIGHT_GB)          # 硬盘能装模型数
+    print(f"\n--① 硬盘 (-dsk {args.dsk}GB = 模型库) --")
+    SSD_GB = 1.0  # ¥/GB NVMe 企业级近
+    dsk_cost = args.dsk * SSD_GB
+    print(f"  装 K3(236B): {n_models} 个模型 (每个 ≈{MODEL_WEIGHT_GB:.0f}GB 全权重)")
+    print(f"  读取: NVMe Gen5≈30GB/s → 冷模型换入池一次, 非每token主道")
+
+    # 池与 MAC 组合搜索: 找(池带宽墙 vs MAC算力墙)平衡点
+    pools = [args.cabpool] if args.cabpool else [192,256,384,512,768,1024]
+    macs  = [args.cabmac] if args.cabmac else [64,128,192,256,384,512]
+    print(f"\n--② 池×MAC 组合 (吞吐=min(池带宽墙, MAC算力墙); 单模型热读) --")
+    print(f"  {'池GB':>6} {'MAC':>5} {'池墙t/s':>8} {'MAC墙t/s':>9} {'实际t/s':>8}")
+    results = []
+    for pg in pools:
+        for nm in macs:
+            dies = pg / MEM_GB_PER_DIE
+            pbw  = dies * BWS_PER_DIE
+            t_ldd = pbw / K3_TOTAL_PER_TOKEN_GB          # 命中100%单模型
+            t_mac = nm * MAC_PER_CHIP * 1e9 / K3_MAC_PER_TOKEN
+            tps = min(t_ldd, t_mac)
+            results.append((tps, pg, nm, t_ldd, t_mac, dies))
+            print(f"  {pg:>5}GB {nm:>5} {t_ldd:>8.1f} {t_mac:>9.1f} {tps:>8.1f}")
+    # 最优: 加FPGA/机柜成本算 BOM
+    best = max(results, key=lambda r: r[0])
+    _, pg, nm, t_ldd, t_mac, dies = best
+    fpga = 3000.0
+    mem_price = dies*LPDDR_PRICE_NEW
+    mac_price = nm*DIE_COST
+    chassis   = 2000.0
+    total = dsk_cost + mem_price + mac_price + fpga + chassis
+    print(f"\n--③ BOM (取最高 t/s 组合) --")
+    print(f"  硬盘 {args.dsk/1024:.1f}TB  = ¥{dsk_cost/1e4:.2f}万   (模型库, {n_models}模型)")
+    print(f"  LPDDR池 {pg}GB ({dies:.0f}颗) = ¥{mem_price/1e4:.2f}万   (吞吐墙)")
+    print(f"  MAC {nm}颗                 = ¥{mac_price/1e4:.2f}万  (算力墙)")
+    print(f"  FPGA 调度                  = ¥{fpga/1e4:.2f}万")
+    print(f"  机柜/背板/供电             = ¥{chassis/1e4:.2f}万")
+    print(f"  ─────────────────────────────────")
+    print(f"  整机 {total/1e4:.2f}万 → {tps:.1f}t/s (瓶颈: {'池带宽' if t_ldd<t_mac else 'MAC算力'})")
+    print(f"  模型切换: 冷模型 {MODEL_WEIGHT_GB:.0f}GB 从硬盘入池 ≈ {MODEL_WEIGHT_GB/30:.0f}s (NVMe≈30GB/s)")
