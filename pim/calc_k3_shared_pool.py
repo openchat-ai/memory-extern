@@ -221,6 +221,21 @@ def design_bom(n_chips, pool_gb, pcie_bw, die_gb=8.0):
     cost   = n_chips*DIE_COST + pool_gb*LPDDR_PRICE_NEW + new_pcb
     return tps, watts, cost, h, dies
 
+# ===== 单卡 PCB 面积墙 =====
+# v2 公式(PCB 面积预算段): 每bank=8die合封+LPDDR 171.68mm², 走线/电源固定 4400mm²,
+# 标准卡 33384mm² (ATX 超长). 池/8 = bank 数从 die 数来, 与 die_gb 无关(恒按 8GB bank).
+BANK_MM2  = 8 * 5.6 * 1.6 + 100.0   # 8die合封71.68 + LPDDR 100 = 171.68
+PCB_EXTRA = 2000 + 500 + 700 + 1200
+CARD_MM2  = 33384.0
+def pcb_fit(pool_gb):
+    """单卡放得下 pool_gb? 超出→需要多板/柜子形态(非单卡). 每bank池8GB."""
+    n_bk = math.ceil(pool_gb / MEM_GB_PER_DIE)
+    return n_bk * BANK_MM2 + PCB_EXTRA <= CARD_MM2
+def pcb_max_gb():
+    """单卡最大池: (33384-4400)/171.68×8 ≈ 1344GB/168bank"""
+    nr = int((CARD_MM2 - PCB_EXTRA) / BANK_MM2)
+    return nr * MEM_GB_PER_DIE
+
 def design_edge(n_chips, pcie_bw, pcb_cost=150):
     """无池纯流式(微边): 每token整读81.43GB从PCIe实时拉, 卡上只MAC+邮票PCB
        → tps = min(PCIe带宽/81.43, MAC满档算力), 价格极限低几百块"""
@@ -264,6 +279,8 @@ if args.bom:
     cands_p = []
     for n in range(16, 225, 16):
         for pg in range(64, 2049, int(args.capstep)):
+            if not pcb_fit(pg):
+                continue
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 64, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -292,6 +309,8 @@ if args.bom:
     cands_d = []
     for n in range(16, 225, 16):
         for pg in range(64, 2049, int(args.capstep)):
+            if not pcb_fit(pg):
+                continue
             for die_gb in DIED_OPTS:
                 tps, watts, cost, h, dies = design_bom(n, pg, 128, die_gb)
                 cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -371,8 +390,10 @@ if args.tps:
         print(f"                专家池 {exp_gb}GB + trunk {TRUNK_GB} = {pool}GB → {dies} 颗 8GB")
         print(f"                带宽 {dies}×{BWS_PER_DIE} = {bw:,.0f} GB/s, 命中 {h*100:.0f}%")
         print(f"                LPDDR限 {t_ldd:.1f} / PCIe限 {t_pcie:.1f} → min {min(t_ldd,t_pcie):.1f} ✅")
+        if not pcb_fit(pool):
+            print(f"                ⚠ 池 {pool:.0f}GB 超单卡PCB封顶 {pcb_max_gb():.0f}GB → 需多板/柜子形态")
     else:
-        print(f"                ✗ 扫到 200GB 专家池仍不够 → 需更大池或更高 PCIe")
+        print(f"                ✗ 扫到 4000GB 专家池仍不够 → 需更大池或更高 PCIe")
 
     # ③ PCIe
     miss_bw = TGT * miss_pt if found else 0
@@ -481,6 +502,8 @@ if args.summary:
         best = None
         for n in range(16, 225, 16):
             for pg in range(64, 2049, int(args.capstep)):
+                if not pcb_fit(pg):
+                    continue
                 for die_gb in DIED_OPTS:
                     tps, watts, cost, h, dies = design_bom(n, pg, pcie_bw, die_gb)
                     cp, am, en = cost_per_token(cost, tps, watts, util, life)
@@ -548,6 +571,8 @@ if args.tiers:
         best = None
         for n in range(n_lo, 225, n_step):
             for pg in range(pg_lo, pg_hi, pg_step):
+                if not pcb_fit(pg):                 # 单卡面积墙
+                    continue
                 for die_gb in DIED_OPTS:
                     tps, watts, cost, h, dies = design_bom(n, pg, pcie_bw, die_gb)
                     if tps < tps_min or not (cost_lo <= cost <= cost_hi):
@@ -566,7 +591,7 @@ if args.tiers:
 
     # ── 个人 4 档：按价位锚定 ──
     print("\n--- 个人用户产品线 (单卡/卡, 25%利用率, 5年) ---")
-    print("  价位锚定: 微型≤¥1000(纯流式无池) | 入门¥5k | 大众¥1-3万 | 豪华≥¥5万")
+    print("  价位锚定: 微型≤¥1000(纯流式无池) | 入门¥5k | 大众¥2-4万 | 豪华≥¥8万(单卡PCB封顶1344GB)")
     print(f"  {'档位':<10} {'形态':>6} {'MAC':>4} {'池':>7} {'命中%':>5} {'t/s':>6} {'功耗W':>6} {'整机¥':>6}")
 
     def _print_tier(name, b, form="池", strike_hit=False):
@@ -595,12 +620,12 @@ if args.tiers:
     # 入门: ¥5k±10% → 64GB池 2.8t/s(命中18%)  (物理: 池带宽8×21.3=170GB/s→2.1t/s)
     _print_tier("入门版", _tier_search(64, 2, 0.25, 5.0, "high",
                   pg_lo=64, n_lo=2, no_cpcap=True, cost_lo=4500, cost_hi=6000))
-    # 大众: ¥1-3万 → 池~150-480GB → 5-16t/s (物理: 每die 21.3GB/s, 命中满)
+    # 大众: ¥2-4万 → 池~560GB → ~18t/s (真实档: 21.3/die, 命中满, 单卡PCB封顶1344GB)
     _print_tier("大众版", _tier_search(64, 5, 0.25, 5.0, "high",
-                  pg_lo=160, n_lo=8, cost_lo=10000, cost_hi=35000))
-    # 豪华: ≥¥5万, 池 1TB(1024GB=128die) → 33.5t/s 物理封顶 (更多池=线性加带宽)
+                  pg_lo=160, n_lo=8, cost_lo=20000, cost_hi=40000))
+    # 豪华: ≥¥8万, 池顶满单卡 1344GB(168bank) → 43.9t/s PCB物理封顶 (再多池=多板/柜子)
     _print_tier("豪华版", _tier_search(64, 20, 0.25, 5.0, "high",
-                  pg_lo=768, n_lo=16, cost_lo=50000, pg_hi=2049))
+                  pg_lo=768, n_lo=16, cost_lo=80000, pg_hi=2049))
 
     # ── 数据中心 2×2：常规=mincp / 豪华=max t/s × 风冷/液冷 ──
     print("\n--- 数据中心产品线 (机架阵列, Gen5×32, 85%利用率, 3年) ---")
