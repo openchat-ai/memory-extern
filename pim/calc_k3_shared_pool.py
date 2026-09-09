@@ -494,17 +494,20 @@ if args.summary:
 
 # ===== 产品线矩阵 (--tiers) =====
 if args.tiers:
-    def _tier_search(pcie_bw, tps_min, util, life, goal, pg_lo=64, pg_hi=257):
-        """goal: 'mincost'(整机¥最少) | 'high'(max t/s) | 'mincp'(min ¥/token)"""
+    def _tier_search(pcie_bw, tps_min, util, life, goal, pg_lo=64, pg_hi=257,
+                     n_lo=8, n_step=8, pg_step=None, no_cpcap=False):
+        """goal: 'mincost'(整机¥最少) | 'high'(max t/s) | 'mincp'(min ¥/token)
+           no_cpcap: 豁免每token成本上限(微型档: 能跑就卖, 摊销不设限)"""
+        pg_step = pg_step or int(args.capstep)
         best = None
-        for n in range(16, 225, 16):
-            for pg in range(pg_lo, pg_hi, int(args.capstep)):
+        for n in range(n_lo, 225, n_step):
+            for pg in range(pg_lo, pg_hi, pg_step):
                 for die_gb in DIED_OPTS:
                     tps, watts, cost, h, dies = design_bom(n, pg, pcie_bw, die_gb)
                     if tps < tps_min:
                         continue
                     cp, am, en = cost_per_token(cost, tps, watts, util, life)
-                    if cp > args.tokcost:
+                    if not no_cpcap and cp > args.tokcost:
                         continue
                     key = {"mincost": 1/cost, "high": tps, "mincp": 1/cp}[goal]
                     if best is None or key > best[0]:
@@ -517,11 +520,14 @@ if args.tiers:
 
     # ── 个人 4 档：按目标吞吐锚定（微型边缘/入门/大众/豪华） ──
     print("\n--- 个人用户产品线 (单卡, Gen5×16, 25%利用率, 5年) ---")
-    tiers_p = [("微型边缘", 10), ("入门版", 30), ("大众版", 50), ("豪华版", 60)]
+    tiers_p = [("微型边缘", 3, dict(pg_lo=64, n_lo=8, no_cpcap=True)),
+               ("入门版", 30, dict(pg_lo=160)),
+               ("大众版", 50, dict(pg_lo=192)),
+               ("豪华版", 60, dict(pg_lo=224))]
     print(f"  {'档位':<10} {'MAC':>4} {'池GB/颗数':>10} {'命中%':>5} {'t/s':>6} {'功耗W':>7} {'整机¥':>4} {'每tokenµ':>8}")
-    for name, tgt in tiers_p:
+    for name, tgt, kw in tiers_p:
         goal = "high" if name == "豪华版" else "mincost"
-        b = _tier_search(64, tgt, 0.25, 5.0, goal, pg_hi=257)
+        b = _tier_search(64, tgt, 0.25, 5.0, goal, **kw)
         if b is None:
             print(f"  {name:<10}   无解 (≥{tgt}t/s 或 ≤¥{args.tokcost*1e6:.0f}µ)  ✗"); continue
         _, n, pg, tps, watts, cost, h, dies, cp, am, en = b
