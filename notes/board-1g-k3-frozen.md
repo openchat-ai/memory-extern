@@ -73,6 +73,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 ## 9. 待办(PC 上)
 
+- [ ] **拆 trunk**: `tools/trunk2layers.py` 把 MXFP8 trunk 按 93 层切成独立切片文件
+      (v1 632MB / v2 419MB) + 每层清单(张量/形状/offset/路由头→专家实体 offset),
+      供板子逐层流式取数; 顺带在 PC 上实测 93 层逐层字节, 核 632/419 与外推误差
 - [ ] `--gen 32+` 真机 trace: 专家频率/union → 定 281MB 槽命中率与预取策略
-- [ ] `tools/k3_weight_stats.py` 全量扫 trunk.json → 93 层逐层精确字节 + 头/实体 offset 对应
 - [ ] 书场景: KV 迁主机后的 PCIe 双流(权重+KV)吞吐实测
