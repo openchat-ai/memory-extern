@@ -109,8 +109,9 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 
 ## 8. 工具参数(已落地)
 
-calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无停顿系数)。
-默认 batch1/stall1 与旧口径零回归。贯通 walls/逆推/场景A·B/tiers/柜子。
+calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无停顿系数)
++ `--head none|bf16|mxfp8|prune`(decode 输出头税, 2026-09-09)。
+默认 batch1/stall1/head none 与旧口径零回归。贯通 walls/逆推/场景A·B/tiers/柜子。
 
 ## 9. 待办(PC 上)
 
@@ -124,8 +125,15 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 - [ ] **状态的家**: KDA S(69×3MB)+KV 落 主机DDR 或 板上M.2 NVMe(§5 二选一) —
       板子每层拉/写 ~3MB, 实测双流与 NVMe 写磨损
 - [ ] `--gen 32+` 真机 trace: 专家频率/union → 定 281MB 槽命中率与预取策略
+- [ ] **尺寸下死(PC 扫)**: KDA 状态 96头×128×128=3.01MB/层、S_b 16×96×128×128=48MB、
+      KV 27.7KB/token、输出头 vocab(≈320K)与是否 tied —— 全是架构假设, 需对权重/文档核实
+- [ ] **词表剪枝质量**(`--head prune`): top-16K 保不保 argmax / PPL 不降
+- [ ] **草稿模型(EAGLE-3 内置)接受率 λ 实测**: 2-3× 目标调用减少, 杠杆未验证
+- [ ] **层流协议 spec + 主机模拟器**: 预填批量 vs 生成 的字节序先跑对, 输出协议喂 P2 RTL
+- [ ] **DDR3 控制器实测**: 高云 IP 1333MT/s 满带宽是否真达 5.3GB/s(P1 第一关, 卡住全吹)
+- [ ] **M.2 NVMe 实测**: 槽是否真通 + 独立读带宽(3.5GB/s 目前是纸面)
 - [ ] **端到端验收**: 板 vs PC 引擎 logits 对比(沿用 rel<10% / argmax SAME 基线)
-- [ ] calc 脚本补 `--head`(头税 per-token, 修所有 t/s 数字)
+- [x] calc 脚本补 `--head`(头税 per-token, 修所有 t/s 数字) —— 2026-09-09 已落地
 - [ ] 书场景: KV 迁主机后的 PCIe 双流(权重+KV)吞吐实测
 
 ## 10. 工程阶段(缺口: 文档此前只有数据准备, 没写"算")
@@ -133,4 +141,4 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 - **P0 数据**: 拆 trunk / 专家库索引 / PC trace —— 第 9 节全部
 - **P1 搬运**: DDR3 控制器(高云 IP 1333MT/s) + M.2 NVMe 读引擎(按层流 + 张量微流水双缓冲)
 - **P2 算(最大头)**: 推理引擎 RTL —— 93 层循环 + 69 KDA/24 MLA + router + 采样; 138K LUT 预算(账: 图执行器~27%, 能装下)
-- **P3 端到端**: tokenizer/embed 接入 + 状态落区(KDA S + S_b + KV 全主机)+ 验收(第 9 节 logits 对比)
+- **P3 端到端**: tokenizer/embed 接入 + 状态的家落位(S 主机/NVMe, S_b 板上)+ 验收(第 9 节 logits 对比)
