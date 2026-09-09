@@ -31,6 +31,7 @@ module atile_pingpong #(
     output wire [DW-1:0] r_data,
     output wire         r_frame_done,
     output wire         swap,
+    output wire [IDX-1:0] r_addr,       // 读指针 (读控按词序配对/度量)
 
     output reg  [31:0]  frames_filled,
     output reg  [31:0]  frames_read,
@@ -57,6 +58,7 @@ module atile_pingpong #(
     reg       read_active;
     reg [IDX-1:0] fwc;
     reg [IDX-1:0] rwc;
+    assign r_addr = rwc;
 
     wire fill_ok = f_valid && f_ready;
     assign f_ready  = fill_active && (st[fsel] != 2'd2) && (st[fsel] != 2'd3);

@@ -62,7 +62,7 @@ module gemv_array_128 #(
     // 输出累加总线（汇总到片上累加网络）
     output wire [15:0]  acc_out,
     // 观测
-    output wire [$clog2(MAC_COUNT)-1:0] active_cnt
+    output wire [$clog2(MAC_COUNT):0] active_cnt
 );
     genvar i;
     wire [MAC_COUNT-1:0] gclk;
@@ -87,7 +87,7 @@ module gemv_array_128 #(
     endgenerate
 
     // 活跃计数（供固件轮询功耗状态）
-    reg [$clog2(MAC_COUNT+1)-1:0] act_q;
+    reg [$clog2(MAC_COUNT):0] act_q;
     integer j;
     always @(*) begin
         act_q = 0;
