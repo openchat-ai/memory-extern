@@ -725,8 +725,10 @@ logits 缓冲           ~600KB          ✓
 - **结论：`kv_heads=96`（非 GQA 压缩，96 头全 KV）**，但架构是 **MLA**：
   - `kv_lora_rank=512`（latent 压缩）、`q_lora_rank=1536`
   - `qk_rope_head_dim=64`、`head_dim=128`、`num_heads=96`、`mla_use_nope=true`
-  - KV 每 token/层 = 512(latent) + 64×96(rope) = **6656 元素**，比全注意力 96×128=12288 少 46%
-- 回填：`python3 tools/kv_capacity_plan.py` 已按 MLA 口径改造 → 定案运行点；
+  - MLA 每 token/层写回 = latent 512 + **共享** rope 64 = **576 元素**（rope 是 96 头共享一份，
+    不是 64×96；24 层 MLA × 576 = 27.6KB BF16 / 13.8KB INT8 —— 见 K3_KV_QUANT_PROBE.md）
+  - 旧口径"512+64×96=6656"是**错误账**（把 rope 当每头一份 + 93 层全当 MLA），已废弃
+- 回填：`python3 tools/kv_capacity_plan.py` 已按实证口径改造 → 定案运行点；
         §12/§13 的 batch 上限改写
 
 #### T3 · 路由轨迹采样 ✅ 部分完成（2026-08-26，方法修正 + 实测回填）
