@@ -65,13 +65,23 @@ INT4 崩、V 容限大于 K——结构性结论在真实激活下成立。
 ## 2. 诚实边界
 
 - 真实 prefill 已作为最终验收（真 embed + 真 4 层前向, 与 C 引擎路径一致）。
-- 隐蔽局限：T=4 的因果注意柔和度有限（每 query 最多小上下文）；真实 decode 是逐 token
-  追加缓存 —— 量化的逐 token 累积误差未单独测（INT8 的相对标量误差下, 该累积风险低,
-  但严格讲属于后续工作）。
+- **逐 token 累积误差已单独验证**（`tools/kv_accum_probe.py`，2026-09-10）：
+  - 板上 INT8 是**每 token 独立 scale**（per-token scalar）——每行量化相互独立，无跨行交叉项，
+    误差**不随 cache 长度累积**（理论保证）。
+  - 实证：合成 70 序列下 cache 长度 4→64，per-token 与 per-cache（共享一个 scale，会漂移）
+    的 argmax 保真曲线完全重合（4→2.1% / 8→10.4% / 16→25% / 64→76%）；若真累积，
+    per-cache（scale 漂移）应显著劣于 per-token——没有，机制证伪了"累积"。
+  - 真实 x（T=4）：per-token 96.9% vs per-cache 94.8%，真实验证同样无累积迹象。
+  - 长 cache 下 argmax% 上升是"注意力向远处强 key 聚集→单个 key 扰动影响占比变小"，
+    不是误差消失，恰说明量化扰动在长序列下**相对更不关键**。
+  - 注意合成 x 的绝对 argmax%（2.1~76%）远低于真实 x（96.9%）——合成归一高斯与真实
+    隐藏态分布不同，**绝对 argmax% 以真实 x 为准**；合成仅用于"per-token vs per-cache 对照"
+    证明误差不累积。
 - 裸 BF16 溢出的教训：latent 值域可达 ~8.7e4（RMsnorm 前 x@kv_a 的 7168 维投影），
   **KV 必须量化存储**，这是 INT8 不是可选项而是必须项。
 
 ## 3. 产物与后续
 
-- `tools/kv_quant_probe.py` — 本研究的可复跑脚本。
+- `tools/kv_quant_probe.py` — 本研究的可复跑脚本（`--x-npy` 支持真实隐藏态）。
+- `tools/kv_accum_probe.py` — 逐 token 累积误差验证（per-token vs per-cache 对照）。
 - 后续：真实隐藏态验收（引擎级）；若过，板子 KV 写回 payload 可定为 INT8 latent+4bit rope。
