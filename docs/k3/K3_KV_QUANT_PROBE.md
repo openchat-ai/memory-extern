@@ -18,10 +18,16 @@
   latent INT8    13.8KB/tok   → 1.37M token
 ```
 
-## 1. 实测（真实 MLA 权重，从 trunk 层切片 MXFP8 解码；T=64 归一激活）
+## 1. 实测（真实 MLA 权重，从 trunk 层切片 MXFP8 解码；T=64 归一激活 + T=4 真实 prefill 激活）
 
 `tools/kv_quant_probe.py` 重建 layer3 GatedMLA 的完整 KV 路径，量化 latent 后测：
 attention score 的 **argmax 保持率**（每 query·每头选中的 token 是否不变）与输出 energy/SNR。
+输入 x 两种获得方式：
+- **合成**: 高斯 T=64×7168（RMS=1）—— 初步扫描；
+- **真实**: `ref_forward.py /model ids --max-layer=3` 从真 embed + 真 4 层前向 dump 的 layer3
+  MLA 输入隐藏态（T=4, 与 C 引擎一致的路径）—— 最终验收。
+
+### 合成激活 (T=64)
 
 | 方案 | bit/elem | 每 token | E-energy | argmax | V-only |
 |---|---|---|---|---|---|
@@ -29,6 +35,18 @@ attention score 的 **argmax 保持率**（每 query·每头选中的 token 是�
 | **INT8（每 token 1 scale）** | **8** | **13.8KB** | **10.7%** | **99.4%** | **0.68%** |
 | INT4（每 token 1 scale） | 4 | ~6.9KB | 45.3% | 89.7% | 11.6% |
 | **latent=8bit + rope=4bit** | 7.56 | ~13.0KB | 0.00% | **100%** | - |
+
+### 真实 prefill 复测 (T=4, 真实隐藏态) —— 2026-09-10
+
+| 方案 | bit/elem | E-energy | argmax | V-only |
+|---|---|---|---|---|
+| 裸 BF16 cast | 16 | NaN | 49.2% | - |
+| **INT8（每 token 1 scale）** | **8** | **8.63%** | **99.0%** | **2.48%** |
+| INT4（每 token 1 scale） | 4 | 38.2% | 84.4% | 50.6% |
+| **latent=8bit + rope=4bit** | 7.56 | **0.00%** | **100%** | - |
+
+**真实数据完全复现合成结论**：INT8 甜点（99%+/8.6%）、rope 4bit 零损失、
+INT4 崩、V 容限大于 K——结构性结论在真实激活下成立。
 
 ### 结论
 
@@ -46,8 +64,10 @@ attention score 的 **argmax 保持率**（每 query·每头选中的 token 是�
 
 ## 2. 诚实边界
 
-- 权重**真实**（层切片解码），激活为**归一化高斯**（贴合层层归一后的量级, 但非引擎真跑一轮）。
-- RF 下死需在引擎真实 prefill/真实隐藏态重测一次（同 §2 权重研究的「真实隐藏态验收」尾部）。
+- 真实 prefill 已作为最终验收（真 embed + 真 4 层前向, 与 C 引擎路径一致）。
+- 隐蔽局限：T=4 的因果注意柔和度有限（每 query 最多小上下文）；真实 decode 是逐 token
+  追加缓存 —— 量化的逐 token 累积误差未单独测（INT8 的相对标量误差下, 该累积风险低,
+  但严格讲属于后续工作）。
 - 裸 BF16 溢出的教训：latent 值域可达 ~8.7e4（RMsnorm 前 x@kv_a 的 7168 维投影），
   **KV 必须量化存储**，这是 INT8 不是可选项而是必须项。
 

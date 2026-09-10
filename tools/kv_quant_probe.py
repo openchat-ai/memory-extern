@@ -80,7 +80,19 @@ def onehot_error(pred, ref):
 
 
 def main():
-    trunk, layers_json, slot = sys.argv[1], sys.argv[2], int(sys.argv[3])
+    argv = sys.argv
+    x_npy = None
+    _argv = [argv[0]]
+    i = 1
+    while i < len(argv):
+        if argv[i] == "--x-npy":
+            x_npy = argv[i + 1]
+            i += 2
+        else:
+            _argv.append(argv[i])
+            i += 1
+    argv = _argv
+    trunk, layers_json, slot = argv[1], argv[2], int(argv[3])
     man = json.load(open(layers_json))
     lay = man["layers"][slot]
     lfb = open("%s/layer_%03d.bin" % (trunk, slot), "rb").read()
@@ -102,11 +114,19 @@ def main():
     q_b = decode_tensor(lfb, lay["tensors"][T + "self_attn.q_b_proj.weight"])               # [18432, 1536]
     print("q_a_ln %s q_b %s" % (q_a_ln.shape, q_b.shape))
 
-    rng = np.random.default_rng(7)
-    # 模拟 T=64 真实形状隐藏态(每行 RMS=1 贴近层层归一后的真实量级; 权重真)
-    Tq = 64
-    x = rng.standard_normal((Tq, E)).astype(np.float32)
-    x = x / np.sqrt((x * x).mean(axis=1, keepdims=True) + 1e-6)
+    if x_npy is not None:
+        x = np.load(x_npy).astype(np.float32)
+        Tq = x.shape[0]
+        if x.shape[0] == 1:
+            x = np.repeat(x, 4, axis=0)      # 单 token 展开成 4, 让因果注意有上下文
+            Tq = x.shape[0]
+        print("using REAL hidden-state x: %s, Tq=%d" % (x_npy, Tq), flush=True)
+    else:
+        rng = np.random.default_rng(7)
+        # 模拟 T=64 真实形状隐藏态(每行 RMS=1 贴近层层归一后的真实量级; 权重真)
+        Tq = 64
+        x = rng.standard_normal((Tq, E)).astype(np.float32)
+        x = x / np.sqrt((x * x).mean(axis=1, keepdims=True) + 1e-6)
 
     def rmsnorm(v, w):
         return v / np.sqrt((v * v).mean() + 1e-6) * w
