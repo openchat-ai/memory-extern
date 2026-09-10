@@ -122,7 +122,11 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 v1 层 49KB diff 写回件 = `rtl/28_wb_diff/wb_diff.v`
 (v1 层秩1 diff 49,160B/帧 = 8B 头 + 96×(k128+v128)×2B, 逐层即推、无量化单 pass,
 credit 弹性 FIFO + 层序 barrier + round 轮序, 真尺寸对账 6.78MB/2 token 全绿)。
-SDMA 侧复用两类 framing 直接装配。
+**统一写回引擎 = `rtl/29_wb_unified/wb_unified.v`** —— 与 sim_layer_flow.py 执行序同构:
+每 token 一 go = 93 帧严格层序 0..92 (69×diff 49,160B + 24×KV 552B, 层型 = l%4==3 | 末层),
+pass0 全 token v2 KV 峰 → token 级 scale, pass1 混排推帧, layer92 完工 token_done(barrier),
+真尺寸 2 token 字节序对账 6,810,576B 全绿(T1 真停顿 3 次, occ 钉 2048 无违例)。
+SDMA 侧直接复用之。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
