@@ -21,12 +21,15 @@ import random
 # ---- K3 冻结常量 (§2/§5, 尺寸下死已核对: k3_head_dims_data.md) ----
 HEADS = 96          # q/v_proj out 12288 = 96×128
 D = 128             # KDA state dim per head (A_log[128])
-KV_CT = 576         # kv_a_proj_with_mqa out = latent 512 + mqa rope 64
+KV_CT = 576         # kv_a_proj_with_mqa out = latent 512 + mqa rope 64 (写回=544B 量化, 见下)
 DT = 2              # BF16 bytes
 N_V1, N_V2 = 69, 24
 DIFF_LB = HEADS * (D + D) * DT      # 49,152  v1 层每 token 的秩1 diff
-KV_LB = KV_CT * DT                  # 1,152    v2 层每 token 的 KV 追加
-TOKEN_B = N_V1 * DIFF_LB + N_V2 * KV_LB   # 3,419,136 ≈ 3.42MB(decimal)
+# KV v2 写回定案 2026-09-10: latent 512 INT8 + rope 64 4bit (实证 K3_KV_QUANT_PROBE.md)
+KV_LATENT_B = 512 * 1                # 512 B  latent INT8 (per-token 1 scale)
+KV_ROPE_B   = 64 // 2                # 32  B  rope 4bit
+KV_LB = KV_LATENT_B + KV_ROPE_B      # 544    v2 层每 token 的 KV 追加
+TOKEN_B = N_V1 * DIFF_LB + N_V2 * KV_LB   # 3,404,544 ≈ 3.40MB(decimal)
 
 V1 = {0,1,2,4,5,6,8,9,10,12,13,14,16,17,18,20,21,22,24,25,26,28,29,30,
       32,33,34,36,37,38,40,41,42,44,45,46,48,49,50,52,53,54,56,57,58,

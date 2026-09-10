@@ -77,16 +77,20 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 | 数据 | 回写量 | 时机 |
 |---|---|---|
 | KDA S(v1, 69层) | 3.4MB/token(秩1 diff) | 每 token 攒, 整轮后主机物化 |
-| KV(v2, 24层) | 27.7KB/token BF16 / 13.8K INT8, append-only | 每 token(decode)/每 chunk(prefill) |
+| KV(v2, 24层) | **12.75KB/token（INT8 latent 512 + 4bit rope 64）**, append-only | 每 token(decode)/每 chunk(prefill) |
 | S_b(48MB) | 48MB | 会话切换/换章/暂停(非每 token) |
 | 会话检查点 | ~284MB(S+KV+S_b+末隐藏) | 暂停/恢复前低频 |
 | 其余(权重/实体/router/e_score/头) | 全程只读, 无回写 | - |
 
-⇒ decode 每字回写 ≈ **3.4MB(KDA)+ 27.7KB(KV)≈ 3.43MB**, 全部只进主机 RAM。
+⇒ decode 每字回写 ≈ **3.4MB(KDA)+ 12.8KB(KV)≈ 3.41MB**, 全部只进主机 RAM。
+
+**板上 KV 写回定案(2026-09-10, 实证 K3_KV_QUANT_PROBE.md)**: latent 512 INT8(每 token 1 scale) + rope 64 4bit。
+12.75KB/token = 24层 × (512×1B + 64×0.5B), argmax 99.0% / 能量 8.6%; rope 4bit 0 损失。
+逐 token 累积验证: per-token 独立 scale 不随 cache 长度累积(per-cache 对照实验证伪累积)。
 
 **板→主机写回路径(2026-09-09 改: 转载站 → DMA 弹性 FIFO)**: 片上不再攒批 ——
   每层 diff(49KB)算完即推 DMA 弹性 FIFO(**128KB ≥ 单笔最大 payload 49KB**, 异步无阻塞),
-  攒批/合并搬去主机侧。49KB 已是高效 PCIe burst, 板上 0.5MB/s(3.43MB/token×0.15t/s)
+  攒批/合并搬去主机侧。49KB 已是高效 PCIe burst, 板上 0.5MB/s(3.41MB/token×0.15t/s)
   的涓流不需要大数组(承 SRAM 域预算: 慢任务不许绑快资源); sim 验证:
   FIFO<单笔49KB 结构性顶穿, 主机写 ≥ 266MB/s(预填峰产出率)即零停顿, decode 仅 0.3MB/s。
   ⚠ 边界: S_b(48MB)与当前层 S(3MB)都进不了 765KB —— SRAM 是 MAC 热存储池, 不是家。
@@ -99,14 +103,14 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 | 字段        | 字节                     | 说明                          |
 | 层号+类型   | 4                       | v1=diff / v2=KV-append         |
 | 头偏移/长度 | 4                       | 96 头分组粒度                  |
-| payload     | v1: 49KB / v2: 24×~1.2KB | v1=96×(k 128+v 128)×2B 向量对  |
+| payload     | v1: 49KB / v2: 24×544B | v1=96×(k 128+v 128)×2B 向量对; v2=latent 512×1B + rope 64×0.5B |
 
 机制:
 - 顺序  : 每 token 严格层序; 层 L 的 payload 必在层 L+1 前到 host
 - 流控  : FIFO 阈值 50% → 层算完不推, 等 credit(主机常闲, 预期不触发)
 - 物化  : host 收到层 L diff 即 S[L] += Σ_h k_h⊗v_h^T(96 头 ×16K FMA ≈ µs),
           diff 即用即弃 —— 不攒整 token/整批; 并行于板上层 L+1 计算
-- KV    : append-only, host 按 24 层 × ~1.2KB 落 pinned 区, 与权重读双流
+- KV    : append-only, host 按 24 层 × 544B(=512×1B latent INT8 + 64×0.5B rope 4bit) 落 pinned 区, 与权重读双流
 - barrier: 层 92 结束 = token 完成, host ACK 后才许下一 token 头写回
 - 节奏  : 预填(每层 N×49KB, 批量物化) vs decode(每层 49KB, 逐层物化)
           —— 模拟器两条线都跑, 用字节序对账
@@ -154,8 +158,8 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 | 冻结口径 | 真形状为据 | 核对 |
 |---|---|---|
 | KDA 状态 96头×128×128 = 3.0MiB/层 | q/v_proj out 12288=96×128; A_log[128], o_norm[128], f_a_proj[128,·] | ✓ 3.145MB |
-| KV 27.7KB/token | kv_a_proj_with_mqa [576,·] = latent 512 + mqa rope 64; 576×2B×24层 = 27.6KB | ✓ |
-| 当前层 KV@1K ctx ~1MB | 1K × (576×2B) = 1.1MB/层 | ✓ |
+| KV 12.75KB/token | query=kv_a_proj_with_mqa [576,·] = latent 512 + mqa rope 64; 写回=512×1B INT8 + 64×0.5B rope4 = 544B×24层 = 12.75KB | ✓ 实证(2026-09-10) |
+| 当前层 KV@1K ctx ~0.55MB | 1K × 544B = 0.52MB/层 | ✓ 实证 |
 | S_b 16×96×128×128 = 48MiB | 25.17M 元素×2B = 48.0MiB | ✓ 几何闭合 |
 | vocab ≈320K | 4.4GB embed ÷7168÷2B = **327,680 = 320K×1024** | ✓ 已下死 |
 | 输出头 tied? | 需要全分片扫是否存在 output.weight | 仍开(待权重侧) |

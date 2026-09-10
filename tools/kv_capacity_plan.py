@@ -1,82 +1,63 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-kv_capacity_plan.py — KV-Cache 分层容量规划器（§14 前置）
+kv_capacity_plan.py — KV-Cache 存储规划器（2026-09-10 实证定案口径）
 
-背景（config.json 实测 2026-08-26，回填 T2）：
-  K3 为 MLA 架构：hidden=7168，层数 93，
-  kv_lora_rank=512，qk_rope_head_dim=64，num_heads=96，
-  num_key_value_heads=96（全 KV，无 GQA 压缩）。
-  MLA 下 KV 每 token/层 = kv_lora_rank + qk_rope_head_dim × num_heads
-                        = 512 + 64×96 = 6656 元素（≈全注意力 12288 的 54%）
+架构事实（研究闭环, K3_KV_QUANT_PROBE.md + kv_quant_probe.py 实证）：
+  K3 93 层中只有 24 层是 MLA/v2（idx 3,7,...,91,92）, 其余 69 层是 KDA/v1（无 KV cache）。
+  MLA 每 token 写回 = latent 512 + 共享 rope 64 = 576 元素/层（mqa rope 96 头共享一份,
+  不是 64×96=6656 —— 旧口径错在把 rope 当每头一份）。
+  板上写回（decode 每 token / prefill 每 chunk）:
+    BF16 latent   : 576 × 2B × 24 = 27.6KB/token
+    INT8 latent   : 512 × 1B × 24 = 12.3KB/token   （实证 argmax 99%, E 8.6%）
+    + rope 4bit   : 64 × 0.5B × 24 = 0.77KB/token  （实证 0 损失）
+    => INT8+rope4 : 13.06KB/token (footprint 减半, 甜点)
+  KV 读带宽随 ctx 增长; 写回走板→主机 FIFO(append-only), 不进板上 DDR。
 
-核心方程：
-  kv_mb_per_tok = L × (kv_lora_rank + qk_rope_head_dim×num_heads) × bytes
-  预算 tok      = ddr_gb×1024 / kv_mb_per_tok
-  注意力读取带宽 = ctx × kv_mb_per_tok / token   （与 25.83GB 权重流量对比）
-
-用法：
-  python3 kv_capacity_plan.py                    # 全场景扫描（MLA 定案口径）
-  python3 kv_capacity_plan.py --ddr-gb 2         # 指定板载容量
+用法:
+  python3 kv_capacity_plan.py                    # 默认主机 KV 预算 1GB 工况
+  python3 kv_capacity_plan.py --kv-gb 2          # 指定可分配给 KV 的内存
 """
 
 import argparse
 
-LAYERS   = 93
-HIDDEN   = 7168
-WEIGHT_GB_TOK = 25.83          # 实测权重流量（每生成 token 必付）
-KV_LORA   = 512                 # MLA latent 秩（config kv_lora_rank）
-ROPE_DIM  = 64                  # MLA qk_rope_head_dim
-NUM_HEADS = 96                  # MLA num_heads（= num_key_value_heads）
-# MLA KV 每 token 元素数 = latent + rope×heads
-MLA_KV_DIM = KV_LORA + ROPE_DIM * NUM_HEADS  # = 6656
+MLA_LAYERS = 24            # 24 层 MLA（v2）, 其余 69 层 KDA 无 KV cache
+KV_LORA    = 512           # latent 秩（kv_lora_rank）
+ROPE_DIM   = 64            # 共享 rope（qk_rope_head_dim, 96 头共享一份）
+KV_ELEM    = KV_LORA + ROPE_DIM  # = 576 写回元素/层/token
 
 
-def kv_mb_per_tok(dtype: str) -> float:
-    bytes_e = {"fp16": 2.0, "q8": 1.0, "q4": 0.5}[dtype]
-    return LAYERS * MLA_KV_DIM * bytes_e / 1e6
+def kv_bytes_per_tok(scheme: str) -> float:
+    """每 token 写回字节（24 层合计, 层内 latent + rope 分档）"""
+    if scheme == "bf16":
+        return MLA_LAYERS * (KV_LORA + ROPE_DIM) * 2.0
+    if scheme == "int8":
+        return MLA_LAYERS * KV_LORA * 1.0 + MLA_LAYERS * ROPE_DIM * 1.0
+    if scheme == "int8_r4":   # latent INT8 + rope 4bit（实证甜点）
+        return MLA_LAYERS * KV_LORA * 1.0 + MLA_LAYERS * ROPE_DIM * 0.5
+    raise KeyError(scheme)
 
 
-def plan(ddr_gb: float):
-    print(f"\n板载 DDR = {ddr_gb} GB | 权重流量固定 {WEIGHT_GB_TOK} GB/tok\n"
-          f"MLA: kv_lora={KV_LORA} + rope({ROPE_DIM}×{NUM_HEADS}头) = "
-          f"{MLA_KV_DIM} 元素/tok/层\n")
-
-    print(f"{'dtype':>5} | " + " ".join(f"{d:>7}" for d in ("fp16", "q8", "q4")))
-    print("-" * 46)
-
-    row = []
-    for dtype in ("fp16", "q8", "q4"):
-        mb = kv_mb_per_tok(dtype)
-        row.append(f"{int(ddr_gb*1024/mb):>7}")
-    print(f"{'tok':>5} | " + " ".join(row))
-    print("       ↑ 单元：全预算可容纳的上下文 token 数（batch=1）")
-
-    # batch×ctx 运行点（Q8 口径）
-    print(f"\nQ8 口径 · batch×最大上下文 运行点：")
-    print(f"{'batch':>6} | {'ctx_tok':>8}")
-    print("-" * 18)
-    mb = kv_mb_per_tok("q8")
-    for b in (1, 4, 8, 16, 32, 64):
-        print(f"{b:>6} | {int(ddr_gb*1024/mb/b):>8}")
-
-    # KV 读带宽 vs 权重流量的交叉点
-    print(f"\n注意力 KV 读带宽交叉点（超过此 ctx 后 KV 读开始挤占权重带宽）：")
-    mb = kv_mb_per_tok("q8")
-    cross_ctx = WEIGHT_GB_TOK * 1e3 / mb
-    print(f"  MLA  kv={mb:.2f}MB/tok → 交叉 ctx ≈ {cross_ctx:,.0f}")
-
+def plan(kv_gb: float):
+    schemes = [("bf16", "BF16 全量"), ("int8", "INT8 全量"), ("int8_r4", "INT8+rope4bit")]
+    print(f"\nKV 预算 = {kv_gb} GB（24 层 MLA · per-token 写回 latent512+共享rope64）")
+    print(f"{'方案':<16} | {'写回/token':>10} | {'可容上下文':>12}")
+    print("-" * 44)
+    ntoks = {"bf16": 0, "int8": 0, "int8_r4": 0}
+    for key, name in schemes:
+        b = kv_bytes_per_tok(key)
+        ntoks[key] = kv_gb * 1024**3 / b
+        print(f"{name:<16} | {b/1024:>7.2f}KB | {ntoks[key]:>12,.0f}")
+    print(f"\nINT8+rope4  vs BF16: 同预算上下文 {ntoks['int8_r4']/ntoks['bf16']:.2f}x")
     print(f"""
-结论模板：
-  · KV【容量】是硬约束 → 由 (kv_heads=96, MLA, dtype, batch, ctx) 决定准入
-  · MLA 使 KV 比全注意力小 46%（6656 vs 12288 元素/tok/层）
-  · KV【读带宽】在 ctx<数千 时远小于权重流量 → 不是瓶颈
-  · 超预算的溢出去向：主机内存(batch 模式) / NVMe(独立模式,延迟翻倍代价) /
-    直接降 batch —— 准入控制器按本表自动选运行点
+结论:
+  · 板上写回预算约束由 token 数决定, INT8+rope4 把同预算上下文推 {ntoks['int8_r4']/ntoks['bf16']:.2f}x
+  · KV 走板→主机 FIFO(append-only), 不进板上 DDR; 主机按本表定 pinned 区大小
+  · 8K→16K: KV 预算翻倍或 INT8 减半 —— 不碰权重流量(25.83GB/token 是硬账)
 """)
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ddr-gb", type=float, default=1.0)
+    ap.add_argument("--kv-gb", type=float, default=1.0)
     args = ap.parse_args()
-    plan(args.ddr_gb)
+    plan(args.kv_gb)

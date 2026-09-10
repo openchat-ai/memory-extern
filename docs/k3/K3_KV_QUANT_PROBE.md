@@ -84,4 +84,9 @@ INT4 崩、V 容限大于 K——结构性结论在真实激活下成立。
 
 - `tools/kv_quant_probe.py` — 本研究的可复跑脚本（`--x-npy` 支持真实隐藏态）。
 - `tools/kv_accum_probe.py` — 逐 token 累积误差验证（per-token vs per-cache 对照）。
-- 后续：真实隐藏态验收（引擎级）；若过，板子 KV 写回 payload 可定为 INT8 latent+4bit rope。
+- **已定案（2026-09-10）**：真实 prefill + 逐 token 累积双向验证通过 →
+  板上 KV 写回 payload = **INT8 latent 512 + 4bit rope 64 = 544B/层、12.75KB/token**。
+  已落地：`board-1g-k3-frozen.md`（回写清单/协议表/尺寸核对）、`sim_layer_flow.py`
+  （KV_LB 544 → decode 每字 3.40MB）、`kv_capacity_plan.py`（同预算上下文 2.12×）。
+- 引擎级引擎真实运行验收仍可做（把该格式写进 cache 槽再跑一遍 golden），但量化保真
+  已由 torch 全精度 ref 的中间隐藏态验证 —— 剩余工程任务是格式落槽，非精度风险。
