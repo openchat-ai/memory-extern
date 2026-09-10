@@ -127,6 +127,11 @@ credit 弹性 FIFO + 层序 barrier + round 轮序, 真尺寸对账 6.78MB/2 tok
 pass0 全 token v2 KV 峰 → token 级 scale, pass1 混排推帧, layer92 完工 token_done(barrier),
 真尺寸 2 token 字节序对账 6,810,576B 全绿(T1 真停顿 3 次, occ 钉 2048 无违例)。
 SDMA 侧直接复用之。
+**KV 读回件 = `rtl/30_kv_restore/kv_restore.v`** —— 写回协议 v0 的读侧镜像:
+decode v2 注意力消费 host 缓存的逐 token KV (append-only, 1K 窗),
+每 token 24 层帧严格层序 552B/帧 (布局 ≡ M14 写者实发字节: 8B 头 + 512 latent INT8
++ 32 rope 4bit 包), credit 弹性背压挂起记 stall 不丢字节, 头 8B 逐字段自验。
+真尺寸 2 token 字节序对账 26,496B 全绿(T1 真停顿 2 次, occ 钉 2048 无违例)。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
