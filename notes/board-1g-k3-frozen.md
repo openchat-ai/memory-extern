@@ -119,7 +119,10 @@ S_b(48MB)是唯一例外: 每层 K/V 投影都读它, 无法按层分段 → 板
 **RTL 落点(2026-09-10):** v2 层 KV 写回件 = `rtl/27_kv_writeback/kv_writeback.v`
 (两遍 pass: 全 token 累计求 token 级 scale → 逐层 552B 帧 = 8B 头 + 512 latent INT8 +
 32 打包 rope 4bit; credit(阈值 50%)门限 + 严格层序 order 校验, T0/T1 双场景字节序对账全绿)。
-v1 层 49KB diff 回写件 = M12+ 的同类 framing, 归 SDMA 侧实现。
+v1 层 49KB diff 写回件 = `rtl/28_wb_diff/wb_diff.v`
+(v1 层秩1 diff 49,160B/帧 = 8B 头 + 96×(k128+v128)×2B, 逐层即推、无量化单 pass,
+credit 弹性 FIFO + 层序 barrier + round 轮序, 真尺寸对账 6.78MB/2 token 全绿)。
+SDMA 侧复用两类 framing 直接装配。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
