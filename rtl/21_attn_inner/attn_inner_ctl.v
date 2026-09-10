@@ -158,11 +158,14 @@ module attn_inner_ctl #(
                 end
             end
         end else begin
-            // 待命: go 沿触发
+            // 待命: go 沿触发 (层级联用需整会话复位, 仅保留累计观测)
             r_take <= 0; act_in <= 0; weight_in <= 0; o_valid <= 0;
             if (go && !busy) begin
                 busy <= 1'b1;
                 session <= 1'b1;
+                wc <= 0; ra <= 0; idx <= 4'd0;
+                feeding <= 1'b0; pend_o <= 1'b0;
+                acc_a16 <= 0; acc_b16 <= 0;
             end
         end
     end

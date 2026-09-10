@@ -171,13 +171,19 @@ module attn_window #(
                 session <= 1'b0;             // 收口回待命 (go 已撤, 不重触发)
             end
         end else begin
-            // 待命: go 沿触发新会话
+            // 待命: go 沿触发新会话 (本层级联用需整会话复位, 仅保留累计观测)
             a_valid <= 0; s_ready <= 0; r_valid <= 0;
             if (go && !busy) begin
                 busy <= 1'b1;
                 session <= 1'b1;
+                nf <= 0; nr <= 0; fw <= 0; rw <= 0;
+                blocks_filled <= 0;
                 fill_active <= 1'b1;
                 read_active <= 1'b1;
+                fill_done <= 1'b0; read_done <= 1'b0;
+                presented <= 1'b0;
+                grant_w <= 1'b1;
+                read_cnt <= 2'b00;
             end
         end
     end
