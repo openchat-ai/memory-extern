@@ -151,6 +151,11 @@ top-T 表插入 key {score,~idx} 降序 (平局 idx 小者先), 层收齐吐表 
 手拉手 → layer_done(barrier) → NL 层 → token_done → round++。credit 弹性背压 (吸期断信用
 记 stall); 装配侧慢取 + 灌入侧断信用双向背压, 各层 top-T 黄金逐行对账零错位零重号
 (源四连同分逼平局断序), FAST(EX=32/TOP=8/NL=3, 停顿30拍)全绿。
+**M18 专家装配 = `rtl/34_assembler/assembler.v`** —— router top-T 选出 →
+按 (层,实体号) 从切片 LUT 逐实体取 EW 词依序吐流; 层内严格保序 (选中序=吐流序,
+实体块非按号连续, 翻 ep 时跳址 bebase 而非 +1); 装配侧背压 (out_take 1-in-2 记
+停顿) + 上游断灌 (TAKE 期 in_valid 暂降, 不丢不序), 层 barrier, NL 层完工
+token_done → round++。FAST(EX=32/TOP=8/EW=8/NL=3, 词192, 停顿64拍)全绿。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
@@ -240,7 +245,9 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
       ③ 抽查 layer 0/15/42/67/92 md5 全匹配;
       实测: v1 615.7 MB/层(不含层0) / v2 411.9 MB/层;
       输出 `/mnt/nvme/trunk_layers_out/`(53GB, 93 切片 + trunk_layers.json + sizes.tsv)
-- [ ] **专家库侧索引/装配**: 1413GB 实体库按(层→offset)建索引 + 按 top-16 装配流, 与拆 trunk 配套
+- [x] **专家库侧索引/装配**: 1413GB 实体库按(层→offset)建索引 + 按 top-16 装配流, 与拆 trunk 配套
+      —— **装配流核心 M18 已落地**(`rtl/34_assembler/`, top-T→实体块依序吐流 + 双向背压 + 层 barrier,
+      FAST 全绿); 实体库索引(层→offset 规划)随 P1 搬运件
 - [x] **router 先行**: 每层 gate(6.5MB)+e_score 装载 → top-16 选择必须先于专家抽取(读 12.8MB 后拉实体)
       —— **top-T 选择核心 M17 已落地**(`rtl/33_router_sel/`, 先选后抽时序 + 平局断序 + 双向背压,
       FAST 全绿); gate/e_score 实际装载读随 P1 搬运件
