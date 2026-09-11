@@ -23,6 +23,8 @@
 // M31 断言红队 (参数 FAULT=0/1/2/3): 对黄金/数据路径注入受控故障, 验证断言真会咬:
 //      1=LUT 一个词位篡改(GEMM 家族) 2=o 黄金镜像一例错(attn 家族) 3=head acc 扰动一例
 //      (top-K 家族); 若某注入逃过全部断言 → 打印 REDTEAM ESCAPE (断言失效证据)
+// M32: SEED 参数旋转 LUT/fb 混合种子(0..); 活锁白盒探针: 引擎忙档内"词+o+释放"推进信号
+//      连续 >20000cyc 无新增 → $fatal (响应性/无死锁-活锁 formal-lite)
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -38,6 +40,7 @@ module decode_auto_tb;
     parameter integer PROFILE = 0;
     parameter integer HALF    = 5;
     parameter integer FAULT   = 0;   // 断言红队: 0=关闭; 1=GEMM词篡改; 2=o黄金镜像错; 3=head acc扰动
+    parameter integer SEED    = 0;   // M32 种子矩阵: 旋转 LUT gsw 初值 + fb 反馈常量
     localparam [15:0] SEEDB = (PROFILE == 1) ? 16'h1234 :
                               (PROFILE == 2) ? 16'h5555 :
                               (PROFILE == 3) ? 16'hCAFE :
@@ -274,7 +277,7 @@ module decode_auto_tb;
         reg [31:0] x;
         reg [15:0] u1, u2, u3;
         begin
-            x = ((SEEDB + 1013904223) ^ (L*7919 + e*104729 + w*31)) & 32'hFFFFFFFF;
+            x = ((SEEDB + 1013904223 + SEED*119) ^ (L*7919 + e*104729 + w*31)) & 32'hFFFFFFFF;
             x = (x*1664525 + 1013904223) & 32'hFFFFFFFF; u1 = x[15:0];
             x = (x*1103515245 + 12345)   & 32'hFFFFFFFF; u2 = x[15:0];
             x = (x*2654435769 + 2246822519) & 32'hFFFFFFFF; u3 = x[15:0];
@@ -458,6 +461,22 @@ module decode_auto_tb;
             wdc = wdc + 1;
         end else wdc = 0;
     end
+
+    // M32 活锁白盒: 引擎忙档内 "rail词+o+释放+喂词" 推进信号连续 >20000cyc 无新增 → 活锁
+    reg [63:0] prg = 0, prg_d1 = 0;
+    reg [31:0] liveflat = 0;
+    always @(posedge clk) begin
+        if (rst_n && (ex_busy || out_valid || s_valid)) begin
+            prg <= prg + (ex_r_valid && rail_r_take) + ctl_o_valid + (ex_rl_valid && !rl_v_d1) + s_valid;
+            if (prg === prg_d1) liveflat <= liveflat + 1;
+            else liveflat <= 0;
+            prg_d1 <= prg;
+            if (liveflat > 20000) begin
+                $display("%0t FAIL 活锁: 推进信号 %0d cyc 无新增 (prg=%0d ex_busy=%0d)", $time, liveflat, prg, ex_busy);
+                $fatal(1);
+            end
+        end else liveflat <= 0;
+    end
     integer hwdc = 0;
     always @(posedge clk) begin
         if (head_run) begin
@@ -513,7 +532,7 @@ module decode_auto_tb;
             // PROFILE 8: ±1 token 反馈抖动 (t 交替 ±1); 9 = 同种子无抖动对照
             jit = (PROFILE == 8 && t >= 1) ? ((t % 2) ? 1 : -1) : 0;
             if (t > 0)
-                fb[t] = (fb[t-1]*1664525 + ((tokstream[t-1] + jit) & 16'hFFFF)*7 + 11) & 16'hFFFF;   // LCG 搅拌+上步 token 反馈 (防固定点)
+                fb[t] = (fb[t-1]*1664525 + ((tokstream[t-1] + jit + (SEED*257)) & 16'hFFFF)*7 + 11) & 16'hFFFF;   // LCG 搅拌+上步 token 反馈 (防固定点)
             gold_all_t(t);
             gemm_gold_arr[t] = gemm_gold(t);
             seed_r = fb[t];
