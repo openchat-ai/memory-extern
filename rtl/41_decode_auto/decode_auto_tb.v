@@ -48,7 +48,7 @@ module decode_auto_tb;
     // 交替/8·9=种子0x5555 ±1反馈抖动成对); HALF=时钟半周期(参数化跨速率)
     parameter integer PROFILE = 0;
     parameter integer HALF    = 5;
-    parameter integer FAULT   = 0;   // 断言红队: 0=关闭; 1=GEMM词篡改; 2=o黄金镜像错; 3=head acc扰动
+    parameter integer FAULT   = 0;   // 断言红队: 0=关闭; 1=GEMM词篡改; 2=o黄金镜像错; 3=head acc扰动; 4=1+2组合; 5=1+3组合
     parameter integer SEED    = 0;   // M32 种子矩阵: 旋转 LUT gsw 初值 + fb 反馈常量
     localparam [15:0] SEEDB = (PROFILE == 1) ? 16'h1234 :
                               (PROFILE == 2) ? 16'h5555 :
@@ -389,7 +389,7 @@ module decode_auto_tb;
     reg [31:0] sacc = 0, gacc = 0, aacc = 0, pacc = 0;
     reg [15:0] fault_gold_o = 0;   // FAULT=2: 一例 o 黄金镜像错 (attn 家族)
     always @(negedge clk)
-        fault_gold_o = (FAULT == 2 && tok_now == 0 && ctl_o_head == 0 && ctl_o_row[2:0] == 2)
+        fault_gold_o = ((FAULT == 2 || FAULT == 4) && tok_now == 0 && ctl_o_head == 0 && ctl_o_row[2:0] == 2)
                      ? 16'hFFFF : 16'h0000;
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin sacc <= 0; gacc <= 0; aacc <= 0; pacc <= 0; end
@@ -523,8 +523,8 @@ module decode_auto_tb;
                         wr_en = 1;
                         wr_addr = L*EX*EW + e*EW + w;
                         wr_data = sw_val(L, e, w);
-                        // FAULT=1: 篡改 (L=0, exec15, lane1) —— t=0 顶层黄金必读位
-                        if (FAULT == 1 && L == 0 && e == 15 && w == 1) wr_data = wr_data ^ 16'h8000;
+                        // FAULT=1/4/5: 篡改 (L=0, exec15, lane1) —— t=0 顶层黄金必读位
+                        if ((FAULT == 1 || FAULT == 4 || FAULT == 5) && L == 0 && e == 15 && w == 1) wr_data = wr_data ^ 16'h8000;
                     end
         @(negedge clk);
         wr_en = 0;
@@ -599,8 +599,8 @@ module decode_auto_tb;
 
             // ── 剪枝头: acc=本 token 增量 ──
             @(negedge clk); head_acc = dt[15:0];
-            if (FAULT == 3 && t == 5) begin
-                @(negedge clk); head_acc = head_acc + 1'b1; // FAULT=3: 仅 t=5 一个 acc 扰动
+            if ((FAULT == 3 || FAULT == 5) && t == 5) begin
+                @(negedge clk); head_acc = head_acc + 1'b1; // FAULT=3/5: 仅 t=5 一个 acc 扰动
             end
             hr0 = h_round_w;
             @(negedge clk); head_go = 1;
