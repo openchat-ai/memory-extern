@@ -145,6 +145,12 @@ sloader→切片库(双槽)→sched_exec{GEMM段+attn段+释放} 单链闭环, �
 严格 0..NL-1, GEMM 段逐词对账切片字=灌入元素序(32bit 词=连续 2×16bit 元素, 含末层
 轮号交接: 顶层取灌填轮 L&1 槽而非当前 round), acc 双账 sacc=gemm 公式=attn osum 闭合,
 FAST(NL=4/HEADS=2/DIM=4 ⇒ 32 元素/层 ⇒ GW=16)全绿。
+**M17 router 先行 = `rtl/33_router_sel/router_sel.v`** —— e_score 灌入→top-T 选择件:
+先选后抽 (gate+score 装载才动实体流), 层内流序=专家号 0..EX-1 严格单调 (灌收序=流序),
+top-T 表插入 key {score,~idx} 降序 (平局 idx 小者先), 层收齐吐表 → 装配侧 out_take
+手拉手 → layer_done(barrier) → NL 层 → token_done → round++。credit 弹性背压 (吸期断信用
+记 stall); 装配侧慢取 + 灌入侧断信用双向背压, 各层 top-T 黄金逐行对账零错位零重号
+(源四连同分逼平局断序), FAST(EX=32/TOP=8/NL=3, 停顿30拍)全绿。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
@@ -229,7 +235,9 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
       (v1 632MB / v2 419MB) + 每层清单(张量/形状/offset/路由头→专家实体 offset),
       供板子逐层流式取数; 顺带在 PC 上实测 93 层逐层字节, 核 632/419 与外推误差
 - [ ] **专家库侧索引/装配**: 1413GB 实体库按(层→offset)建索引 + 按 top-16 装配流, 与拆 trunk 配套
-- [ ] **router 先行**: 每层 gate(6.5MB)+e_score 装载 → top-16 选择必须先于专家抽取(读 12.8MB 后拉实体)
+- [x] **router 先行**: 每层 gate(6.5MB)+e_score 装载 → top-16 选择必须先于专家抽取(读 12.8MB 后拉实体)
+      —— **top-T 选择核心 M17 已落地**(`rtl/33_router_sel/`, 先选后抽时序 + 平局断序 + 双向背压,
+      FAST 全绿); gate/e_score 实际装载读随 P1 搬运件
 - [ ] **embed/output 接入**: 输入 embed 每 token 只查一行(14KB, 无害); **输出头是 decode 每字全词表税**
       (BF16 4.4GB → +1.26s/字, MXFP8 2.2GB → +0.63s/字), 词表剪枝 top-16K → +0.07s 待验
 - [ ] **状态的家**: KDA S(69×3MB)+KV 落 主机DDR(§5: 状态不落盘, M.2 仅冷仓) —
