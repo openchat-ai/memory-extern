@@ -472,3 +472,11 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   KV 写回/恢复辅助环 (kv_writeback/kv_restore/wb_diff/wb_unified/wb_flow/sched_flow/
   relay_fifo) 各自独立 TB 有过验证但**未与 P2 组合 + 部分 TB 诊断缺失** (wb_unified/
   wb_diff 静默无输出) → 集成空当与验证传染缺口, 候补里程碑=KV环回会话组合。
+
+**M47 一键全链回归**: `sim/devtests/run_all_regression.sh` = decode 门 + M19/M21/M23/M24/
+  kv_writeback/kv_restore 独立 TB 收口单命令, rc=0 全绿。回归可复现资产化。
+
+**M48 RTL 突变测试 (变异→断言必捕)**: 对 RTL 打突变 (tmp 副件, 不入库) 以证明断言族
+  咬真 RTL 错而非只咬 TB 注入: ①output_head 打分比较器 `>`→`<` → t=0 窗内top-K#0捕;
+  ②平局序 `cnt<tk_idx`→`>` → t=0 rank平局错序捕; ③assembler 词流截断 `EW-1`→`EW-2`
+  → t=0 GEMM 词错位捕。突变致死率 (kill ratio) 3/3 → 绿系断言确为活性断言 (非死代码)。
