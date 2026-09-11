@@ -26,6 +26,8 @@
 // M32: SEED 参数旋转 LUT/fb 混合种子(0..); 活锁白盒探针: 引擎忙档内"词+o+释放"推进信号
 //      连续 >20000cyc 无新增 → $fatal (响应性/无死锁-活锁 formal-lite)
 // M33: 全规模 VOC=1024/GRP=16 (规模无关性: fk mod-23 周期在 1024 词表上仍拉窗∋top-K)
+// M35: TN 参数化 (默认12, 可 -P 覆写至 60 疲劳长跑); PROBEON=0 跳终账后裕量/偏移探针
+//      (只跑断言主链, 长跑降时), 验证长链不漂/无量程失守
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -35,7 +37,8 @@ module decode_auto_tb;
     localparam FIFO_CAP = 4096, TCUT = FIFO_CAP/2;
     localparam NVOC=1024, NGRP=16, NMAXE=14, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
-    localparam TN = 12;
+    parameter integer TN      = 12;    // M35: 可覆写 (60 = 疲劳长跑)
+    parameter integer PROBEON = 1;     // 0 = 跳终账后裕量/偏移探针 (长跑降时)
     // M27..M30 压力参数: PROFILE 0..9 (0基线/1·2·3随机LUT+节流/4正态/5全零/6全F/7按层
     // 交替/8·9=种子0x5555 ±1反馈抖动成对); HALF=时钟半周期(参数化跨速率)
     parameter integer PROFILE = 0;
@@ -358,8 +361,8 @@ module decode_auto_tb;
         end
     endtask
 
-    //---------------- 当前 token (monitor 用) ----------------
-    reg [3:0] tok_now = 0;
+    //---------------- 当前 token (monitor 用; 宽位 > TN, 防 TN>15 回绕) ----------------
+    integer tok_now = 0;
 
     //---------------- GEMM 段逐词对账 (按 tok_now 取金) ----------------
     integer gemm_ok = 0, gemm_bad = 0;
@@ -657,7 +660,8 @@ module decode_auto_tb;
             $display("FAIL 节流下装配 EMIT-停拍路径未激活 (a_stalls=%0d)", a_stalls_w); $finish;
         end
 
-        // ── M29-B 剪枝窗稳定性探针 (终账后; cap_en 关闭, 不污染 hbuf/计数) ──
+        // ── M29-B 剪枝窗稳定性探针 (终账后; cap_en 关闭, 不污染 hbuf/计数; PROBEON=0 跳过) ──
+        if (PROBEON) begin
         cap_en = 0;
         for (xe = 0; xe < 7; xe = xe + 1) begin leak_ct[xe] = 0; cov_ct[xe] = 0; end
         for (nprobe = 0; nprobe < TN; nprobe = nprobe + 1) begin
@@ -711,6 +715,7 @@ module decode_auto_tb;
                  leak_ct[6], cov_ct[6]*100/(TN*NVOC));
         $display("== M30 偏移不变: 2扰动×%0d token=%0d/%0d 扰动acc下黄金仍在窗内 (xext=14) ==",
                  TN, 2*TN, 2*TN);
+        end
         if (PROFILE == 8 || PROFILE == 9) begin
             $display("== M30 P%0d 反馈敏感: tokstream=[%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d] ==",
                      PROFILE, tokstream[0], tokstream[1], tokstream[2], tokstream[3], tokstream[4], tokstream[5],
