@@ -82,6 +82,11 @@ run_row 0 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 12 1 4 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
 run_row 2 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+# M54 SEED 抽样扫 {5,9,13} + M57 FBPOLY=2 xorshift 长链
+run_row 0 5 5 12 1 0 1024 0 PASS; rc+=$?
+run_row 0 9 5 12 1 0 1024 0 PASS; rc+=$?
+run_row 0 13 5 12 1 0 1024 0 PASS; rc+=$?
+run_row 0 0 5 120 0 0 1024 2 PASS; rc+=$?
 # M49/M50 K 边界 {12,16} + 时钟极值 HALF {1,15}
 run_row 0 0 5 12 1 0 1024 0 PASS 12; rc+=$?
 run_row 0 0 5 12 1 0 1024 0 PASS 16; rc+=$?
