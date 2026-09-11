@@ -139,6 +139,12 @@ head 完工 = barrier, 层完工 = barrier, credit 弹性背压挂起记 stall �
 **M14×M15 loopback = `rtl/30_kv_restore/wb2kv_loop_tb.v`** —— 写者直接吐字节给读回件:
 wb_unified 93 层混排 f_b → kv_restore s_kv 字节闭环, push_pl_lay 对齐 NBA 延迟防 v2
 误判, 2 token 对账 wb225,768B / r13,248B 零差零违例, T1 真停顿 3 次全绿。
+**M16×M11 跨件联调 = `rtl/32_sched_sload/sched_sload_tb.v`** —— S[L] 灌入件直连层执行件:
+sloader→切片库(双槽)→sched_exec{GEMM段+attn段+释放} 单链闭环, 让位门纪律
+(层 L+2 落槽 L&1 前需见层 L 释放, credit 弹性背压 => sloader 停顿 1117 拍), 释放序
+严格 0..NL-1, GEMM 段逐词对账切片字=灌入元素序(32bit 词=连续 2×16bit 元素, 含末层
+轮号交接: 顶层取灌填轮 L&1 槽而非当前 round), acc 双账 sacc=gemm 公式=attn osum 闭合,
+FAST(NL=4/HEADS=2/DIM=4 ⇒ 32 元素/层 ⇒ GW=16)全绿。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
