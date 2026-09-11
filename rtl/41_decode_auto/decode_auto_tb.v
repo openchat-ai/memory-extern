@@ -506,7 +506,7 @@ module decode_auto_tb;
     integer dt_arr [0:TN-1];
     integer nprobe, xe, co, gk0, acc_off, jit;
     integer leak_ct [0:6], cov_ct [0:6];
-    integer tok_unique = 0, ntok_unique = 0, state_unique = 0, dup_found = 0;
+    integer tok_unique = 0, ntok_unique = 0, state_unique = 0, dup_found = 0, tc_sum = 0, tc_max = 0;
     integer ncad_sum = 0, ncad_min = 99999, ncad_max = 0;
     integer n_trunc_l = 0, n_trunc_r = 0;
 
@@ -638,6 +638,8 @@ module decode_auto_tb;
                 if (tokstream[j] == tokstream[t] && fb[j] == fb[t]) dup_found = 1;
             if (dup_found) state_unique = state_unique - 1;
             tc_cyc_arr[t] = ($time - tc_start) / (2*HALF);
+            tc_sum = tc_sum + tc_cyc_arr[t];
+            if (tc_cyc_arr[t] > tc_max) tc_max = tc_cyc_arr[t];
             if (tc_cyc_arr[t] >= 30000) begin
                 $display("FAIL t=%0d 周期超限 %0d", t, tc_cyc_arr[t]); $finish;
             end
@@ -743,6 +745,8 @@ module decode_auto_tb;
                  PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
         $display("== M28/M29 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/%0d=%0d%%, 左截%0d 右截%0d ==",
                  TN, ncad_min, ncad_max, ncad_sum/TN, NVOC, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
+        $display("== M39 吞吐剖面 P%0d/H%0d: 会话周期 均值%0d/最大%0d 词对账覆盖 %0d/%0d (%0d%%) ==",
+                 PROFILE, HALF, tc_sum/TN, tc_max, gemm_ok, TN*NL*GW, (gemm_ok*100)/(TN*NL*GW));
         $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d 状态%0d",
                  PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
                  r_stalls_w, a_stalls_w, racc, ntok_unique, state_unique);
