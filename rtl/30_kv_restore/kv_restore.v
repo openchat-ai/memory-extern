@@ -13,6 +13,7 @@
 // 吸收速度: 1B/拍 (kv_valid && credit)
 //────────────────────────────────────────────────────────────────────────────
 module kv_restore #(
+    parameter NL     = 93,
     parameter NL2    = 24,
     parameter LATENT = 512,
     parameter ROPE   = 64
@@ -72,13 +73,16 @@ module kv_restore #(
         end
     end
 
-    // 期望帧头字节
+    // 期望帧头字节 (字节0 = 该 v2 层的实际层号: n==NL2-1 → NL-1, 否则 4n+3 ——
+    //  ≡ M14 写者实发头, 使 S 层帧与 KV 帧同号空间; 层序由 pl_lay 连进 + 号比对)
     function [7:0] exp_head(input integer k);
         reg [15:0] len;
+        integer v2L;
         begin
             len = FB - 8;               // 544
+            v2L = (pl_lay == NL2 - 1) ? (NL - 1) : (4 * pl_lay + 3);
             case (k)
-                0: exp_head = pl_lay[7:0];
+                0: exp_head = v2L[7:0];
                 1: exp_head = 8'h01;
                 2: exp_head = 8'h00;
                 3: exp_head = 8'h00;

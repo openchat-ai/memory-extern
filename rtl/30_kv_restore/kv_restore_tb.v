@@ -13,7 +13,7 @@
 // 场景: T0 排空全开(零停顿); T1 排空熄火真挡 → 恢复; 全程 2 token 对账。
 //────────────────────────────────────────────────────────────────────────────
 module kv_restore_tb;
-    localparam NL2 = 24, LATENT = 512, ROPE = 64;
+    localparam NL = 93, NL2 = 24, LATENT = 512, ROPE = 64;
     localparam V2_FB = 8 + LATENT + ROPE/2;
     localparam FIFO_CAP = 4096, TCUT = FIFO_CAP/2;
 
@@ -55,7 +55,7 @@ module kv_restore_tb;
             mx = 0;
             for (a = 0; a < NL2; a = a + 1)
                 for (b = 0; b < LATENT; b = b + 1)
-                    if (lat_src(r, a, b) > mx) mx = lat_src(r, a, b);
+                    if (lat_src(r, v2lay(a), b) > mx) mx = lat_src(r, v2lay(a), b);
             lscale_g = (16'd16256) / {8'd0, mx};
         end
     endfunction
@@ -65,21 +65,25 @@ module kv_restore_tb;
             mx = 0;
             for (a = 0; a < NL2; a = a + 1)
                 for (b = 0; b < ROPE; b = b + 1)
-                    if (rope_src(r, a, b) > mx) mx = rope_src(r, a, b);
+                    if (rope_src(r, v2lay(a), b) > mx) mx = rope_src(r, v2lay(a), b);
             rscale_g = (16'd1920) / {8'd0, mx};
         end
     endfunction
 
-    // 每 token 第 lay 帧 (0..23) 第 off 字节黄金
+    // 每 token 第 lay 索引帧 (0..23 → 实际层 v2lay(lay)) 第 off 字节黄金
+    function integer v2lay(input integer n);
+        begin v2lay = (n == NL2 - 1) ? (NL - 1) : (4 * n + 3); end
+    endfunction
     function [7:0] expb(input integer r, lay, off);
-        integer rp;
+        integer rp, LL;
         reg [31:0] len; reg [7:0] o;
         begin
+            LL = v2lay(lay);
             o = 0;
             if (off < 8) begin
                 len = V2_FB - 8;
                 case (off)
-                    0: o = lay[7:0];
+                    0: o = LL[7:0];
                     1: o = 8'h01;
                     2: o = 0; 3: o = 0;
                     4: o = len[7:0];
@@ -89,11 +93,11 @@ module kv_restore_tb;
                 endcase
             end
             else if (off - 8 < LATENT)
-                o = qlat8(lat_src(r, lay, off - 8), curLG);
+                o = qlat8(lat_src(r, LL, off - 8), curLG);
             else begin
                 rp = off - 8 - LATENT;
-                o = {qr4(rope_src(r, lay, 2*rp), curRG),
-                     qr4(rope_src(r, lay, 2*rp + 1), curRG)};
+                o = {qr4(rope_src(r, LL, 2*rp), curRG),
+                     qr4(rope_src(r, LL, 2*rp + 1), curRG)};
             end
             expb = o;
         end
