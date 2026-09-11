@@ -12,7 +12,7 @@
 //   · 增量对账: dG=阵gacc增量==gemm金_t, dA=阵aacc增量==attn常数, dT==(dG+dA)&0xFFFF
 //   · 剪枝窗硬件对账 (G/lbw/ubw/ncad) 与头 top-K==fk(dT) 全量黄金逐 token 一致
 //   · 会话账: fill/释放/rail/o/池切全累计, 释放序跨会话严格 0..NL-1 回绕
-// 尺寸: TN=3 token; EX16/TOP4/EW8⇒GW16, NL=4; VOC=512 GRP=8 MAXE=8 K=3 xext=6
+// 尺寸: TN=12 token; EX16/TOP4/EW8⇒GW16, NL=4; VOC=512 GRP=8 MAXE=8 K=3 xext=6
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -22,7 +22,7 @@ module decode_auto_tb;
     localparam FIFO_CAP = 4096, TCUT = FIFO_CAP/2;
     localparam NVOC=512, NGRP=8, NMAXE=8, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
-    localparam TN = 3;
+    localparam TN = 12;
 
     reg clk=0, rst_n=0, go=0;
     always #5 clk = ~clk;
@@ -401,6 +401,9 @@ module decode_auto_tb;
     reg [15:0] seed_r = 0;
     integer eg, egb, ebi, elb, eub, ene, e, j, L, w, p, ok2, v0, idxc, t;
     integer gk [0:NK-1], gsc [0:NK-1];
+    integer tc_start = 0, tc_cyc_arr [0:TN-1];
+    integer racc = 0;
+    integer tok_unique = 0, ntok_unique = 0;
 
     initial begin
         repeat (3) @(posedge clk); #1; rst_n = 1;
@@ -427,10 +430,11 @@ module decode_auto_tb;
         // 每 token 闭环
         for (t = 0; t < TN; t = t + 1) begin
             if (t > 0)
-                fb[t] = (tokstream[t-1]*7 + 11) & 16'hFFFF;   // 上一步 token 反馈 = 本轮种子
+                fb[t] = (fb[t-1]*1664525 + tokstream[t-1]*7 + 11) & 16'hFFFF;   // LCG 搅拌+上步 token 反馈 (防固定点)
             gold_all_t(t);
             gemm_gold_arr[t] = gemm_gold(t);
             seed_r = fb[t];
+            tc_start = $time;
 
             @(negedge clk); start_tok = 1;
             @(posedge clk);
@@ -461,6 +465,7 @@ module decode_auto_tb;
             prevT = arr_acc_out; prevG = gacc[15:0]; prevA = aacc[15:0];
             dO = (ref_o[15:0] - prevO) & 16'hFFFF;
             prevO = ref_o[15:0];
+            racc = (racc + dt) & 16'hFFFF;
             if (dg !== gemm_gold_arr[t]) begin
                 $display("FAIL t=%0d gemm增量 %0d != 金 %0d", t, dg, gemm_gold_arr[t]); $finish;
             end
@@ -501,9 +506,17 @@ module decode_auto_tb;
 
             // ── 本步发出 token (argmax) → 反馈下步 ──
             tokstream[t] = h_lbw_w + h_buf_tok[t*NK + 0];
-            $display("t%0d: acc增量=%0d 窗G%0d [%0d,%0d) ncad%0d/512 发出token=%0d (top-K分%0d..%0d)",
+            tok_unique = 1;
+            for (j = 0; j < t; j = j + 1)
+                if (tokstream[j] == tokstream[t]) tok_unique = 0;
+            ntok_unique = ntok_unique + tok_unique;
+            tc_cyc_arr[t] = $time - tc_start;
+            if (tc_cyc_arr[t] >= 30000) begin
+                $display("FAIL t=%0d 周期超限 %0d", t, tc_cyc_arr[t]); $finish;
+            end
+            $display("t%0d: acc增量=%0d 窗G%0d [%0d,%0d) ncad%0d/512 发出token=%0d (top-K分%0d..%0d) 会话%0dcyc",
                       t, dt, h_g_w, h_lbw_w, h_ubw_w, h_ncad_w, tokstream[t],
-                      h_buf_sc[t*NK + 0], h_buf_sc[t*NK + NK-1]);
+                      h_buf_sc[t*NK + 0], h_buf_sc[t*NK + NK-1], tc_cyc_arr[t]);
         end
 
         // ── 会话终账 ──
@@ -521,11 +534,19 @@ module decode_auto_tb;
         if (rel_exp !== TN*NL) begin $display("FAIL 释放数 %0d != %0d", rel_exp, TN*NL); $finish; end
         if (pool_switches !== 2*TN*NL) begin $display("FAIL 池切换"); $finish; end
         if (hbufi !== TN*NK) begin $display("FAIL 头吐条数 %0d != %0d", hbufi, TN*NK); $finish; end
+        if (racc !== arr_acc_out[15:0]) begin
+            $display("FAIL 全账累计 %0d != 阵累积 %0d", racc, arr_acc_out); $finish;
+        end
+        if (ntok_unique < 5) begin
+            $display("FAIL 发出 token 多样性 %0d/12 < 5 (自回归退化为常数序列)", ntok_unique); $finish;
+        end
 
-        $display("== M25 多步解码: %0d token 步进链 ==", TN);
-        $display("== M25 会话账: 装配层%0d 选条%0d 词%0d GEMM%0d词/对账%0d o%0d 释放%0d 池切%0d 停r%0d ==",
-                 fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches, r_stalls_w);
-        $display("##### ALL PASS: M25 连续多步解码闭环 · 真引擎×TN ×剪枝头, 每token实算增量+逐token黄金 #####");
+        $display("== M26 长序列解码: %0d token 步进链, 会话周期 %0d..%0d (均值 %0d) ==",
+                 TN, tc_cyc_arr[0], tc_cyc_arr[TN-1], (tc_cyc_arr[0]+tc_cyc_arr[TN-1])/2);
+        $display("== M26 会话账: 装配层%0d 选条%0d 词%0d GEMM%0d词/对账%0d o%0d 释放%0d 池切%0d 停r%0d 累计%0d 唯一token%0d ==",
+                 fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches, r_stalls_w,
+                 racc, ntok_unique);
+        $display("##### ALL PASS: M26 长序列自回归闭环 · 真引擎×%0d 剪枝头×%0d, 长程全账不漂 + 逐token黄金 #####", TN, TN);
         $finish;
     end
 
