@@ -132,6 +132,13 @@ decode v2 注意力消费 host 缓存的逐 token KV (append-only, 1K 窗),
 每 token 24 层帧严格层序 552B/帧 (布局 ≡ M14 写者实发字节: 8B 头 + 512 latent INT8
 + 32 rope 4bit 包), credit 弹性背压挂起记 stall 不丢字节, 头 8B 逐字段自验。
 真尺寸 2 token 字节序对账 26,496B 全绿(T1 真停顿 2 次, occ 钉 2048 无违例)。
+**S[L] 层流灌入件 = `rtl/31_sloader/sloader.v`** —— 写回协议 v0 的 S 侧读回镜像:
+decode KDA 消费前, S[L] = 96头×128×128 BF16 按层流灌入 SRAM 域 (3,145,728B/层),
+head 完工 = barrier, 层完工 = barrier, credit 弹性背压挂起记 stall 不丢字节,
+严格 head×window 粒序。FAST(T1 真停顿 2 次, occ 钉 2048 无违例)全绿。
+**M14×M15 loopback = `rtl/30_kv_restore/wb2kv_loop_tb.v`** —— 写者直接吐字节给读回件:
+wb_unified 93 层混排 f_b → kv_restore s_kv 字节闭环, push_pl_lay 对齐 NBA 延迟防 v2
+误判, 2 token 对账 wb225,768B / r13,248B 零差零违例, T1 真停顿 3 次全绿。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
