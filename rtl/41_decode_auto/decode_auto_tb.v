@@ -18,6 +18,8 @@
 // M29: PROFILE=5/6/7 权重退化分布(全0/全F/按层交替)打进全管线; 终账后剪枝窗稳定性探针:
 //      裕量泄漏权衡曲线 (xext=2/4/6/8 各12 token 全量黄金argmax漏窗计数) + acc 扰动偏移
 //      不变性 (±0x1234/0x8000 扰动下黄金仍在窗内), 覆盖-裕量量化 = xext 定值复核
+// M30: NMAXE=14 窗半径压到能力边沿 (CAP=232, CAND 容量/速度实证); 裕量曲线延至 2..14;
+//      PROFILE=8/9 同种子(0x5555)±1 token 反馈抖动成对, 量化自回归去生成灵敏度
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -25,15 +27,18 @@ module decode_auto_tb;
     localparam FEED=2*WPR, WA=HEADS*BUFS*HBUF, ROWS_TOT=WA/WPR, BLK=HEADS*BUFS;
     localparam EX=16, TOP=4, EW=8;
     localparam FIFO_CAP = 4096, TCUT = FIFO_CAP/2;
-    localparam NVOC=512, NGRP=8, NMAXE=8, NK=3, NXEST=6;
+    localparam NVOC=512, NGRP=8, NMAXE=14, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     localparam TN = 12;
-    // M27/M28/M29 压力参数: PROFILE 0..7 (0基线/1·2·3随机LUT+节流/4正态/5全零/6全F/7按层交替); HALF=时钟半周期(参数化跨速率)
+    // M27..M30 压力参数: PROFILE 0..9 (0基线/1·2·3随机LUT+节流/4正态/5全零/6全F/7按层
+    // 交替/8·9=种子0x5555 ±1反馈抖动成对); HALF=时钟半周期(参数化跨速率)
     parameter integer PROFILE = 0;
     parameter integer HALF    = 5;
     localparam [15:0] SEEDB = (PROFILE == 1) ? 16'h1234 :
                               (PROFILE == 2) ? 16'h5555 :
-                              (PROFILE == 3) ? 16'hCAFE : 16'h0000;
+                              (PROFILE == 3) ? 16'hCAFE :
+                              (PROFILE == 8) ? 16'h5555 :
+                              (PROFILE == 9) ? 16'h5555 : 16'h0000;
     localparam [1:0]  THRM   = (PROFILE == 1) ? 2'd1 :
                                (PROFILE == 2) ? 2'd2 :
                                (PROFILE == 3) ? 2'd3 : 2'd0;
@@ -465,8 +470,8 @@ module decode_auto_tb;
     integer tc_start = 0, tc_cyc_arr [0:TN-1];
     integer racc = 0;
     integer dt_arr [0:TN-1];
-    integer nprobe, xe, co, gk0, acc_off;
-    integer leak_ct [0:3], cov_ct [0:3];
+    integer nprobe, xe, co, gk0, acc_off, jit;
+    integer leak_ct [0:6], cov_ct [0:6];
     integer tok_unique = 0, ntok_unique = 0;
     integer ncad_sum = 0, ncad_min = 99999, ncad_max = 0;
     integer n_trunc_l = 0, n_trunc_r = 0;
@@ -495,8 +500,10 @@ module decode_auto_tb;
 
         // 每 token 闭环
         for (t = 0; t < TN; t = t + 1) begin
+            // PROFILE 8: ±1 token 反馈抖动 (t 交替 ±1); 9 = 同种子无抖动对照
+            jit = (PROFILE == 8 && t >= 1) ? ((t % 2) ? 1 : -1) : 0;
             if (t > 0)
-                fb[t] = (fb[t-1]*1664525 + tokstream[t-1]*7 + 11) & 16'hFFFF;   // LCG 搅拌+上步 token 反馈 (防固定点)
+                fb[t] = (fb[t-1]*1664525 + ((tokstream[t-1] + jit) & 16'hFFFF)*7 + 11) & 16'hFFFF;   // LCG 搅拌+上步 token 反馈 (防固定点)
             gold_all_t(t);
             gemm_gold_arr[t] = gemm_gold(t);
             seed_r = fb[t];
@@ -619,10 +626,10 @@ module decode_auto_tb;
 
         // ── M29-B 剪枝窗稳定性探针 (终账后; cap_en 关闭, 不污染 hbuf/计数) ──
         cap_en = 0;
-        for (xe = 0; xe < 4; xe = xe + 1) begin leak_ct[xe] = 0; cov_ct[xe] = 0; end
+        for (xe = 0; xe < 7; xe = xe + 1) begin leak_ct[xe] = 0; cov_ct[xe] = 0; end
         for (nprobe = 0; nprobe < TN; nprobe = nprobe + 1) begin
-            for (xe = 0; xe < 4; xe = xe + 1) begin
-                h_xext = (2 + 2*xe);                       // 裕量 2/4/6/8
+            for (xe = 0; xe < 7; xe = xe + 1) begin
+                h_xext = (2 + 2*xe);                       // 裕量 2/4/6/8/10/12/14 (α-CAND 边沿)
                 head_acc = dt_arr[nprobe][15:0];
                 @(negedge clk); hr0 = h_round_w;
                 @(negedge clk); head_go = 1;
@@ -654,17 +661,28 @@ module decode_auto_tb;
         if (leak_ct[3] != 0) begin
             $display("FAIL 裕量8 漏窗 %0d (应0)", leak_ct[3]); $finish;
         end
-        if (leak_ct[3] == 0 && leak_ct[2] == 0 && leak_ct[1] == 0) begin
+        if (leak_ct[6] != 0) begin
+            $display("FAIL 裕量14 (CAND边沿) 漏窗 %0d (应0)", leak_ct[6]); $finish;
+        end
+        if (leak_ct[6] == 0 && leak_ct[2] == 0 && leak_ct[1] == 0) begin
             $display("NOTE 裕量4 亦全含 (漏0/12) → xext 6 有冗余, 可评估降到 4 (覆盖 -%0d%%) 候选",
                      (cov_ct[2]*100 - cov_ct[1]*100)/(TN*NVOC));
         end
-        $display("== M29 裕量权衡: xext=2 漏 %0d/12 覆盖%0d%% | 4 漏 %0d/12 %0d%% | 6 漏 %0d/12 %0d%% | 8 漏 %0d/12 %0d%% ==",
+        $display("== M30 裕量权衡(至CAND边沿14): x=2 漏%0d/12 覆盖%0d%% | 4 漏%0d %0d%% | 6 漏%0d %0d%% | 8 漏%0d %0d%% | 10 漏%0d %0d%% | 12 漏%0d %0d%% | 14 漏%0d %0d%% ==",
                  leak_ct[0], cov_ct[0]*100/(TN*NVOC),
                  leak_ct[1], cov_ct[1]*100/(TN*NVOC),
                  leak_ct[2], cov_ct[2]*100/(TN*NVOC),
-                 leak_ct[3], cov_ct[3]*100/(TN*NVOC));
-        $display("== M29 偏移不变: 2扰动×%0d token=%0d/%0d 扰动acc下黄金仍在窗内 (xext=8) ==",
+                 leak_ct[3], cov_ct[3]*100/(TN*NVOC),
+                 leak_ct[4], cov_ct[4]*100/(TN*NVOC),
+                 leak_ct[5], cov_ct[5]*100/(TN*NVOC),
+                 leak_ct[6], cov_ct[6]*100/(TN*NVOC));
+        $display("== M30 偏移不变: 2扰动×%0d token=%0d/%0d 扰动acc下黄金仍在窗内 (xext=14) ==",
                  TN, 2*TN, 2*TN);
+        if (PROFILE == 8 || PROFILE == 9) begin
+            $display("== M30 P%0d 反馈敏感: tokstream=[%0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d %0d] ==",
+                     PROFILE, tokstream[0], tokstream[1], tokstream[2], tokstream[3], tokstream[4], tokstream[5],
+                     tokstream[6], tokstream[7], tokstream[8], tokstream[9], tokstream[10], tokstream[11]);
+        end
 
         $display("== M29 P%0d/H%0d 长序列解码: %0d token, 会话周期 %0d..%0d ==",
                  PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
