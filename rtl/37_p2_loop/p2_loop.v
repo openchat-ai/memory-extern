@@ -58,6 +58,8 @@ module p2_loop #(
     output wire [31:0] r_selected, a_words, e_words
 );
     localparam RNDW = 6;
+    localparam OHWV = $clog2(VOC);
+    wire [OHWV-1:0] oh_se_c = VOC - 1;
     wire a_out_valid, a_take_e;
     wire [SW-1:0] a_out_data;
     wire [$clog2(EX)-1:0] a_out_expert;
@@ -91,6 +93,7 @@ module p2_loop #(
         .in_valid(oh_valid), .in_logit(oh_logit), .in_take(oh_in_take),
         .out_valid(oh_out_valid), .out_score(oh_out_score), .out_token(oh_out_token),
         .out_take(oh_out_take),
+        .scan_end(oh_se_c),
         .token_done(oh_token_done), .cur_word(oh_cur),
         .tok_idx(), .round(oh_round), .stalls(oh_stalls), .scanned(oh_scanned)
     );
