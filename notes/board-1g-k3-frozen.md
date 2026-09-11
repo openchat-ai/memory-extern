@@ -234,6 +234,12 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 - [ ] **拆 trunk**: `tools/trunk2layers.py` 把 MXFP8 trunk 按 93 层切成独立切片文件
       (v1 632MB / v2 419MB) + 每层清单(张量/形状/offset/路由头→专家实体 offset),
       供板子逐层流式取数; 顺带在 PC 上实测 93 层逐层字节, 核 632/419 与外推误差
+      —— 工具已落地(2cab505), 只在真数据上跑即算, **PC 验收勾子(done 判定)**:
+      ① `python3 tools/trunk2layers.py --dry <trunk_dir> x`: 93 层、`总字节 diff=0`、
+      每层 `gaps=0`(tensor 覆盖无空洞) → 记录 v1/v2 实测合计 vs 632/419(层0 含 dense
+      MLP 除外); ② 正式拆 `<dst>` 后 93 个 layer_XXX.bin 字节==sizes.tsv nbytes;
+      ③ 抽查 `md5sum layer_XXX.bin` == `dd skip=<file_off> count=<nbytes>` 的同段
+      md5(切片=trunk 干净段拷贝); ④ 实测数回填本行并把 [ ] 改 [x]
 - [ ] **专家库侧索引/装配**: 1413GB 实体库按(层→offset)建索引 + 按 top-16 装配流, 与拆 trunk 配套
 - [x] **router 先行**: 每层 gate(6.5MB)+e_score 装载 → top-16 选择必须先于专家抽取(读 12.8MB 后拉实体)
       —— **top-T 选择核心 M17 已落地**(`rtl/33_router_sel/`, 先选后抽时序 + 平局断序 + 双向背压,
