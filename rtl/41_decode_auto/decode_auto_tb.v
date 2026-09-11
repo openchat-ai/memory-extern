@@ -509,6 +509,7 @@ module decode_auto_tb;
     integer nprobe, xe, co, gk0, acc_off, jit;
     integer leak_ct [0:6], cov_ct [0:6];
     integer tok_unique = 0, ntok_unique = 0, state_unique = 0, dup_found = 0, tc_sum = 0, tc_max = 0;
+    integer ovl_sum = 0, ovw_sum = 0, ov = 0; reg [31:0] prev_lb = 0, prev_ub = 0;
     integer ncad_sum = 0, ncad_min = 99999, ncad_max = 0;
     integer n_trunc_l = 0, n_trunc_r = 0;
 
@@ -658,6 +659,15 @@ module decode_auto_tb;
                 $display("FAIL t=%0d 周期超限 %0d", t, tc_cyc_arr[t]); $finish;
             end
             // ── 剪枝窗覆盖率统计 (本 token) ──
+            // M51 窗滑移重叠率 (相邻 token 窗交叠与窗口宽之比; 滑动复用可行性前置量)
+            if (t >= 1) begin
+                ov = (prev_ub > h_lbw_w) ?
+                     ((h_ubw_w < prev_ub ? h_ubw_w : prev_ub) -
+                      (h_lbw_w > prev_lb ? h_lbw_w : prev_lb)) : 0;
+                ovl_sum = ovl_sum + ov;
+                ovw_sum = ovw_sum + (h_ubw_w - h_lbw_w);
+            end
+            prev_lb = h_lbw_w; prev_ub = h_ubw_w;
             if (h_ncad_w < ncad_min) ncad_min = h_ncad_w;
             if (h_ncad_w > ncad_max) ncad_max = h_ncad_w;
             ncad_sum = ncad_sum + h_ncad_w;
@@ -759,8 +769,9 @@ module decode_auto_tb;
                  PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
         $display("== M28/M29 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/%0d=%0d%%, 左截%0d 右截%0d ==",
                  TN, ncad_min, ncad_max, ncad_sum/TN, NVOC, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
-        $display("== M39 吞吐剖面 P%0d/H%0d: 会话周期 均值%0d/最大%0d 词对账覆盖 %0d/%0d (%0d%%) ==",
-                 PROFILE, HALF, tc_sum/TN, tc_max, gemm_ok, TN*NL*GW, (gemm_ok*100)/(TN*NL*GW));
+        $display("== M39 吞吐剖面 P%0d/H%0d: 会话周期 均值%0d/最大%0d 词对账覆盖 %0d/%0d (%0d%%) 窗重叠 %0d%% ==",
+                 PROFILE, HALF, tc_sum/TN, tc_max, gemm_ok, TN*NL*GW, (gemm_ok*100)/(TN*NL*GW),
+                 (ovl_sum*100)/(ovw_sum > 0 ? ovw_sum : 1));
         $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d 状态%0d",
                  PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
                  r_stalls_w, a_stalls_w, racc, ntok_unique, state_unique);

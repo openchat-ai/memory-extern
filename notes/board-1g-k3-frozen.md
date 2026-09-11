@@ -480,3 +480,11 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   咬真 RTL 错而非只咬 TB 注入: ①output_head 打分比较器 `>`→`<` → t=0 窗内top-K#0捕;
   ②平局序 `cnt<tk_idx`→`>` → t=0 rank平局错序捕; ③assembler 词流截断 `EW-1`→`EW-2`
   → t=0 GEMM 词错位捕。突变致死率 (kill ratio) 3/3 → 绿系断言确为活性断言 (非死代码)。
+
+**M49/M50 K 边界 + 时钟极值**: NK={12,16} (大 K bake 上界, 大于窗 margin6 容量但窗内
+  top-K 断言仍咬) 与 HALF={1,15} (2ps/30ps 周期极值) 全 ALL PASS——K 扩容与快慢钟均无
+  相裕脆弱。
+
+**M51 窗滑移重叠率**: 相邻 token 剪枝窗交叠/窗口宽之比 (滑动复用可行性前置量):
+  P{0,2,4}/H5=96%、P8=98%——每 token 新鲜重算的窗跨 token 高度交叠, 后续"共享窗+增量
+  扫描"优化有量化依据 (≥95% 命中)。
