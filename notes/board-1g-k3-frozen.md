@@ -223,6 +223,16 @@ ncad 个候选 (scan_end=ncad-1 运行时窗 + cand[cur] 实词号流式喂 logi
   改动, 全为 TB 账目/公式, M25 机理原样复用。终账 fill48/词1536/GEMM768词对账720/o3072/释放48/
   池切96/停r1072/累计23984/唯一7。
 
+**M27 随机化压力 (多 profile × LUT+节流) = `rtl/41_decode_auto/decode_auto_tb.v`** —— 单 TB 参数化
+  `PROFILE`(iverilog -P 覆写): P0=基线(原线性 LUT+无节流, 输出与 M26 逐位一致), P1/2/3=随机 LUT
+  种子 (SEEDB=0x1234/0x5555/0xCAFE, sw_val=(SEEDB+L*7919+e*104729+w*17)&0xFFFF 全 16 位跨度) +
+  消费侧节流 (THRM=1/8、3/8、1/2 周期断 credit)。**首次激活装配 EMIT-停拍路径**: M23-M25 下
+  a_stalls 恒 0 (背压被 router 收表门前置吸收, 装配 EMIT 从未真正停过), P1/2/3 实测
+  a_stalls=216/959/1536、r_stalls=1072/1069/1054/1040, 词流仍逐字保真 (GEMM 对账 720/720、
+  o3072、释放 4×12、词 1536), 长程全账 racc==arr_acc_out 不漂, 每 token 增量/顶 K 黄金逐位一致,
+  会话周期随节流仅微涨 (24965→25520cyc), 无逃逸。LUT 随机化使 12 步 token 流各不相同 (唯一
+  7/8/9/8), P0 保持基线语义。M27 零 RTL 改动 (纯 TB 参数化), 四组全绿。
+
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
   B-SRAM 300GB/s 级, 当 FIFO 是拿跑车拉砖): 转载站取 DMA 侧弹性 FIFO。
