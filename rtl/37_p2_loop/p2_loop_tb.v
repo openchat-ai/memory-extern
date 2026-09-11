@@ -33,8 +33,8 @@ module p2_loop_tb;
     wire oh_token_done;
     wire [$clog2(EX)-1:0] r_cur_w;
     wire r_out_valid_w, r_td_raw, a_td_raw, e_td_raw, e_lay_done_w;
-    wire [7:0] r_round_w;
-    wire [5:0] a_round_w2ph, oh_round_w2ph;
+    wire [31:0] r_round_w;
+    wire [31:0] a_round_w2ph, oh_round_w2ph;
     wire [$clog2(NL)-1:0] e_lay_w;
     wire [15:0] e_acc_w;
     wire [31:0] r_stalls_w, a_stalls_w, oh_stalls_w, r_sel_w, a_words_w, e_words_w, oh_scan_w;
@@ -58,8 +58,8 @@ module p2_loop_tb;
         .r_stalls(r_stalls_w), .a_stalls(a_stalls_w), .oh_stalls(oh_stalls_w),
         .r_selected(r_sel_w), .a_words(a_words_w), .e_words(e_words_w)
     );
-    wire [5:0] a_round_w2 = a_round_w2ph;
-    wire [5:0] oh_round_w2 = oh_round_w2ph;
+    wire [31:0] a_round_w2 = a_round_w2ph;
+    wire [31:0] oh_round_w2 = oh_round_w2ph;
 
     always #5 clk = ~clk;
 

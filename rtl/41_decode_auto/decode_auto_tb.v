@@ -37,7 +37,8 @@ module decode_auto_tb;
     localparam FEED=2*WPR, WA=HEADS*BUFS*HBUF, ROWS_TOT=WA/WPR, BLK=HEADS*BUFS;
     localparam EX=16, TOP=4, EW=8;
     localparam FIFO_CAP = 4096, TCUT = FIFO_CAP/2;
-    localparam NVOC=1024, NGRP=16, NMAXE=14, NK=3, NXEST=6;
+    parameter integer NVOC = 1024;   // M41: 可覆写 (512/1024/2048 规模实证)
+    localparam NGRP=16, NMAXE=14, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     parameter integer TN      = 12;    // M35: 可覆写 (60 = 疲劳长跑)
     parameter integer PROBEON = 1;     // 0 = 跳终账后裕量/偏移探针 (长跑降时)

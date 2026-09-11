@@ -43,8 +43,8 @@ module route_asm_exec_tb;
     reg [$clog2(NL*EX*EW)-1:0] wr_addr = 0;
     reg [SW-1:0] wr_data = 0;
     wire a_layer_done, token_done, r_token_done;
-    wire [7:0] r_round_w;
-    wire [5:0] a_round_w2ph;
+    wire [31:0] r_round_w;
+    wire [31:0] a_round_w2ph;
     wire [31:0] r_stalls_w, a_stalls_w, r_sel_w, a_words_w;
     wire [$clog2(EX)-1:0] r_cur_w;
     wire [$clog2(NL)-1:0] a_lay_w2;
@@ -62,7 +62,7 @@ module route_asm_exec_tb;
         .r_stalls(r_stalls_w), .a_stalls(a_stalls_w),
         .r_selected(r_sel_w), .a_words(a_words_w)
     );
-    wire [5:0] a_round_w2 = a_round_w2ph;
+    wire [31:0] a_round_w2 = a_round_w2ph;
 
     //---------------- 装配信用帽 (occ 恒排空 ⇒ 让位门才是背压源) ----------------
     reg [15:0] occ_q = 0;
