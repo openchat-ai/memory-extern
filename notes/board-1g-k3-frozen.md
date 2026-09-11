@@ -460,3 +460,5 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   结构校验已落地 `tools/sim_prefill_pipe.py`(A-tile 复用 2.27→0.93GB、736≤765、NVMe 稳坐墙)
 - **P2 算(最大头)**: 推理引擎 RTL —— 93 层循环 + 69 KDA/24 MLA + router + 采样; 138K LUT 预算(账: 图执行器~27%, 能装下)
 - **P3 端到端**: tokenizer/embed 接入 + 状态的家落位(S 主机/NVMe, S_b 板上)+ 验收(第 9 节 logits 对比)
+**M44 随机对角混配**: P{0,1,4,5,6,8}×S{2,3,1}×H{5,9,3}×K{5,8}×V{1024/2048} 六路一次性混配
+  全 ALL PASS、编译零警告——维度无交互脆弱性 (半随机组合下断言族仍全咬)。
