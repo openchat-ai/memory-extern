@@ -156,6 +156,10 @@ top-T 表插入 key {score,~idx} 降序 (平局 idx 小者先), 层收齐吐表 
 实体块非按号连续, 翻 ep 时跳址 bebase 而非 +1); 装配侧背压 (out_take 1-in-2 记
 停顿) + 上游断灌 (TAKE 期 in_valid 暂降, 不丢不序), 层 barrier, NL 层完工
 token_done → round++。FAST(EX=32/TOP=8/EW=8/NL=3, 词192, 停顿64拍)全绿。
+**M19 输出头 = `rtl/35_output_head/output_head.v`** —— 每 decode 步扫词表 logits
+流取 top-K: 有符号比较, 平局 idx 小者先 (stable, 表按 token 重置哨兵最小), 全流扫完
+依序吐 K 个 → TN token → token_done → round++; 扫描期上游断流 + 吐期下游慢取记
+停顿, 不丢不序。FAST(TN=3/VOC=32/K=3, 扫96, 停顿9拍)全绿。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
@@ -251,8 +255,10 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 - [x] **router 先行**: 每层 gate(6.5MB)+e_score 装载 → top-16 选择必须先于专家抽取(读 12.8MB 后拉实体)
       —— **top-T 选择核心 M17 已落地**(`rtl/33_router_sel/`, 先选后抽时序 + 平局断序 + 双向背压,
       FAST 全绿); gate/e_score 实际装载读随 P1 搬运件
-- [ ] **embed/output 接入**: 输入 embed 每 token 只查一行(14KB, 无害); **输出头是 decode 每字全词表税**
+- [x] **embed/output 接入**: 输入 embed 每 token 只查一行(14KB, 无害); **输出头是 decode 每字全词表税**
       (BF16 4.4GB → +1.26s/字, MXFP8 2.2GB → +0.63s/字), 词表剪枝 top-16K → +0.07s 待验
+      —— **输出头扫描核心 M19 已落地**(`rtl/35_output_head/`, 每词扫全词表取 top-K,
+      平局 stable, 扫描断流+吐期慢取不丢不序, FAST 全绿); 词表剪枝候选集验证随 PC 数据
 - [ ] **状态的家**: KDA S(69×3MB)+KV 落 主机DDR(§5: 状态不落盘, M.2 仅冷仓) —
       板子每层拉/写 ~3MB, 实测 PCIe 往返时序
 - [ ] `--gen 32+` 真机 trace: 专家频率/union → 定 281MB 槽命中率与预取策略
