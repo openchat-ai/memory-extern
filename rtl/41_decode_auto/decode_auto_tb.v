@@ -25,6 +25,7 @@
 //      (top-K 家族); 若某注入逃过全部断言 → 打印 REDTEAM ESCAPE (断言失效证据)
 // M32: SEED 参数旋转 LUT/fb 混合种子(0..); 活锁白盒探针: 引擎忙档内"词+o+释放"推进信号
 //      连续 >20000cyc 无新增 → $fatal (响应性/无死锁-活锁 formal-lite)
+// M33: 全规模 VOC=1024/GRP=16 (规模无关性: fk mod-23 周期在 1024 词表上仍拉窗∋top-K)
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -32,7 +33,7 @@ module decode_auto_tb;
     localparam FEED=2*WPR, WA=HEADS*BUFS*HBUF, ROWS_TOT=WA/WPR, BLK=HEADS*BUFS;
     localparam EX=16, TOP=4, EW=8;
     localparam FIFO_CAP = 4096, TCUT = FIFO_CAP/2;
-    localparam NVOC=512, NGRP=8, NMAXE=14, NK=3, NXEST=6;
+    localparam NVOC=1024, NGRP=16, NMAXE=14, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     localparam TN = 12;
     // M27..M30 压力参数: PROFILE 0..9 (0基线/1·2·3随机LUT+节流/4正态/5全零/6全F/7按层
@@ -626,8 +627,8 @@ module decode_auto_tb;
             ncad_sum = ncad_sum + h_ncad_w;
             if (h_lbw_w > 0) n_trunc_l = n_trunc_l + 1;
             if (h_ubw_w < NVOC) n_trunc_r = n_trunc_r + 1;
-            $display("t%0d: acc增量=%0d 窗G%0d [%0d,%0d) ncad%0d/512 发出token=%0d (top-K分%0d..%0d) 会话%0dcyc",
-                      t, dt, h_g_w, h_lbw_w, h_ubw_w, h_ncad_w, tokstream[t],
+            $display("t%0d: acc增量=%0d 窗G%0d [%0d,%0d) ncad%0d/%0d 发出token=%0d (top-K分%0d..%0d) 会话%0dcyc",
+                      t, dt, h_g_w, h_lbw_w, h_ubw_w, h_ncad_w, NVOC, tokstream[t],
                       h_buf_sc[t*NK + 0], h_buf_sc[t*NK + NK-1], tc_cyc_arr[t]);
         end
 
@@ -718,8 +719,8 @@ module decode_auto_tb;
 
         $display("== M29 P%0d/H%0d 长序列解码: %0d token, 会话周期 %0d..%0d ==",
                  PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
-        $display("== M28/M29 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/512=%0d%%, 左截%0d 右截%0d ==",
-                 TN, ncad_min, ncad_max, ncad_sum/TN, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
+        $display("== M28/M29 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/%0d=%0d%%, 左截%0d 右截%0d ==",
+                 TN, ncad_min, ncad_max, ncad_sum/TN, NVOC, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
         $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
                  PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
                  r_stalls_w, a_stalls_w, racc, ntok_unique);
