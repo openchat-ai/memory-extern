@@ -23,6 +23,14 @@ module decode_auto_tb;
     localparam NVOC=512, NGRP=8, NMAXE=8, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     localparam TN = 12;
+    // M27 随机化压力 profile: 0=基线(原线性LUT+无节流), 1/2/3=随机LUT种子+消费侧节流
+    parameter integer PROFILE = 0;
+    localparam [15:0] SEEDB = (PROFILE == 1) ? 16'h1234 :
+                              (PROFILE == 2) ? 16'h5555 :
+                              (PROFILE == 3) ? 16'hCAFE : 16'h0000;
+    localparam [1:0]  THRM   = (PROFILE == 1) ? 2'd1 :
+                               (PROFILE == 2) ? 2'd2 :
+                               (PROFILE == 3) ? 2'd3 : 2'd0;
 
     reg clk=0, rst_n=0, go=0;
     always #5 clk = ~clk;
@@ -90,8 +98,21 @@ module decode_auto_tb;
             if (afill && !af_d1) begin fill_counter <= fill_counter + 1; lay_fill_ct <= lay_fill_ct + 1; end
         end
 
-    always @(occ_q or slot_ok) credit = (occ_q < TCUT) && slot_ok;
+    always @(occ_q or slot_ok or th_low) credit = (occ_q < TCUT) && slot_ok && !th_low;
     assign out_take_c = credit;
+
+    // M27 消费侧节流: THRM>0 定期断信 → 强制装配 EMIT-停拍 (a_stalls) / router 停表
+    reg [7:0] tc = 0;
+    reg th_low = 1'b0;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) begin tc <= 0; th_low <= 0; end
+        else begin
+            tc <= tc + 1;
+            th_low <= (THRM == 2'd1) ? (tc[2:0] == 3'd5)
+                    : (THRM == 2'd2) ? ((tc[2:0] >= 3'd2) && (tc[2:0] < 3'd5))
+                    : (THRM == 2'd3) ? tc[0]
+                    : 1'b0;
+        end
 
     integer aj = 0;
     reg [2:0] ajl = 0;
@@ -233,7 +254,8 @@ module decode_auto_tb;
         s_v_t = (L*131 + ((k*17) ^ (fb[t] & 16'h0FFF))) & 16'hFFFF;
     endfunction
     function [SW-1:0] sw_val(input integer L, input integer e, input integer w);
-        sw_val = (L*131 + e*17 + w) & 16'hFFFF;
+        if (PROFILE == 0) sw_val = (L*131 + e*17 + w) & 16'hFFFF;
+        else sw_val = (SEEDB + L*7919 + e*104729 + w*17) & 16'hFFFF;
     endfunction
     integer gsel_all [0:TN*NL*TOP-1];
     task automatic gold_all_t(input integer t);
@@ -540,13 +562,16 @@ module decode_auto_tb;
         if (ntok_unique < 5) begin
             $display("FAIL 发出 token 多样性 %0d/12 < 5 (自回归退化为常数序列)", ntok_unique); $finish;
         end
+        if (THRM != 2'd0 && a_stalls_w == 0) begin
+            $display("FAIL 节流下装配 EMIT-停拍路径未激活 (a_stalls=%0d)", a_stalls_w); $finish;
+        end
 
-        $display("== M26 长序列解码: %0d token 步进链, 会话周期 %0d..%0d (均值 %0d) ==",
-                 TN, tc_cyc_arr[0], tc_cyc_arr[TN-1], (tc_cyc_arr[0]+tc_cyc_arr[TN-1])/2);
-        $display("== M26 会话账: 装配层%0d 选条%0d 词%0d GEMM%0d词/对账%0d o%0d 释放%0d 池切%0d 停r%0d 累计%0d 唯一token%0d ==",
-                 fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches, r_stalls_w,
-                 racc, ntok_unique);
-        $display("##### ALL PASS: M26 长序列自回归闭环 · 真引擎×%0d 剪枝头×%0d, 长程全账不漂 + 逐token黄金 #####", TN, TN);
+        $display("== M27 P%0d 长序列解码: %0d token 步进链, 会话周期 %0d..%0d ==",
+                 PROFILE, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
+        $display("== M27 会话账 P%0d: 装配层%0d 选条%0d 词%0d GEMM%0d词/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
+                 PROFILE, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
+                 r_stalls_w, a_stalls_w, racc, ntok_unique);
+        $display("##### ALL PASS: M27 随机化压力 P%0d · 真引擎×%0d 剪枝头×%0d, 随机LUT+消费侧节流 长程全账不漂 #####", PROFILE, TN, TN);
         $finish;
     end
 
