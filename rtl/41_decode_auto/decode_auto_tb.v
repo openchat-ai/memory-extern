@@ -15,6 +15,9 @@
 // 尺寸: TN=12 token; EX16/TOP4/EW8⇒GW16, NL=4; VOC=512 GRP=8 MAXE=8 K=3 xext=6
 // M28: HALF 参数化时钟半周期(3/5/9)跨速率回归; PROFILE=4 近似正态权重(CLT三次LCG),
 //      剪枝窗召回/覆盖率统计 (avg/max/min ncad + 截断计数)
+// M29: PROFILE=5/6/7 权重退化分布(全0/全F/按层交替)打进全管线; 终账后剪枝窗稳定性探针:
+//      裕量泄漏权衡曲线 (xext=2/4/6/8 各12 token 全量黄金argmax漏窗计数) + acc 扰动偏移
+//      不变性 (±0x1234/0x8000 扰动下黄金仍在窗内), 覆盖-裕量量化 = xext 定值复核
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -25,7 +28,7 @@ module decode_auto_tb;
     localparam NVOC=512, NGRP=8, NMAXE=8, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     localparam TN = 12;
-    // M27/M28 压力参数: PROFILE 0..4; HALF=时钟半周期(ns, 参数化跨速率)
+    // M27/M28/M29 压力参数: PROFILE 0..7 (0基线/1·2·3随机LUT+节流/4正态/5全零/6全F/7按层交替); HALF=时钟半周期(参数化跨速率)
     parameter integer PROFILE = 0;
     parameter integer HALF    = 5;
     localparam [15:0] SEEDB = (PROFILE == 1) ? 16'h1234 :
@@ -231,9 +234,10 @@ module decode_auto_tb;
         .acc_out(arr_acc_out), .active_cnt()
     );
 
-    //---------------- M24 剪枝头 (acc = TB 锁存的每 token 增量) ----------------
+    //---------------- M24 剪枝头 (acc = TB 锁存的每 token 增量; xext 经 h_xext 可探针) ----------------
     reg head_go = 0;
     reg [15:0] head_acc = 0;
+    reg [3:0] h_xext = NXEST[3:0];
     wire h_out_valid, h_token_done;
     wire [15:0] h_out_score;
     wire [$clog2(NCAP)-1:0] h_out_token;
@@ -244,7 +248,7 @@ module decode_auto_tb;
 
     head_vprune #(.VOC(NVOC), .GRP(NGRP), .BB(16), .MAXE(NMAXE), .K(NK)) HV(
         .clk(clk), .rst_n(rst_n), .head_go(head_go),
-        .acc(head_acc), .xext(NXEST[3:0]),
+        .acc(head_acc), .xext(h_xext),
         .out_valid(h_out_valid), .out_score(h_out_score), .out_token(h_out_token),
         .out_take(1'b1),
         .token_done(h_token_done), .round(h_round_w), .stalls(h_stalls_w), .scanned(h_scanned_w),
@@ -269,9 +273,12 @@ module decode_auto_tb;
         end
     endfunction
     function [SW-1:0] sw_val(input integer L, input integer e, input integer w);
-        if (PROFILE == 4) sw_val = gsw(L, e, w);
-        else if (PROFILE == 0) sw_val = (L*131 + e*17 + w) & 16'hFFFF;
-        else sw_val = (SEEDB + L*7919 + e*104729 + w*17) & 16'hFFFF;
+        if (PROFILE == 4)        sw_val = gsw(L, e, w);
+        else if (PROFILE == 5)   sw_val = 16'h0000;                        // 全零权重塌缩
+        else if (PROFILE == 6)   sw_val = 16'hFFFF;                        // 全饱和权重塌缩
+        else if (PROFILE == 7)   sw_val = (L % 2) ? 16'hFFFF : 16'h0000;   // 按层交替塌缩
+        else if (PROFILE == 0)   sw_val = (L*131 + e*17 + w) & 16'hFFFF;
+        else                     sw_val = (SEEDB + L*7919 + e*104729 + w*17) & 16'hFFFF;
     endfunction
     integer gsel_all [0:TN*NL*TOP-1];
     task automatic gold_all_t(input integer t);
@@ -322,6 +329,21 @@ module decode_auto_tb;
     function integer fk(input integer a, input integer x);
         fk = (a*7 + x*17) % 23;
     endfunction
+
+    // 全量黄金 argmax (tie=最小 idxc, 与逐 token 循环一致)
+    task automatic gold_argmax(input integer aa, output integer gx);
+        integer gsc0;
+        integer id0;
+        begin
+            gsc0 = -1; gx = -1;
+            for (id0 = 0; id0 < NVOC; id0 = id0 + 1) begin
+                v0 = fk(aa, id0);
+                if (v0 > gsc0 || (v0 == gsc0 && id0 < gx)) begin
+                    gsc0 = v0; gx = id0;
+                end
+            end
+        end
+    endtask
 
     //---------------- 当前 token (monitor 用) ----------------
     reg [3:0] tok_now = 0;
@@ -396,15 +418,16 @@ module decode_auto_tb;
         if (r_token_done) td_r = 1;
     end
 
-    //---------------- 输出头收流 (按 tok_now 存) ----------------
+    //---------------- 输出头收流 (按 tok_now 存; cap_en=0 时探针轮不采) ----------------
     integer h_buf_tok [0:TN*NK-1];
     integer h_buf_sc  [0:TN*NK-1];
     integer hbufi = 0;
+    reg cap_en = 1;
     reg head_run = 0;
     always @(posedge clk) begin
         if (head_go) head_run <= 1'b1;
         if (h_token_done) head_run <= 1'b0;
-        if (h_out_valid) begin
+        if (h_out_valid && cap_en) begin
             h_buf_tok[hbufi] = h_out_token;
             h_buf_sc[hbufi]  = h_out_score;
             hbufi = hbufi + 1;
@@ -441,6 +464,9 @@ module decode_auto_tb;
     integer gk [0:NK-1], gsc [0:NK-1];
     integer tc_start = 0, tc_cyc_arr [0:TN-1];
     integer racc = 0;
+    integer dt_arr [0:TN-1];
+    integer nprobe, xe, co, gk0, acc_off;
+    integer leak_ct [0:3], cov_ct [0:3];
     integer tok_unique = 0, ntok_unique = 0;
     integer ncad_sum = 0, ncad_min = 99999, ncad_max = 0;
     integer n_trunc_l = 0, n_trunc_r = 0;
@@ -506,6 +532,7 @@ module decode_auto_tb;
             dO = (ref_o[15:0] - prevO) & 16'hFFFF;
             prevO = ref_o[15:0];
             racc = (racc + dt) & 16'hFFFF;
+            dt_arr[t] = dt;
             if (dg !== gemm_gold_arr[t]) begin
                 $display("FAIL t=%0d gemm增量 %0d != 金 %0d", t, dg, gemm_gold_arr[t]); $finish;
             end
@@ -583,26 +610,75 @@ module decode_auto_tb;
         if (racc !== arr_acc_out[15:0]) begin
             $display("FAIL 全账累计 %0d != 阵累积 %0d", racc, arr_acc_out); $finish;
         end
-        if (ntok_unique < 5) begin
+        if (PROFILE < 5 && ntok_unique < 5) begin
             $display("FAIL 发出 token 多样性 %0d/12 < 5 (自回归退化为常数序列)", ntok_unique); $finish;
         end
         if (THRM != 2'd0 && a_stalls_w == 0) begin
             $display("FAIL 节流下装配 EMIT-停拍路径未激活 (a_stalls=%0d)", a_stalls_w); $finish;
         end
 
-        $display("== M28 P%0d/H%0d 长序列解码: %0d token, 会话周期 %0d..%0d ==",
+        // ── M29-B 剪枝窗稳定性探针 (终账后; cap_en 关闭, 不污染 hbuf/计数) ──
+        cap_en = 0;
+        for (xe = 0; xe < 4; xe = xe + 1) begin leak_ct[xe] = 0; cov_ct[xe] = 0; end
+        for (nprobe = 0; nprobe < TN; nprobe = nprobe + 1) begin
+            for (xe = 0; xe < 4; xe = xe + 1) begin
+                h_xext = (2 + 2*xe);                       // 裕量 2/4/6/8
+                head_acc = dt_arr[nprobe][15:0];
+                @(negedge clk); hr0 = h_round_w;
+                @(negedge clk); head_go = 1;
+                @(negedge clk); head_go = 0;
+                while (h_round_w == hr0) @(posedge clk);
+                repeat (4) @(posedge clk);
+                gold_argmax(dt_arr[nprobe], gk0);
+                if (gk0 < h_lbw_w || gk0 >= h_ubw_w) leak_ct[xe] = leak_ct[xe] + 1;
+                cov_ct[xe] = cov_ct[xe] + h_ncad_w;
+            end
+            // acc 扰动偏移不变性: ±0x1234/0x8000 后重算黄金, 必须在扰动后窗内
+            for (co = 0; co < 2; co = co + 1) begin
+                acc_off = (dt_arr[nprobe] + ((co == 0) ? 16'h1234 : 16'h8000)) & 16'hFFFF;
+                h_xext = 8;
+                head_acc = acc_off[15:0];
+                @(negedge clk); hr0 = h_round_w;
+                @(negedge clk); head_go = 1;
+                @(negedge clk); head_go = 0;
+                while (h_round_w == hr0) @(posedge clk);
+                repeat (4) @(posedge clk);
+                gold_argmax(acc_off, gk0);
+                if (gk0 < h_lbw_w || gk0 >= h_ubw_w) begin
+                    $display("FAIL t=%0d acc扰动+%0h 后黄金 %0d 漏出窗 [%0d,%0d)", nprobe,
+                             (co == 0) ? 16'h1234 : 16'h8000, gk0, h_lbw_w, h_ubw_w); $finish;
+                end
+            end
+        end
+        h_xext = NXEST[3:0];
+        if (leak_ct[3] != 0) begin
+            $display("FAIL 裕量8 漏窗 %0d (应0)", leak_ct[3]); $finish;
+        end
+        if (leak_ct[3] == 0 && leak_ct[2] == 0 && leak_ct[1] == 0) begin
+            $display("NOTE 裕量4 亦全含 (漏0/12) → xext 6 有冗余, 可评估降到 4 (覆盖 -%0d%%) 候选",
+                     (cov_ct[2]*100 - cov_ct[1]*100)/(TN*NVOC));
+        end
+        $display("== M29 裕量权衡: xext=2 漏 %0d/12 覆盖%0d%% | 4 漏 %0d/12 %0d%% | 6 漏 %0d/12 %0d%% | 8 漏 %0d/12 %0d%% ==",
+                 leak_ct[0], cov_ct[0]*100/(TN*NVOC),
+                 leak_ct[1], cov_ct[1]*100/(TN*NVOC),
+                 leak_ct[2], cov_ct[2]*100/(TN*NVOC),
+                 leak_ct[3], cov_ct[3]*100/(TN*NVOC));
+        $display("== M29 偏移不变: 2扰动×%0d token=%0d/%0d 扰动acc下黄金仍在窗内 (xext=8) ==",
+                 TN, 2*TN, 2*TN);
+
+        $display("== M29 P%0d/H%0d 长序列解码: %0d token, 会话周期 %0d..%0d ==",
                  PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
-        $display("== M28 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/512=%0d%%, 左截%0d 右截%0d ==",
+        $display("== M28/M29 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/512=%0d%%, 左截%0d 右截%0d ==",
                  TN, ncad_min, ncad_max, ncad_sum/TN, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
-        $display("== M28 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
+        $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
                  PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
                  r_stalls_w, a_stalls_w, racc, ntok_unique);
         if (PROFILE == 4)
-            $display("##### ALL PASS: M28 P%0d/H%0d · 近似正态权重, 剪枝窗召回100%%, 覆盖均值 12%% #####", PROFILE, HALF);
+            $display("##### ALL PASS: M28/M29 P%0d/H%0d · 近似正态权重, 剪枝窗召回100%%, 覆盖均值 12%% #####", PROFILE, HALF);
         else if (THRM != 0)
-            $display("##### ALL PASS: M28 P%0d/H%0d · 随机LUT+消费侧节流, 长程全账不漂 #####", PROFILE, HALF);
+            $display("##### ALL PASS: M28/M29 P%0d/H%0d · 随机LUT+消费侧节流+裕量/偏移探针, 全绿 #####", PROFILE, HALF);
         else
-            $display("##### ALL PASS: M28 P%0d/H%0d · 基线LUT, 零RTL改动全绿 #####", PROFILE, HALF);
+            $display("##### ALL PASS: M28/M29 P%0d/H%0d · 退化权重(P5/6/7)/基线+窗稳定性探针, 全绿 #####", PROFILE, HALF);
         $finish;
     end
 
