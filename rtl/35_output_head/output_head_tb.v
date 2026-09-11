@@ -24,7 +24,7 @@ module output_head_tb;
     wire [$clog2(VOC)-1:0] out_token;
     wire token_done;
     wire [$clog2(TN)-1:0] tok_w;
-    wire [5:0] round_w;
+    wire [31:0] round_w;
     wire [31:0] stalls_w, scanned_w;
 
     output_head #(.TN(TN), .VOC(VOC), .K(K), .BB(BB)) u(

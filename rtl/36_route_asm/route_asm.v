@@ -15,7 +15,8 @@ module route_asm #(
     parameter TOP = 8,      // 每层选出
     parameter EW  = 8,      // 每实体权重词数
     parameter NL  = 3,      // 座席层/会话
-    parameter SW  = 16      // 词位宽
+    parameter SW  = 16,     // 词位宽
+    parameter RNDW = 32     // M38: 与 assembler 对齐 (6→32); 须在端口宽引用前声明
 )(
     input  wire clk, rst_n, go,
     // router 侧 (e_score 灌入)
@@ -34,7 +35,7 @@ module route_asm #(
     // 状态/统计
     output wire a_layer_done, r_layer_done,
     output wire token_done, r_token_done,
-    output wire [7:0] r_round,
+    output wire [31:0] r_round,
     output wire [RNDW-1:0] a_round,
     output wire [$clog2(NL)-1:0] a_lay_idx,
     output wire [$clog2(EX)-1:0] r_cur,
@@ -42,7 +43,6 @@ module route_asm #(
     output wire [31:0] r_stalls, a_stalls,
     output wire [31:0] r_selected, a_words
 );
-    localparam RNDW = 6;
     wire r_out_v;
     wire [$clog2(EX)-1:0] r_out_i;
     wire [SW-1:0] r_out_s;

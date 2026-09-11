@@ -28,6 +28,8 @@
 // M33: 全规模 VOC=1024/GRP=16 (规模无关性: fk mod-23 周期在 1024 词表上仍拉窗∋top-K)
 // M35: TN 参数化 (默认12, 可 -P 覆写至 60 疲劳长跑); PROBEON=0 跳终账后裕量/偏移探针
 //      (只跑断言主链, 长跑降时), 验证长链不漂/无量程失守
+// M38: state_unique 度量去生成状态空间 (distinct (fb[t],tok[t]) 对); FBPOLY=0/1/2 反馈
+//      多项式对比 (避免 LCG 吸引子坍缩), TN=120 长链评估
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -39,6 +41,7 @@ module decode_auto_tb;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     parameter integer TN      = 12;    // M35: 可覆写 (60 = 疲劳长跑)
     parameter integer PROBEON = 1;     // 0 = 跳终账后裕量/偏移探针 (长跑降时)
+    parameter integer FBPOLY  = 0;     // 0=线性LCG 1=XOR混入tok 2=xorshift+tok (M38)
     // M27..M30 压力参数: PROFILE 0..9 (0基线/1·2·3随机LUT+节流/4正态/5全零/6全F/7按层
     // 交替/8·9=种子0x5555 ±1反馈抖动成对); HALF=时钟半周期(参数化跨速率)
     parameter integer PROFILE = 0;
@@ -75,8 +78,8 @@ module decode_auto_tb;
     reg [$clog2(NL*EX*EW)-1:0] wr_addr = 0;
     reg [SW-1:0] wr_data = 0;
     wire a_layer_done, token_done, r_token_done;
-    wire [7:0] r_round_w;
-    wire [5:0] a_round_w2ph;
+    wire [31:0] r_round_w;
+    wire [31:0] a_round_w2ph;
     wire [31:0] r_stalls_w, a_stalls_w, r_sel_w, a_words_w;
     wire [$clog2(EX)-1:0] r_cur_w;
     wire [$clog2(NL)-1:0] a_lay_w2;
@@ -94,7 +97,7 @@ module decode_auto_tb;
         .r_stalls(r_stalls_w), .a_stalls(a_stalls_w),
         .r_selected(r_sel_w), .a_words(a_words_w)
     );
-    wire [5:0] a_round_w2 = a_round_w2ph;
+    wire [31:0] a_round_w2 = a_round_w2ph;  // M38: 视口随 RTL 加宽 (6→32)
 
     //---------------- 装配信用帽 ----------------
     reg [15:0] occ_q = 0;
@@ -257,7 +260,7 @@ module decode_auto_tb;
     wire h_out_valid, h_token_done;
     wire [15:0] h_out_score;
     wire [$clog2(NCAP)-1:0] h_out_token;
-    wire [5:0] h_round_w;
+    wire [31:0] h_round_w;
     wire [31:0] h_stalls_w, h_scanned_w;
     wire [$clog2(NVOC/NGRP)-1:0] h_g_w;
     wire [31:0] h_lbw_w, h_ubw_w, h_ncad_w;
@@ -503,7 +506,7 @@ module decode_auto_tb;
     integer dt_arr [0:TN-1];
     integer nprobe, xe, co, gk0, acc_off, jit;
     integer leak_ct [0:6], cov_ct [0:6];
-    integer tok_unique = 0, ntok_unique = 0;
+    integer tok_unique = 0, ntok_unique = 0, state_unique = 0, dup_found = 0;
     integer ncad_sum = 0, ncad_min = 99999, ncad_max = 0;
     integer n_trunc_l = 0, n_trunc_r = 0;
 
@@ -535,8 +538,16 @@ module decode_auto_tb;
         for (t = 0; t < TN; t = t + 1) begin
             // PROFILE 8: ±1 token 反馈抖动 (t 交替 ±1); 9 = 同种子无抖动对照
             jit = (PROFILE == 8 && t >= 1) ? ((t % 2) ? 1 : -1) : 0;
-            if (t > 0)
-                fb[t] = (fb[t-1]*1664525 + ((tokstream[t-1] + jit + (SEED*257)) & 16'hFFFF)*7 + 11) & 16'hFFFF;   // LCG 搅拌+上步 token 反馈 (防固定点)
+            if (t > 0) begin
+                if (FBPOLY == 0)                                                                               // 线性 LCG + token 反馈
+                    fb[t] = (fb[t-1]*1664525 + ((tokstream[t-1] + jit + (SEED*257)) & 16'hFFFF)*7 + 11) & 16'hFFFF;
+                else if (FBPOLY == 1)                                                                          // XOR 混入 token (非线性)
+                    fb[t] = ((fb[t-1]*1664525) ^ ((tokstream[t-1] + jit) & 16'hFFFF)*7 + (SEED*257)) & 16'hFFFF;
+                else begin                                                                                     // xorshift + token 混合
+                    fb[t] = (fb[t-1] ^ ((fb[t-1] << 7) & 16'hFFFF) ^ (fb[t-1] >> 9)) & 16'hFFFF;
+                    fb[t] = (fb[t] + ((tokstream[t-1] + jit) & 16'hFFFF) + (SEED*257)) & 16'hFFFF;
+                end
+            end
             gold_all_t(t);
             gemm_gold_arr[t] = gemm_gold(t);
             seed_r = fb[t];
@@ -620,6 +631,12 @@ module decode_auto_tb;
             for (j = 0; j < t; j = j + 1)
                 if (tokstream[j] == tokstream[t]) tok_unique = 0;
             ntok_unique = ntok_unique + tok_unique;
+            // ── M38: 去生成状态空间去重 (distinct (fb[t], tok[t]) 对) ──
+            state_unique = state_unique + 1;
+            dup_found = 0;
+            for (j = 0; j < t; j = j + 1)
+                if (tokstream[j] == tokstream[t] && fb[j] == fb[t]) dup_found = 1;
+            if (dup_found) state_unique = state_unique - 1;
             tc_cyc_arr[t] = ($time - tc_start) / (2*HALF);
             if (tc_cyc_arr[t] >= 30000) begin
                 $display("FAIL t=%0d 周期超限 %0d", t, tc_cyc_arr[t]); $finish;
@@ -630,9 +647,9 @@ module decode_auto_tb;
             ncad_sum = ncad_sum + h_ncad_w;
             if (h_lbw_w > 0) n_trunc_l = n_trunc_l + 1;
             if (h_ubw_w < NVOC) n_trunc_r = n_trunc_r + 1;
-            $display("t%0d: acc增量=%0d 窗G%0d [%0d,%0d) ncad%0d/%0d 发出token=%0d (top-K分%0d..%0d) 会话%0dcyc",
+            $display("t%0d: acc增量=%0d 窗G%0d [%0d,%0d) ncad%0d/%0d 发出token=%0d (top-K分%0d..%0d) 会话%0dcyc [r%0d a%0d]",
                       t, dt, h_g_w, h_lbw_w, h_ubw_w, h_ncad_w, NVOC, tokstream[t],
-                      h_buf_sc[t*NK + 0], h_buf_sc[t*NK + NK-1], tc_cyc_arr[t]);
+                      h_buf_sc[t*NK + 0], h_buf_sc[t*NK + NK-1], tc_cyc_arr[t], r_round_w, a_round_w2);
         end
 
         // ── 会话终账 ──
@@ -726,9 +743,9 @@ module decode_auto_tb;
                  PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
         $display("== M28/M29 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/%0d=%0d%%, 左截%0d 右截%0d ==",
                  TN, ncad_min, ncad_max, ncad_sum/TN, NVOC, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
-        $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
+        $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d 状态%0d",
                  PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
-                 r_stalls_w, a_stalls_w, racc, ntok_unique);
+                 r_stalls_w, a_stalls_w, racc, ntok_unique, state_unique);
         if (FAULT != 0) begin
             $display("REDTEAM ESCAPE: FAULT=%0d 注入但未触发任何断言 (断言失效!)", FAULT); $finish;
         end
