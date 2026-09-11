@@ -160,6 +160,11 @@ token_done → round++。FAST(EX=32/TOP=8/EW=8/NL=3, 词192, 停顿64拍)全绿�
 流取 top-K: 有符号比较, 平局 idx 小者先 (stable, 表按 token 重置哨兵最小), 全流扫完
 依序吐 K 个 → TN token → token_done → round++; 扫描期上游断流 + 吐期下游慢取记
 停顿, 不丢不序。FAST(TN=3/VOC=32/K=3, 扫96, 停顿9拍)全绿。
+**M20 选→装配链 = `rtl/36_route_asm/route_asm.v`** —— router 先行 + 专家装配 两级链
+(装配前端整块): 每层 e_score(credit) → router 选 top-T → 吐表逐条直交 assembler →
+依选中序拉实体块吐流; 源侧层屏障(上一层装配拉完才灌下一层 e_score), router 在
+COLL 自行等待; 双侧 round++/token_done 同到。L1 选侧断信用(停顿6拍) + L2 装配侧
+慢取(停顿64拍)不丢不序, FAST(吐词192/选条24, 序违例0)全绿。
 
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
