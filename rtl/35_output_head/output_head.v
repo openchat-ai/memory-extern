@@ -31,6 +31,7 @@ module output_head #(
     input  wire       out_take,
     // ── 状态/统计 ──
     output wire       token_done,
+    output wire [WV-1:0] cur_word,                     // 扫描位置观测 (源配对)
     output reg  [$clog2(TN)-1:0] tok_idx = 0,
     output reg  [RNDW-1:0]    round   = 0,
     output reg  [31:0]        stalls  = 0,
@@ -54,6 +55,7 @@ module output_head #(
 
     assign in_take     = (st == S_SCAN) && in_valid;
     assign token_done  = td_p;
+    assign cur_word    = cnt;
     always @(*) out_score = tk_score[op];
     always @(*) out_token = tk_idx[op];
 
