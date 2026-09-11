@@ -495,3 +495,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   - FAULT=5/P0 → `GEMM` 断言捕 (t=1 首个被改词);
   - FAULT=5/P2 → `窗内top-K` 捕 (P2 随机调度未先读被改词时, 移位后靠 acc 扰动于 t=5
     +1 命中) —— 断言家族跨 profile 冗余兜底实证, 零屏蔽, 零 ESCAPE。
+
+**M53 回归门扩张 (34P+6C, rc=0)**: M49-M52 约束持久化入 run_decode_mat.sh —— K{12,16}
+  边界、HALF{1,15} 时脉极值、FAULT{4,5} 组合红队 (含 P2 跨档不会因调度顺序偏置而失效)
+  全部入册; 新增**窗滑移重叠率 ≥90% 不变量**嵌入 PASS 判定 (任何 PASS 行重叠 <90% 即 FAIL)。

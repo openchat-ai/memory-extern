@@ -30,7 +30,12 @@ run_row() {
   timeout 400 vvp "$out" > "$OUT/mat_$tag.log" 2>&1 || true
   local log="$OUT/mat_$tag.log"
   if [ "$want" = "PASS" ]; then
-    if grep -q "ALL PASS" "$log"; then echo "PASS   $tag"; return 0; fi
+    if grep -q "ALL PASS" "$log"; then
+      if grep -q "窗重叠" "$log"; then
+        local ovl=$(sed -n 's/.*窗重叠 \([0-9]*\)%.*/\1/p' "$log")
+        if [ -n "$ovl" ] && [ "$ovl" -lt 90 ]; then echo "FAIL   $tag (窗滑移重叠率 $ovl%<90%%)"; return 1; fi
+      fi
+      echo "PASS   $tag"; return 0; fi
     if grep -q "REDTEAM ESCAPE" "$log"; then echo "ESCAPE $tag"; return 3; fi
     echo "FAIL   $tag"; return 1
   else # CAUGHT: 期望某断言抓住注入
@@ -70,10 +75,18 @@ run_row 0 0 5 12 1 0 1024 0 PASS 5; rc+=$?
 run_row 0 0 5 12 1 0 1024 0 PASS 8; rc+=$?
 run_row 4 3 9 12 1 0 2048 0 PASS 8; rc+=$?
 run_row 2 1 5 60 0 0 2048 0 PASS 8; rc+=$?
-# 断言红队
+# 断言红队 (M31/M52; F4/F5=组合双错零遮蔽)
 run_row 0 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 12 1 2 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 2 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+# M49/M50 K 边界 {12,16} + 时钟极值 HALF {1,15}
+run_row 0 0 5 12 1 0 1024 0 PASS 12; rc+=$?
+run_row 0 0 5 12 1 0 1024 0 PASS 16; rc+=$?
+run_row 0 0 1 12 1 0 1024 0 PASS; rc+=$?
+run_row 0 0 15 12 1 0 1024 0 PASS; rc+=$?
 
 echo "===================="
 echo "decode_auto 回归门: rc=$rc (0=全绿)"
