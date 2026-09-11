@@ -198,6 +198,21 @@ ncad 个候选 (scan_end=ncad-1 运行时窗 + cand[cur] 实词号流式喂 logi
 (同 acc 下 89% 扫描省掉), 硬件对账峰组/边界与 TB 重算一致, scanned==ncad。M19 增 scan_end
 口 (全量时恒 VOC-1, M19/M21 回归绿)。全链 M23 断言全保留 (GEMM 64词金4032/attn 38628/释放4/背压 r1072)。
 
+**M25 连续多步解码闭环 = `rtl/41_decode_auto/decode_auto_tb.v`** —— 解冻目标跑法第一例: TN=3 个 token
+  的连续自回归, 每 token 一轮真引擎会话 + M24 剪枝头出词, 上步发出的 argmax token 反馈为下步种子。
+  设计: fb[0]=0, t>0 时 `fb[t]=(tokstream[t-1]*7+11)&0xFFFF`; e_score `s_v_t=(L*131+((k*17)^(fb[t]&
+  16'h0FFF)))&0xFFFF`(XOR 使逐 token 选序变化); rail/切片 LUT 跨 token 不变。每 token 实用"真 MAC
+  累计差分": dt=arr_acc_out 增量、dg=gacc 增量、da=aacc 增量, 断言 dg==gemm金_t、da==ref_o 镜像
+  (M23 o 逐行镜像的会话内增量)、dt==(dg+da); 头以 head_acc=dt[15:0] 独立跑, 等 h_round 推进, top-K
+  与 fk(dt) 全量扫描黄金逐位一致, 发出的 tokstream = h_lbw+h_buf_tok。**RTL 修复 2 处 (跨会话正确性)**:
+  ① assembler 会话起止不归零 lay_idx/caddr → 上 token 末层号残留致下 token 首层读错切片区; 改 go 时
+  lay_idx<=0 且会话完工时归零 (M19/M21/M23/M24 回归全绿)。② 双口信用 slot_ok 用跨会话累计
+  lay_fill/released, 第二 token 起 credit 断流→装配/引擎互等死锁; 改为 start_tok 脉冲按会话清零
+  层计数。另: iverilog 连续赋值函数读 memory 数组不回算 (fb[t] 只随 tok/srcL/r_cur 变化重评) → 首 accept
+  采到 X 进 router 表头; 改 `seed_r` 标量 + `assign s_score=(srcL*131+((r_cur_w*17)^(seed_r&16'h0FFF)))`。
+  实测: acc 增量 42660/44836/51364, 窗 G0[0,56) ncad56/512(≈11%), 发出 token 流 **2→3→6**, 终账
+  fill12/词384/GEMM192词对账180/o768/释放12/池切24/停r1072/头3条, 全链断言 TN× 通过。
+
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
   B-SRAM 300GB/s 级, 当 FIFO 是拿跑车拉砖): 转载站取 DMA 侧弹性 FIFO。
