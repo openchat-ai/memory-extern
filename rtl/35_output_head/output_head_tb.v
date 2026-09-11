@@ -31,9 +31,11 @@ module output_head_tb;
         .clk(clk), .rst_n(rst_n), .go(go),
         .in_valid(in_valid), .in_logit(in_logit), .in_take(in_take),
         .out_valid(out_valid), .out_score(out_score), .out_token(out_token), .out_take(out_take),
+        .scan_end(se_c),
         .token_done(token_done),
         .tok_idx(tok_w), .round(round_w), .stalls(stalls_w), .scanned(scanned_w)
     );
+    wire [$clog2(VOC)-1:0] se_c = VOC - 1;
 
     always #5 clk = ~clk;
 
