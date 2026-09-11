@@ -20,7 +20,7 @@ module assembler #(
     parameter EW   = 8,      // 每实体权重词数 (FAST 假权重; P2=实体块实际规模)
     parameter NL   = 3,      // 座席层/会话
     parameter SW   = 16,     // 权重词位宽
-    parameter RNDW = 6       // round 计数位宽
+    parameter RNDW = 32     // round 计数位宽 (M38: 6→32, 长流 watchdog 运行账, 防 64-token 回绕)
 )(
     input  wire       clk, rst_n, go,
     // ── 入口: router 逐拍吐 top-T (本层一批, TAKE 期手拉手) ──

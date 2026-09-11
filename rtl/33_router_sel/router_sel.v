@@ -28,7 +28,7 @@ module router_sel #(
     output wire [SW-1:0] out_score,
     input  out_take,
     output reg layer_done, token_done,
-    output reg [7:0] round,
+    output reg [31:0] round,                   // M38: 8→32, 长流运行账防 256-token 回绕
     output wire [IX-1:0] cur_idx,             // 当前灌收专家号 (观测/源配对, M16 s_sel 同构)
     output reg [31:0] layers,                 // 完工层累计
     output reg [31:0] selected,               // 已吐条数

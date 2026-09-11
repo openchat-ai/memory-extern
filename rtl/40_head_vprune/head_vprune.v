@@ -30,7 +30,7 @@ module head_vprune #(
     output wire [$clog2((2*MAXE+1)*GRP)-1:0] out_token,
     input  wire          out_take,
     output wire          token_done,
-    output wire [5:0]    round,
+    output wire [31:0]   round,   // M38: 6→32 长流运行账 (防 64-token 回绕)
     output wire [31:0]   stalls, scanned,
     // ── 剪枝窗观测 ──
     output wire [$clog2(VOC/GRP)-1:0] peak_g,
@@ -39,7 +39,7 @@ module head_vprune #(
     localparam NG  = VOC/GRP;
     localparam CAP = (2*MAXE+1)*GRP;
     localparam WV  = $clog2(CAP);
-    localparam RNDW = 6;
+    localparam RNDW = 32;   // M38: 6→32, 传给内部 output_head (长流 round 账)
 
     // 同 M22 的 logits 代理 (组峰用 fk; 头扫候选流也用同一 fk, 保持同源)
     function integer fk(input integer a, input integer x);

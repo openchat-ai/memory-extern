@@ -47,8 +47,8 @@ module head_vprune_tb;
     reg [$clog2(NL*EX*EW)-1:0] wr_addr = 0;
     reg [SW-1:0] wr_data = 0;
     wire a_layer_done, token_done, r_token_done;
-    wire [7:0] r_round_w;
-    wire [5:0] a_round_w2ph;
+    wire [31:0] r_round_w;
+    wire [31:0] a_round_w2ph;
     wire [31:0] r_stalls_w, a_stalls_w, r_sel_w, a_words_w;
     wire [$clog2(EX)-1:0] r_cur_w;
     wire [$clog2(NL)-1:0] a_lay_w2;
@@ -66,7 +66,7 @@ module head_vprune_tb;
         .r_stalls(r_stalls_w), .a_stalls(a_stalls_w),
         .r_selected(r_sel_w), .a_words(a_words_w)
     );
-    wire [5:0] a_round_w2 = a_round_w2ph;
+    wire [31:0] a_round_w2 = a_round_w2ph;
 
     //---------------- 装配信用帽 ----------------
     reg [15:0] occ_q = 0;
@@ -218,7 +218,7 @@ module head_vprune_tb;
     wire h_out_valid, h_token_done;
     wire [15:0] h_out_score;
     wire [$clog2(NCAP)-1:0] h_out_token;
-    wire [5:0] h_round_w;
+    wire [31:0] h_round_w;
     wire [31:0] h_stalls_w, h_scanned_w;
     wire [$clog2(NVOC/NGRP)-1:0] h_g_w;
     wire [31:0] h_lbw_w, h_ubw_w, h_ncad_w;

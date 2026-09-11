@@ -17,7 +17,7 @@ module output_head #(
     parameter VOC  = 32,     // 词表规模 (P2≈320K, 流式)
     parameter K    = 3,      // 保留 top-K (P2 冻结词表剪枝后候选集)
     parameter BB   = 16,     // logits 位宽
-    parameter RNDW = 6       // round 计数位宽
+    parameter RNDW = 32     // round 计数位宽 (M38: 6→32 长流账)
 )(
     input  wire clk, rst_n, go,
     // ── 词表 logits 流 (每 token 依号 0..VOC-1) ──

@@ -292,6 +292,26 @@ ncad 个候选 (scan_end=ncad-1 运行时窗 + cand[cur] 实词号流式喂 logi
   M25→M34 累计约 220 次独立会话黄金对账、9 个后续里程碑全绿, 零 RTL 源文件改动
   (仅 assemble 层号复位 (M25) + 本段全为 decode_auto_tb 参数矩阵 / 断言 / 探针)。
 
+**M35 疲劳长跑 = 计数器位宽缺陷引爆**: TN 参数化 12→60/120 长链, 立即暴露
+  `round r120/a56` 失配——真因是**运行账计数器位宽不够** (assembler round 6 位、
+  head/output_head round 6 位 → 64 token 回绕; router round 8 位 → 256 回绕),
+  顺带抓出 TB 自身 tok_now 4 位回绕 (监视器 >15 误对账, 非 RTL)。TN60×P0/P2/P8 全绿。
+  → M38 (见下) 收口为 RTL 硬化。
+
+**M36/M37 回归门固化 + 交叉角点**: `sim/devtests/run_decode_mat.sh` 正交矩阵门
+  (17 PASS + 3 CAUGHT, rc=0; 红队期望'detected'断言家族); 角点 P4×H9(高斯×慢钟)、
+  P8×H9、P8×SEED1×T30、大规模 VOC1024 下红队 F1/F2/F3 全捕获。可复跑即回归资产。
+
+**M38 运行账计数位宽硬化 (RTL 首实改, M25 后第 2 次 RTL diff)**: assembler
+  (RNDW 6→32) / router_sel (round 8→32) / output_head (RNDW 6→32) /
+  head_vprune (RNDW 6→32, 对内部 OH 显式传参) 全对齐 32 位运行账; route_asm 的
+  RNDW 从端口后 localparam 前移进 ANSI 参数头 (iverilog 按解析序解析端口宽,
+  端口后声明取旧值——route_asm 曾假 32 实 6)。TB + M19/M24 独立 TB 视口同步
+  [31:0]。验证: P0/T120×FBPOLY{0,1,2} 与 P2/T280 (越过 256 回绕点) 全 ALL PASS,
+  回归门 rc=0, M19/M24 零警告复绿。附加 FBPOLY 反馈多项式对比 (state_space 度量
+  distinct (fb,tok) 对): LCG=120/120 (状态空间全域), XOR 混入=10 (强周期坍缩),
+  xorshift+tok=95, P2/T280=280/280 → **保留线性 LCG+token 反馈**, 不用纯 XOR。
+
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
   B-SRAM 300GB/s 级, 当 FIFO 是拿跑车拉砖): 转载站取 DMA 侧弹性 FIFO。
