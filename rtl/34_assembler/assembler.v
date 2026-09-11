@@ -81,7 +81,7 @@ module assembler #(
             case (st)
                 S_IDLE: begin
                     td_p <= 0;
-                    if (go) begin st <= S_TAKE; k <= 0; end
+                    if (go) begin st <= S_TAKE; k <= 0; lay_idx <= 0; caddr <= 0; end
                 end
                 S_TAKE: begin
                     ld_p <= 0;
@@ -102,6 +102,7 @@ module assembler #(
                                 out_valid <= 0;
                                 if (lay_idx == NL-1) begin  // 会话完工
                                     td_p <= 1; round <= round + 1;
+                                    lay_idx <= 0;
                                     st <= S_IDLE;
                                 end else begin
                                     ld_p <= 1; lay_idx <= lay_idx + 1;
