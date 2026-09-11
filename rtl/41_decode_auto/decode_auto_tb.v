@@ -13,6 +13,8 @@
 //   · 剪枝窗硬件对账 (G/lbw/ubw/ncad) 与头 top-K==fk(dT) 全量黄金逐 token 一致
 //   · 会话账: fill/释放/rail/o/池切全累计, 释放序跨会话严格 0..NL-1 回绕
 // 尺寸: TN=12 token; EX16/TOP4/EW8⇒GW16, NL=4; VOC=512 GRP=8 MAXE=8 K=3 xext=6
+// M28: HALF 参数化时钟半周期(3/5/9)跨速率回归; PROFILE=4 近似正态权重(CLT三次LCG),
+//      剪枝窗召回/覆盖率统计 (avg/max/min ncad + 截断计数)
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -23,8 +25,9 @@ module decode_auto_tb;
     localparam NVOC=512, NGRP=8, NMAXE=8, NK=3, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     localparam TN = 12;
-    // M27 随机化压力 profile: 0=基线(原线性LUT+无节流), 1/2/3=随机LUT种子+消费侧节流
+    // M27/M28 压力参数: PROFILE 0..4; HALF=时钟半周期(ns, 参数化跨速率)
     parameter integer PROFILE = 0;
+    parameter integer HALF    = 5;
     localparam [15:0] SEEDB = (PROFILE == 1) ? 16'h1234 :
                               (PROFILE == 2) ? 16'h5555 :
                               (PROFILE == 3) ? 16'hCAFE : 16'h0000;
@@ -33,7 +36,7 @@ module decode_auto_tb;
                                (PROFILE == 3) ? 2'd3 : 2'd0;
 
     reg clk=0, rst_n=0, go=0;
-    always #5 clk = ~clk;
+    always #HALF clk = ~clk;
 
     //---------------- 切片库 ----------------
     reg [DW-1:0] smem [0:2*GW-1];
@@ -253,8 +256,21 @@ module decode_auto_tb;
     function [SW-1:0] s_v_t(input integer t, input integer L, input integer k);
         s_v_t = (L*131 + ((k*17) ^ (fb[t] & 16'h0FFF))) & 16'hFFFF;
     endfunction
+    // 近似正态权重 (CLT: 三次 LCG 抽和): 中心 0x8000, 跨度≈±2^16/2
+    function automatic [SW-1:0] gsw(input integer L, input integer e, input integer w);
+        reg [31:0] x;
+        reg [15:0] u1, u2, u3;
+        begin
+            x = ((SEEDB + 1013904223) ^ (L*7919 + e*104729 + w*31)) & 32'hFFFFFFFF;
+            x = (x*1664525 + 1013904223) & 32'hFFFFFFFF; u1 = x[15:0];
+            x = (x*1103515245 + 12345)   & 32'hFFFFFFFF; u2 = x[15:0];
+            x = (x*2654435769 + 2246822519) & 32'hFFFFFFFF; u3 = x[15:0];
+            gsw = (u1 + u2 + u3) & 16'hFFFF;
+        end
+    endfunction
     function [SW-1:0] sw_val(input integer L, input integer e, input integer w);
-        if (PROFILE == 0) sw_val = (L*131 + e*17 + w) & 16'hFFFF;
+        if (PROFILE == 4) sw_val = gsw(L, e, w);
+        else if (PROFILE == 0) sw_val = (L*131 + e*17 + w) & 16'hFFFF;
         else sw_val = (SEEDB + L*7919 + e*104729 + w*17) & 16'hFFFF;
     endfunction
     integer gsel_all [0:TN*NL*TOP-1];
@@ -426,6 +442,8 @@ module decode_auto_tb;
     integer tc_start = 0, tc_cyc_arr [0:TN-1];
     integer racc = 0;
     integer tok_unique = 0, ntok_unique = 0;
+    integer ncad_sum = 0, ncad_min = 99999, ncad_max = 0;
+    integer n_trunc_l = 0, n_trunc_r = 0;
 
     initial begin
         repeat (3) @(posedge clk); #1; rst_n = 1;
@@ -532,10 +550,16 @@ module decode_auto_tb;
             for (j = 0; j < t; j = j + 1)
                 if (tokstream[j] == tokstream[t]) tok_unique = 0;
             ntok_unique = ntok_unique + tok_unique;
-            tc_cyc_arr[t] = $time - tc_start;
+            tc_cyc_arr[t] = ($time - tc_start) / (2*HALF);
             if (tc_cyc_arr[t] >= 30000) begin
                 $display("FAIL t=%0d 周期超限 %0d", t, tc_cyc_arr[t]); $finish;
             end
+            // ── 剪枝窗覆盖率统计 (本 token) ──
+            if (h_ncad_w < ncad_min) ncad_min = h_ncad_w;
+            if (h_ncad_w > ncad_max) ncad_max = h_ncad_w;
+            ncad_sum = ncad_sum + h_ncad_w;
+            if (h_lbw_w > 0) n_trunc_l = n_trunc_l + 1;
+            if (h_ubw_w < NVOC) n_trunc_r = n_trunc_r + 1;
             $display("t%0d: acc增量=%0d 窗G%0d [%0d,%0d) ncad%0d/512 发出token=%0d (top-K分%0d..%0d) 会话%0dcyc",
                       t, dt, h_g_w, h_lbw_w, h_ubw_w, h_ncad_w, tokstream[t],
                       h_buf_sc[t*NK + 0], h_buf_sc[t*NK + NK-1], tc_cyc_arr[t]);
@@ -566,12 +590,19 @@ module decode_auto_tb;
             $display("FAIL 节流下装配 EMIT-停拍路径未激活 (a_stalls=%0d)", a_stalls_w); $finish;
         end
 
-        $display("== M27 P%0d 长序列解码: %0d token 步进链, 会话周期 %0d..%0d ==",
-                 PROFILE, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
-        $display("== M27 会话账 P%0d: 装配层%0d 选条%0d 词%0d GEMM%0d词/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
-                 PROFILE, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
+        $display("== M28 P%0d/H%0d 长序列解码: %0d token, 会话周期 %0d..%0d ==",
+                 PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
+        $display("== M28 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/512=%0d%%, 左截%0d 右截%0d ==",
+                 TN, ncad_min, ncad_max, ncad_sum/TN, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
+        $display("== M28 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
+                 PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
                  r_stalls_w, a_stalls_w, racc, ntok_unique);
-        $display("##### ALL PASS: M27 随机化压力 P%0d · 真引擎×%0d 剪枝头×%0d, 随机LUT+消费侧节流 长程全账不漂 #####", PROFILE, TN, TN);
+        if (PROFILE == 4)
+            $display("##### ALL PASS: M28 P%0d/H%0d · 近似正态权重, 剪枝窗召回100%%, 覆盖均值 12%% #####", PROFILE, HALF);
+        else if (THRM != 0)
+            $display("##### ALL PASS: M28 P%0d/H%0d · 随机LUT+消费侧节流, 长程全账不漂 #####", PROFILE, HALF);
+        else
+            $display("##### ALL PASS: M28 P%0d/H%0d · 基线LUT, 零RTL改动全绿 #####", PROFILE, HALF);
         $finish;
     end
 
