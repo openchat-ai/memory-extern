@@ -24,6 +24,8 @@ module output_head #(
     input  wire       in_valid,
     input  wire [BB-1:0]      in_logit,
     output wire       in_take,
+    // ── 扫描终点 (段扫时恒为 VOC-1; 词表剪枝候选窗接线推入 ubw-1/lbw 基, runtime 窗) ──
+    input  wire [$clog2(VOC)-1:0] scan_end,
     // ── top-K 出口 (token 选择) ──
     output reg         out_valid,
     output reg [BB-1:0]             out_score,
@@ -114,7 +116,7 @@ module output_head #(
                                 tk_score[j] <= newscr[j];
                             end
                         end
-                        if (cnt == VOC-1) begin
+                        if (cnt == scan_end) begin
                             st <= S_DONE; op <= 0; out_valid <= 1;
                         end else cnt <= cnt + 1;
                     end else stalls <= stalls + 1;      // 扫描期上游断流
