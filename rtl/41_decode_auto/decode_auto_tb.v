@@ -20,6 +20,9 @@
 //      不变性 (±0x1234/0x8000 扰动下黄金仍在窗内), 覆盖-裕量量化 = xext 定值复核
 // M30: NMAXE=14 窗半径压到能力边沿 (CAP=232, CAND 容量/速度实证); 裕量曲线延至 2..14;
 //      PROFILE=8/9 同种子(0x5555)±1 token 反馈抖动成对, 量化自回归去生成灵敏度
+// M31 断言红队 (参数 FAULT=0/1/2/3): 对黄金/数据路径注入受控故障, 验证断言真会咬:
+//      1=LUT 一个词位篡改(GEMM 家族) 2=o 黄金镜像一例错(attn 家族) 3=head acc 扰动一例
+//      (top-K 家族); 若某注入逃过全部断言 → 打印 REDTEAM ESCAPE (断言失效证据)
 //────────────────────────────────────────────────────────────────────────────
 module decode_auto_tb;
     localparam DW=32, AW=8, SW=16, NL=4, GW=16, ATW=128;
@@ -34,6 +37,7 @@ module decode_auto_tb;
     // 交替/8·9=种子0x5555 ±1反馈抖动成对); HALF=时钟半周期(参数化跨速率)
     parameter integer PROFILE = 0;
     parameter integer HALF    = 5;
+    parameter integer FAULT   = 0;   // 断言红队: 0=关闭; 1=GEMM词篡改; 2=o黄金镜像错; 3=head acc扰动
     localparam [15:0] SEEDB = (PROFILE == 1) ? 16'h1234 :
                               (PROFILE == 2) ? 16'h5555 :
                               (PROFILE == 3) ? 16'hCAFE :
@@ -371,6 +375,10 @@ module decode_auto_tb;
     end
 
     reg [31:0] sacc = 0, gacc = 0, aacc = 0, pacc = 0;
+    reg [15:0] fault_gold_o = 0;   // FAULT=2: 一例 o 黄金镜像错 (attn 家族)
+    always @(negedge clk)
+        fault_gold_o = (FAULT == 2 && tok_now == 0 && ctl_o_head == 0 && ctl_o_row[2:0] == 2)
+                     ? 16'hFFFF : 16'h0000;
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin sacc <= 0; gacc <= 0; aacc <= 0; pacc <= 0; end
         else begin
@@ -384,8 +392,8 @@ module decode_auto_tb;
     reg [31:0] osum = 0, ref_o = 0;
     always @(posedge clk) begin
         if (ctl_o_valid) begin
-            if (ctl_o_data !== (attn_row_gold(ex_layer_now, ctl_o_head,
-                                              ctl_o_row[2:0]) & 16'hFFFF)) begin
+            if (ctl_o_data !== ((attn_row_gold(ex_layer_now, ctl_o_head,
+                                               ctl_o_row[2:0]) & 16'hFFFF) ^ fault_gold_o)) begin
                 $display("%0t FAIL o L=%0d b=%0d r=%0d got=%0d gold=%0d", $time,
                          ex_layer_now, ctl_o_head, ctl_o_row,
                          ctl_o_data, attn_row_gold(ex_layer_now, ctl_o_head, ctl_o_row[2:0]) & 16'hFFFF);
@@ -480,13 +488,15 @@ module decode_auto_tb;
         repeat (3) @(posedge clk); #1; rst_n = 1;
         repeat (2) @(posedge clk);
         for (L = 0; L < NL; L = L + 1)
-            for (e = 0; e < EX; e = e + 1)
-                for (w = 0; w < EW; w = w + 1) begin
-                    @(negedge clk);
-                    wr_en = 1;
-                    wr_addr = L*EX*EW + e*EW + w;
-                    wr_data = sw_val(L, e, w);
-                end
+                for (e = 0; e < EX; e = e + 1)
+                    for (w = 0; w < EW; w = w + 1) begin
+                        @(negedge clk);
+                        wr_en = 1;
+                        wr_addr = L*EX*EW + e*EW + w;
+                        wr_data = sw_val(L, e, w);
+                        // FAULT=1: 篡改 (L=0, exec15, lane1) —— t=0 顶层黄金必读位
+                        if (FAULT == 1 && L == 0 && e == 15 && w == 1) wr_data = wr_data ^ 16'h8000;
+                    end
         @(negedge clk);
         wr_en = 0;
 
@@ -552,6 +562,9 @@ module decode_auto_tb;
 
             // ── 剪枝头: acc=本 token 增量 ──
             @(negedge clk); head_acc = dt[15:0];
+            if (FAULT == 3 && t == 5) begin
+                @(negedge clk); head_acc = head_acc + 1'b1; // FAULT=3: 仅 t=5 一个 acc 扰动
+            end
             hr0 = h_round_w;
             @(negedge clk); head_go = 1;
             @(negedge clk); head_go = 0;
@@ -691,8 +704,11 @@ module decode_auto_tb;
         $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d ==",
                  PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
                  r_stalls_w, a_stalls_w, racc, ntok_unique);
+        if (FAULT != 0) begin
+            $display("REDTEAM ESCAPE: FAULT=%0d 注入但未触发任何断言 (断言失效!)", FAULT); $finish;
+        end
         if (PROFILE == 4)
-            $display("##### ALL PASS: M28/M29 P%0d/H%0d · 近似正态权重, 剪枝窗召回100%%, 覆盖均值 12%% #####", PROFILE, HALF);
+            $display("##### ALL PASS: M28/M29 M30 P%0d/H%0d · 近似正态权重, 剪枝窗召回100%%, 覆盖均值 12%% #####", PROFILE, HALF);
         else if (THRM != 0)
             $display("##### ALL PASS: M28/M29 P%0d/H%0d · 随机LUT+消费侧节流+裕量/偏移探针, 全绿 #####", PROFILE, HALF);
         else

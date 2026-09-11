@@ -268,6 +268,14 @@ ncad 个候选 (scan_end=ncad-1 运行时窗 + cand[cur] 实词号流式喂 logi
   噪声混沌放大 (去生成灵敏边界 = 1 步)**; 硬件/黄金仍逐位对齐, racc/全账不漂。7 profile 全绿,
   M24/M19 独立回归复跑全绿, 零 RTL 改动。
 
+**M31 断言红队 (参数 FAULT=0/1/2/3) = `rtl/41_decode_auto/decode_auto_tb.v`** —— 验证断言
+  有效性 (连续多里程碑全绿可能是"断言从不咬"的假绿): 三类受控注入各对应一个断言家族, 全捕获
+  — FAULT=1 篡改 (L=0,exec15,lane1) 一个 LUT 词位 (写 0x8100 ≠ 金 0x100): 坏词在 rail 现身,
+  GEMM 词级对账 gemm_bad++ 且终账 "FAIL GEMM 对账" 双抓 (t=1/6/7 多 token 复现); FAULT=2 对 o
+  黄金镜像一例 (head0,row2) 取反: 首例即 $fatal "FAIL o L=0 b=0 r=2"; FAULT=3 仅 t=5 一个
+  head_acc +1: "FAIL t=5 top-K#0 头(22@lbw+12) != 金(22@7)" 精确命中。F0 对照 ALL PASS (无扰动
+  无警), 全 F>0 无 REDTEAM ESCAPE → M23-M30 的绿确实来自断言真在咬, 非静默空转。零 RTL 改动。
+
 **SRAM 域预算(行为级, 流片/换 fabric 平移, 2026-09-09):** **736KB ≤ 765KB(96.2%, 剩 29KB)**
   B-SRAM 价值 = 高带宽×低延迟×随机读 → **慢任务不许绑快资源**(转载站数据率仅 0.5MB/s vs
   B-SRAM 300GB/s 级, 当 FIFO 是拿跑车拉砖): 转载站取 DMA 侧弹性 FIFO。
