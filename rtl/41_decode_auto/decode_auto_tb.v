@@ -38,7 +38,8 @@ module decode_auto_tb;
     localparam EX=16, TOP=4, EW=8;
     localparam FIFO_CAP = 4096, TCUT = FIFO_CAP/2;
     parameter integer NVOC = 1024;   // M41: 可覆写 (512/1024/2048 规模实证)
-    localparam NGRP=16, NMAXE=14, NK=3, NXEST=6;
+    parameter integer NK = 3;        // M42: 可覆写 top-K (3/5/8)
+    localparam NGRP=16, NMAXE=14, NXEST=6;
     localparam NCAP = (2*NMAXE+1)*NGRP;
     parameter integer TN      = 12;    // M35: 可覆写 (60 = 疲劳长跑)
     parameter integer PROBEON = 1;     // 0 = 跳终账后裕量/偏移探针 (长跑降时)
@@ -501,7 +502,7 @@ module decode_auto_tb;
     integer prevT = 0, prevG = 0, prevA = 0, hr0, dt, dg, da, dO;
     reg [15:0] seed_r = 0;
     integer eg, egb, ebi, elb, eub, ene, e, j, L, w, p, ok2, v0, idxc, t;
-    integer gk [0:NK-1], gsc [0:NK-1];
+    integer gk [0:NK-1], gsc [0:NK-1], gwk [0:NK-1], gwsc [0:NK-1];
     integer tc_start = 0, tc_cyc_arr [0:TN-1];
     integer racc = 0;
     integer dt_arr [0:TN-1];
@@ -606,7 +607,7 @@ module decode_auto_tb;
             while (h_round_w == hr0) @(posedge clk);
             repeat (4) @(posedge clk);
 
-            // ── 全量黄金 top-K (本 token) + 窗硬件对账 ──
+            // ── 全量黄金 top-K (泄漏/召回: argmax 必须窗内) ──
             for (j = 0; j < NK; j = j + 1) begin gsc[j] = -1; gk[j] = -1; end
             for (idxc = 0; idxc < NVOC; idxc = idxc + 1) begin
                 v0 = fk(dt, idxc);
@@ -620,10 +621,22 @@ module decode_auto_tb;
             if (gk[0] < h_lbw_w || gk[0] >= h_ubw_w) begin
                 $display("FAIL t=%0d 黄金 argmax %0d 漏出窗 [%0d,%0d)", t, gk[0], h_lbw_w, h_ubw_w); $finish;
             end
+            // ── M42 窗内受限黄金 = bake 契约 (剪枝窗只保窗内 top-K 排名, 非全局前缀) ──
+            for (j = 0; j < NK; j = j + 1) begin gwsc[j] = -1; gwk[j] = -1; end
+            for (idxc = h_lbw_w; idxc < h_ubw_w; idxc = idxc + 1) begin
+                v0 = fk(dt, idxc);
+                ok2 = 0;
+                for (p = 0; p < NK && !ok2; p = p + 1)
+                    if (v0 > gwsc[p] || (v0 == gwsc[p] && idxc < gwk[p])) begin
+                        for (j = NK-1; j > p; j = j - 1) begin gwsc[j] = gwsc[j-1]; gwk[j] = gwk[j-1]; end
+                        gwsc[p] = v0; gwk[p] = idxc; ok2 = 1;
+                    end
+            end
             for (j = 0; j < NK; j = j + 1)
-                if (h_buf_sc[t*NK + j] !== gsc[j] || (h_lbw_w + h_buf_tok[t*NK + j]) !== gk[j]) begin
-                    $display("FAIL t=%0d top-K#%0d 头(%0d@lbw+%0d) != 金(%0d@%0d)",
-                             t, j, h_buf_sc[t*NK + j], h_buf_tok[t*NK + j], gsc[j], gk[j]); $finish;
+                if (h_buf_sc[t*NK + j] !== gwsc[j] || (h_lbw_w + h_buf_tok[t*NK + j]) !== gwk[j]) begin
+                    $display("FAIL t=%0d 窗内top-K#%0d 头(%0d@lbw+%0d) != 金(%0d@%0d) 窗[%0d,%0d)",
+                             t, j, h_buf_sc[t*NK + j], h_buf_tok[t*NK + j], gwsc[j], gwk[j],
+                             h_lbw_w, h_ubw_w); $finish;
                 end
 
             // ── 本步发出 token (argmax) → 反馈下步 ──
