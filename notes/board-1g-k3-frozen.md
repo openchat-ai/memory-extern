@@ -462,3 +462,13 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 - **P3 端到端**: tokenizer/embed 接入 + 状态的家落位(S 主机/NVMe, S_b 板上)+ 验收(第 9 节 logits 对比)
 **M44 随机对角混配**: P{0,1,4,5,6,8}×S{2,3,1}×H{5,9,3}×K{5,8}×V{1024/2048} 六路一次性混配
   全 ALL PASS、编译零警告——维度无交互脆弱性 (半随机组合下断言族仍全咬)。
+
+**M45 红队×新维度正交 + 深度耐力**: F{1,2,3}×K8、F1×H9 全捕获 (窗内top-K 断言亦咬
+  F3); P2/K8/V2048/T280 (三个维度极值又过 256 回绕点) 全 ALL PASS。
+
+**M46 RTL 结构化覆盖审计**: P2 算主线 13 模块 (sched_exec/gemv_rail_ctl/sram_pool_arb/
+  attn_window/attn_inner_ctl/router_topk/router_sel/assembler/output_head/route_asm/
+  vocab_prune/head_vprune/gemv_array_128) **全部实例化进 decode_auto_tb**, 全覆盖;
+  KV 写回/恢复辅助环 (kv_writeback/kv_restore/wb_diff/wb_unified/wb_flow/sched_flow/
+  relay_fifo) 各自独立 TB 有过验证但**未与 P2 组合 + 部分 TB 诊断缺失** (wb_unified/
+  wb_diff 静默无输出) → 集成空当与验证传染缺口, 候补里程碑=KV环回会话组合。
