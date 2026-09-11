@@ -50,14 +50,14 @@ module p2_loop #(
     output wire [$clog2(EX)-1:0] r_cur,
     output wire r_out_valid,
     output wire r_token_done, a_token_done, e_token_done, e_layer_done,
-    output wire [7:0] r_round,
+    output wire [31:0] r_round,
     output wire [RNDW-1:0] a_round, oh_round,
     output wire [$clog2(NL)-1:0] e_lay,
     output wire [AW-1:0] e_acc,
     output wire [31:0] r_stalls, a_stalls, oh_stalls,
     output wire [31:0] r_selected, a_words, e_words
 );
-    localparam RNDW = 6;
+    localparam RNDW = 32;   // M40: 随 M38 对齐 (6→32)
     localparam OHWV = $clog2(VOC);
     wire [OHWV-1:0] oh_se_c = VOC - 1;
     wire a_out_valid, a_take_e;

@@ -16,13 +16,16 @@ RTL=( rtl/41_decode_auto/decode_auto_tb.v rtl/40_head_vprune/head_vprune.v \
 
 # 表: PROFILE SEED HALF TN PROBEON FAULT 期望("PASS"|"CAUGHT")
 run_row() {
-  local prof=$1 seed=$2 half=$3 tn=$4 probeon=$5 fault=$6 want=$7
-  local tag=P${prof}S${seed}H${half}T${tn}F${fault}n${probeon}
+  local prof=$1 seed=$2 half=$3 tn=$4 probeon=$5 fault=$6 voc=$7 fbpol=$8 want=$9
+  local tag=P${prof}S${seed}H${half}T${tn}F${fault}n${probeon}V${voc}B${fbpol}
   local out="$OUT/mat_$tag.out"
+  local cerr="$OUT/mat_$tag.cerr"
   ( cd "$ROOT" && iverilog -g2012 -s decode_auto_tb \
       -P decode_auto_tb.PROFILE=$prof -P decode_auto_tb.SEED=$seed -P decode_auto_tb.HALF=$half \
       -P decode_auto_tb.TN=$tn -P decode_auto_tb.PROBEON=$probeon -P decode_auto_tb.FAULT=$fault \
-      -o "$out" "${RTL[@]}" ) 2>/dev/null || { echo "COMPILE-FAIL $tag"; return 2; }
+      -P decode_auto_tb.NVOC=$voc -P decode_auto_tb.FBPOLY=$fbpol \
+      -o "$out" "${RTL[@]}" > "$cerr" 2>&1 ) || { echo "COMPILE-FAIL $tag"; return 2; }
+  if grep -qi "warning" "$cerr"; then echo "WARN   $tag (编译警告门)"; return 1; fi
   timeout 400 vvp "$out" > "$OUT/mat_$tag.log" 2>&1 || true
   local log="$OUT/mat_$tag.log"
   if [ "$want" = "PASS" ]; then
@@ -38,25 +41,33 @@ run_row() {
 }
 
 declare -i rc=0
-# 主矩阵
-for row in "0 0 5 12 1 0 PASS" "1 0 5 12 1 0 PASS" "2 0 5 12 1 0 PASS" \
-           "4 0 5 12 1 0 PASS" "5 0 5 12 1 0 PASS" "6 0 5 12 1 0 PASS" \
-           "8 0 5 12 1 0 PASS" "9 0 5 12 1 0 PASS" \
-           "0 1 5 12 1 0 PASS" "0 2 5 12 1 0 PASS" "0 3 5 12 1 0 PASS" \
-           "0 0 9 12 1 0 PASS" "2 1 5 12 1 0 PASS" "4 3 5 12 1 0 PASS"; do
+# 主矩阵 (PROFILE SEED HALF TN PROBEON FAULT VOC FBPOLY WANT)
+for row in "0 0 5 12 1 0 1024 0 PASS" "1 0 5 12 1 0 1024 0 PASS" "2 0 5 12 1 0 1024 0 PASS" \
+           "4 0 5 12 1 0 1024 0 PASS" "5 0 5 12 1 0 1024 0 PASS" "6 0 5 12 1 0 1024 0 PASS" \
+           "8 0 5 12 1 0 1024 0 PASS" "9 0 5 12 1 0 1024 0 PASS" \
+           "0 1 5 12 1 0 1024 0 PASS" "0 2 5 12 1 0 1024 0 PASS" "0 3 5 12 1 0 1024 0 PASS" \
+           "0 0 9 12 1 0 1024 0 PASS" "2 1 5 12 1 0 1024 0 PASS" "4 3 5 12 1 0 1024 0 PASS"; do
   run_row $row; rc+=$?
 done
 # 疲劳长跑
-run_row 0 0 5 60 0 0 PASS; rc+=$?
-run_row 2 0 5 30 0 0 PASS; rc+=$?
+run_row 0 0 5 60 0 0 1024 0 PASS; rc+=$?
+run_row 2 0 5 30 0 0 1024 0 PASS; rc+=$?
 # 交叉维度角点
-run_row 4 2 9 12 1 0 PASS; rc+=$?
-run_row 8 0 9 12 1 0 PASS; rc+=$?
-run_row 8 1 5 30 1 0 PASS; rc+=$?
+run_row 4 2 9 12 1 0 1024 0 PASS; rc+=$?
+run_row 8 0 9 12 1 0 1024 0 PASS; rc+=$?
+run_row 8 1 5 30 1 0 1024 0 PASS; rc+=$?
+# M41 规模矩阵 (VOC 512/2048, 窗口同构)
+run_row 0 0 5 12 1 0 512 0 PASS; rc+=$?
+run_row 4 0 5 12 1 0 512 0 PASS; rc+=$?
+run_row 0 0 5 12 1 0 2048 0 PASS; rc+=$?
+run_row 4 0 5 12 1 0 2048 0 PASS; rc+=$?
+# M38 长链 (T120×FBPOLY, T280 过 256 回绕点)
+run_row 0 0 5 120 0 0 1024 1 PASS; rc+=$?
+run_row 2 0 5 280 0 0 1024 0 PASS; rc+=$?
 # 断言红队
-run_row 0 0 5 12 1 1 CAUGHT; rc+=$?
-run_row 0 0 5 12 1 2 CAUGHT; rc+=$?
-run_row 0 0 5 12 1 3 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
 
 echo "===================="
 echo "decode_auto 回归门: rc=$rc (0=全绿)"
