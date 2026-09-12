@@ -95,6 +95,12 @@ run_row 0 13 5 12 1 0 1024 0 PASS; rc+=$?
 run_row 11 0 5 12 1 0 1024 0 PASS; rc+=$?
 run_row 11 0 5 60 0 0 1024 0 PASS; rc+=$?
 run_row 11 0 9 12 1 0 2048 0 PASS 8; rc+=$?
+# M64 P11 指数扩展 + 远峰红队 (F1/F3 在窗贴顶时仍全咬)
+run_row 11 0 5 60 0 0 2048 0 PASS 8; rc+=$?
+run_row 11 0 5 120 0 0 1024 2 PASS; rc+=$?
+run_row 11 0 9 12 1 0 512 0 PASS; rc+=$?
+run_row 11 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 120 0 0 1024 2 PASS; rc+=$?
 # M49/M50 K 边界 {12,16} + 时钟极值 HALF {1,15}
 run_row 0 0 5 12 1 0 1024 0 PASS 12; rc+=$?

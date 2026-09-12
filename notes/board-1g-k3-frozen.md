@@ -545,3 +545,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
      逐位一致 ALL PASS。
   M63 复核: FKXG 默认0 → 全部既有门行逐位一致 (44P+6C rc=0), 独立 TB 8 枚全 PASS;
   全链回归终验 rc=0 (RTL 自 M38 后首次新增参数, 取证通过)。
+
+**M64 P11 远峰面扩展**: F{1,2,3,5}@P11 全 CAUGHT (GEMM/o/窗内top-K 在窗贴词表顶
+  [912,1024) 时仍全咬, F3 捕到 1040@lbw+110 vs 金 1038@1021 远峰窗内错位); P11×K8×
+  V2048×T60、P11×FBPOLY2×T120、P11×H9×V512 全 ALL PASS。门扩至 49P+8C。
