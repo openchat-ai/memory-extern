@@ -107,6 +107,11 @@ run_row 11 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
 # M68 P11 远峰×SEED 抽样 {4,9}
 run_row 11 4 5 12 1 0 1024 0 PASS; rc+=$?
 run_row 11 9 5 12 1 0 1024 0 PASS; rc+=$?
+# M70 红队×远峰/节流新交叉角 + 退化高权重×远峰
+run_row 2 0 5 12 1 1 1024 0 CAUGHT 3 1; rc+=$?
+run_row 2 0 5 12 1 3 1024 0 CAUGHT 3 1; rc+=$?
+run_row 11 0 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 8 0 5 12 1 0 1024 0 PASS 3 1; rc+=$?
 # M66 节流×远峰共激活 (P2+FKXG1) + 远峰长程耐力/P16KP2048
 run_row 2 0 5 12 1 0 1024 0 PASS 3 1; rc+=$?
 run_row 11 0 5 280 0 0 1024 0 PASS; rc+=$?
