@@ -112,6 +112,15 @@ run_row 2 0 5 12 1 1 1024 0 CAUGHT 3 1; rc+=$?
 run_row 2 0 5 12 1 3 1024 0 CAUGHT 3 1; rc+=$?
 run_row 11 0 5 12 1 4 1024 0 CAUGHT; rc+=$?
 run_row 8 0 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+# M71/M72 FKXG 剩余对角 + 远峰全叠超组合
+run_row 11 0 5 12 1 0 1024 1 PASS; rc+=$?
+run_row 6 0 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+run_row 11 0 5 12 1 0 512 0 PASS 16; rc+=$?
+run_row 11 0 15 12 1 0 1024 0 PASS; rc+=$?
+run_row 8 0 9 60 0 0 2048 0 PASS 16 1; rc+=$?
+run_row 11 0 5 280 0 0 1024 0 PASS 16; rc+=$?
+run_row 11 7 5 12 1 0 1024 0 PASS; rc+=$?
+run_row 11 11 5 12 1 0 1024 0 PASS; rc+=$?
 # M66 节流×远峰共激活 (P2+FKXG1) + 远峰长程耐力/P16KP2048
 run_row 2 0 5 12 1 0 1024 0 PASS 3 1; rc+=$?
 run_row 11 0 5 280 0 0 1024 0 PASS; rc+=$?
