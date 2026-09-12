@@ -36,6 +36,9 @@ check M38-kv kv_writeback_tb 300 $D/27_kv_writeback/kv_writeback_tb.v $D/27_kv_w
 check M38-kr kv_restore_tb 300 $D/30_kv_restore/kv_restore_tb.v $D/30_kv_restore/kv_restore.v
 check M59-wb wb_unified_tb 900 $D/29_wb_unified/wb_unified_tb.v $D/29_wb_unified/wb_unified.v
 check M59-wd wb_diff_tb 900 $D/28_wb_diff/wb_diff_tb.v $D/28_wb_diff/wb_diff.v
+check M65-loop wb2kv_loop_tb 400 $D/30_kv_restore/wb2kv_loop_tb.v $D/29_wb_unified/wb_unified.v \
+      $D/30_kv_restore/kv_restore.v $D/28_wb_diff/wb_diff.v $D/27_kv_writeback/kv_writeback.v \
+      $D/24_wb_flow/wb_flow.v
 
 echo "===================="
 echo "全链回归: rc=$rc (0=全绿)"

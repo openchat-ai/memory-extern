@@ -549,3 +549,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 **M64 P11 远峰面扩展**: F{1,2,3,5}@P11 全 CAUGHT (GEMM/o/窗内top-K 在窗贴词表顶
   [912,1024) 时仍全咬, F3 捕到 1040@lbw+110 vs 金 1038@1021 远峰窗内错位); P11×K8×
   V2048×T60、P11×FBPOLY2×T120、P11×H9×V512 全 ALL PASS。门扩至 49P+8C。
+
+**M65 KV 写→读字节闭环收编 (wb2kv_loop_tb)**: wb_unified(写) → kv_restore(读) 93 层混排
+  v2/KV 帧字节环回, 头/序/值一致, credit 共享排空熄火, 24s ALL PASS 零警告 —— 会话级
+  KV 组合 TB 全链入册 (第 9 枚)。M46 标注的 P2↔KV 集成空当由环回闭环补上; 语义层差
+  (decode 窗=词址 LUT 代理 vs KV=帧字节流) 说明跨链完整融合属库级需求非 FAST 模型契约。
