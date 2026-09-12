@@ -470,8 +470,9 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   attn_window/attn_inner_ctl/router_topk/router_sel/assembler/output_head/route_asm/
   vocab_prune/head_vprune/gemv_array_128) **全部实例化进 decode_auto_tb**, 全覆盖;
   KV 写回/恢复辅助环 (kv_writeback/kv_restore/wb_diff/wb_unified/wb_flow/sched_flow/
-  relay_fifo) 各自独立 TB 有过验证但**未与 P2 组合 + 部分 TB 诊断缺失** (wb_unified/
-  wb_diff 静默无输出) → 集成空当与验证传染缺口, 候补里程碑=KV环回会话组合。
+  relay_fifo) 各自独立 TB 有过验证但**未与 P2 组合** → 集成空当标注。
+  (勘误: M46 曾记 wb_unified/wb_diff 无诊断输出——实为 vvp 60s 短超时误读; 两者含完整
+  ALL PASS/FAIL + watchdog, 模拟 369s/455s, M59 已全长时纳入全链回归)
 
 **M47 一键全链回归**: `sim/devtests/run_all_regression.sh` = decode 门 + M19/M21/M23/M24/
   kv_writeback/kv_restore 独立 TB 收口单命令, rc=0 全绿。回归可复现资产化。
@@ -512,3 +513,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   M25 层号复位 + M38 位宽硬化 4 模块 (32 位对齐) 两簇, 均有 TB 实据。断言族 6 家族
   (GEMM/o/窗内top-K/窗包含argmax/账/名次) 经 M48 RTL 突变致死率 3/3 + M52 组合双错
   零遮蔽双证活性。
+
+**M59 KV 辅助环全长时收编**: 勘误 M46 误标——wb_unified (369s) 与 wb_diff (455s) 实含完整
+  ALL PASS/FAIL+watchdog 诊断, 仅模拟期长被 60s 超时误读为静默。全链回归扩容耗尽 8 个
+  独立 TB (M19/M21/M23/M24/kv/kr/wb/wd) + decode 门, rc=0, KV 环验证传染缺口闭合。
