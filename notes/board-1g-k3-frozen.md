@@ -543,3 +543,5 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
      抬升, PROFILE=11 使 fk=mod23+x → 峰落 G63 (NVOC1024), 窗 [912,1024) 双钳全活。
      P11 下两株变异 (lbw 左移→[896,1024)、ubw 失钳→[912,1120)) 全部 t=0 捕。默认行复验
      逐位一致 ALL PASS。
+  M63 复核: FKXG 默认0 → 全部既有门行逐位一致 (44P+6C rc=0), 独立 TB 8 枚全 PASS;
+  全链回归终验 rc=0 (RTL 自 M38 后首次新增参数, 取证通过)。
