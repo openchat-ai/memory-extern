@@ -488,13 +488,15 @@ module decode_auto_tb;
     end
     integer hwdc = 0;
     always @(posedge clk) begin
+        // M60: hwdc 须按 token 复位 —— 原先全程不复位, T280 累积≈196k 贴死 200k 界
+        // 触发末 token 误报 (非 RTL 卡死: 扫计数与 ncad 均正常)。现转真单 token 看门狗。
         if (head_run) begin
             hwdc = hwdc + 1;
             if (hwdc > 200000) begin
                 $display("%0t FAIL head_vprune 看门狗 (scanned=%0d ncad=%0d)", $time, h_scanned_w, h_ncad_w);
                 $fatal(1);
             end
-        end
+        end else hwdc = 0;
     end
 
     //---------------- 逐 token 黄金/运行变量 ----------------
