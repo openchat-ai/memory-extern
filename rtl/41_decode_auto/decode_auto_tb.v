@@ -59,6 +59,8 @@ module decode_auto_tb;
                                (PROFILE == 2) ? 2'd2 :
                                (PROFILE == 3) ? 2'd3 : 2'd0;
 
+    // M66: FKXG_P 独立可覆写 (默认 P11=1), 使 THRM 节流×远峰可共激活
+    parameter integer FKXG_P = (PROFILE == 11) ? 1 : 0;
     reg clk=0, rst_n=0, go=0;
     always #HALF clk = ~clk;
 
@@ -267,7 +269,7 @@ module decode_auto_tb;
     wire [$clog2(NVOC/NGRP)-1:0] h_g_w;
     wire [31:0] h_lbw_w, h_ubw_w, h_ncad_w;
 
-    head_vprune #(.VOC(NVOC), .GRP(NGRP), .BB(16), .MAXE(NMAXE), .K(NK), .FKXG((PROFILE == 11) ? 1 : 0)) HV(
+    head_vprune #(.VOC(NVOC), .GRP(NGRP), .BB(16), .MAXE(NMAXE), .K(NK), .FKXG(FKXG_P)) HV(
         .clk(clk), .rst_n(rst_n), .head_go(head_go),
         .acc(head_acc), .xext(h_xext),
         .out_valid(h_out_valid), .out_score(h_out_score), .out_token(h_out_token),
@@ -348,8 +350,8 @@ module decode_auto_tb;
     endfunction
     integer prevO = 0;
     function integer fk(input integer a, input integer x);
-        // M63.2: PROFILE=11 开远峰梯度 (FKXG=1), 与 head_vprune/vocab_prune 同源不同味
-        fk = (a*7 + x*17) % 23 + (((PROFILE == 11) ? 1 : 0) * x);
+        // M63.2/M66: FKXG_P 远峰梯度, 与 head_vprune/vocab_prune 同源不同味
+        fk = (a*7 + x*17) % 23 + (FKXG_P * x);
     endfunction
 
     // 全量黄金 argmax (tie=最小 idxc, 与逐 token 循环一致)
@@ -709,8 +711,11 @@ module decode_auto_tb;
         if (racc !== arr_acc_out[15:0]) begin
             $display("FAIL 全账累计 %0d != 阵累积 %0d", racc, arr_acc_out); $finish;
         end
-        if (PROFILE < 5 && ntok_unique < 5) begin
-            $display("FAIL 发出 token 多样性 %0d/12 < 5 (自回归退化为常数序列)", ntok_unique); $finish;
+        // M66: FKXG 远峰浑域词表噪声带仅 ±mod23, 可达态只有远边 ~4 词 —— 多样性下界按
+        //      浑域缩放 (FKXG=1 → 3, 仍捕真常数序列); 默认合同仍 ≥5
+        if (PROFILE < 5 && ntok_unique < (FKXG_P ? 3 : 5)) begin
+            $display("FAIL 发出 token 多样性 %0d/12 < %0d (自回归退化为常数序列)",
+                     ntok_unique, (FKXG_P ? 3 : 5)); $finish;
         end
         if (THRM != 2'd0 && a_stalls_w == 0) begin
             $display("FAIL 节流下装配 EMIT-停拍路径未激活 (a_stalls=%0d)", a_stalls_w); $finish;
