@@ -16,7 +16,8 @@ module vocab_prune #(
     parameter VOC  = 512,     // 词表规模 (FAST 替身; P2≈320K)
     parameter GRP  = 8,       // 组大小
     parameter BB   = 16,      // acc 位宽
-    parameter MAXE = 8        // 窗口半径上限
+    parameter MAXE = 8,       // 窗口半径上限
+    parameter FKXG = 0        // 远峰梯度 (M63: 默认0保持原合同; >0 线性抬升远词位, 激活 lbw 右支/远端钳) 
 )(
     input  [BB-1:0] acc,      // 引擎累加 (logits 派生的代理输入)
     input  [3:0] xext,        // 候选窗半径 (0..MAXE)
@@ -28,7 +29,7 @@ module vocab_prune #(
     localparam CAP = (2*MAXE+1)*GRP;
 
     function integer fk(input integer a, input integer x);
-        fk = (a*7 + x*17) % 23;
+        fk = (a*7 + x*17) % 23 + (FKXG * x);
     endfunction
     // 组内峰 (平局取小号先)
     function integer gpeak(input integer g, input integer a);

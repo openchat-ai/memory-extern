@@ -531,3 +531,15 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   rc=0。本期实改: TB 层 2 处 (M52 FAULT 4/5 组合注入; M60 hwdc 单token 复位——后者为真
   实 bug 捕获, 修为非 RTL 卡死实锤), RTL 层零改动。审计遗留 (非 P2 链): head_vprune_tb
   `scanned==ncad` 等自检仍字节序；KV-P2 会话级组合欠账保留下期。
+
+**M63 窗界自我指涉空洞 + 远峰梯度 FKXG (RTL 参数化, 默认逐位不变)**
+  ① 发现: 突变测试 ubw 钳位变异逃逸 (lbw 左移因 fk 周期 23 恒落首组地板故惰性) —— 根因
+     金窗 h_lbw/h_ubw 复用 RTL 自身输出 (自我指涉), 任何同步窗移都同源伪造。
+  ② 修复: TB 独立金窗 (全局 argmax 词号/GRP 推组号 gg → ±xext ×GRP 钳 [0,NVOC)) —— 
+     ubw 变异 P0 下 t=0 捕 (RTL[0,1024) vs 金[0,112))。金卦 gwsc/gwk 亦改取独立窗。
+  ③ 数学证明的激励空洞: fk=(a*7+x*17)%23 周期 23 → 全局峰恒落首周期 [0,22] → g_w∈{0,1}
+     恒成立, lbw `(g_w>xext)` 左支与远词 ubw 钳在任何既有激励下不可达, 突变天然惰性。
+  ④ 补齐: vocab_prune/head_vprune 增加参数 FKXG (默认0, 行为逐位不变), >0 为远词线性
+     抬升, PROFILE=11 使 fk=mod23+x → 峰落 G63 (NVOC1024), 窗 [912,1024) 双钳全活。
+     P11 下两株变异 (lbw 左移→[896,1024)、ubw 失钳→[912,1120)) 全部 t=0 捕。默认行复验
+     逐位一致 ALL PASS。

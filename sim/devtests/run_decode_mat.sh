@@ -91,6 +91,10 @@ run_row 0 0 5 280 0 0 1024 0 PASS 16; rc+=$?
 run_row 0 5 5 12 1 0 1024 0 PASS; rc+=$?
 run_row 0 9 5 12 1 0 1024 0 PASS; rc+=$?
 run_row 0 13 5 12 1 0 1024 0 PASS; rc+=$?
+# M63 P11 远峰梯度 (激活 lbw 右支/远端钳的新激励面)
+run_row 11 0 5 12 1 0 1024 0 PASS; rc+=$?
+run_row 11 0 5 60 0 0 1024 0 PASS; rc+=$?
+run_row 11 0 9 12 1 0 2048 0 PASS 8; rc+=$?
 run_row 0 0 5 120 0 0 1024 2 PASS; rc+=$?
 # M49/M50 K 边界 {12,16} + 时钟极值 HALF {1,15}
 run_row 0 0 5 12 1 0 1024 0 PASS 12; rc+=$?
