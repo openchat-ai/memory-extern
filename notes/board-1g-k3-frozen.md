@@ -574,3 +574,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 **M70 红队×远峰/节流对角**: F1@P2×FKXG1 (节流迟到读被改词) → GEMM t=9 捕; F3@P2×FKXG1 →
   窗内top-K t=5 捕 (1041@lbw+111 vs 金 1039@1022 远峰错位); F4@P11 → o 捕; P8×FKXG1
   (近退化高权+远峰) 全绿。门扩 59P+11C (70 行) rc=0, 全链终验 (70 行门+9 TB) 全 PASS。
+
+**M71/M72 FKXG 对角完璧 + 远峰全叠**: P11×FBPOLY1 (粗态×远峰)、P6×FKXG1 (全饱和×远
+  峰)、V512×FKXG1×K16 (小规模远峰 K16 剥钳角)、P11×H15×SEED{7,11}, 及 P8×H9×K16×
+  V2048×FKXG1×T60 全维叠、P11×T280×K16 远峰大K长程 —— 全 ALL PASS。门扩 66P+11C
+  (77 行) rc=0。FKXG 轴至此与 PROFILE/HALF/SEED/VOC/K/FBPOLY/TN 全交叉。
