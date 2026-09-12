@@ -53,6 +53,7 @@ declare -i rc=0
 for row in "0 0 5 12 1 0 1024 0 PASS" "1 0 5 12 1 0 1024 0 PASS" "2 0 5 12 1 0 1024 0 PASS" \
            "4 0 5 12 1 0 1024 0 PASS" "5 0 5 12 1 0 1024 0 PASS" "6 0 5 12 1 0 1024 0 PASS" \
            "8 0 5 12 1 0 1024 0 PASS" "9 0 5 12 1 0 1024 0 PASS" \
+           "3 0 5 12 1 0 1024 0 PASS" "7 0 5 12 1 0 1024 0 PASS" \
            "0 1 5 12 1 0 1024 0 PASS" "0 2 5 12 1 0 1024 0 PASS" "0 3 5 12 1 0 1024 0 PASS" \
            "0 0 9 12 1 0 1024 0 PASS" "2 1 5 12 1 0 1024 0 PASS" "4 3 5 12 1 0 1024 0 PASS"; do
   run_row $row; rc+=$?
@@ -103,6 +104,9 @@ run_row 11 0 5 120 0 0 1024 2 PASS; rc+=$?
 run_row 11 0 9 12 1 0 512 0 PASS; rc+=$?
 run_row 11 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
 run_row 11 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
+# M68 P11 远峰×SEED 抽样 {4,9}
+run_row 11 4 5 12 1 0 1024 0 PASS; rc+=$?
+run_row 11 9 5 12 1 0 1024 0 PASS; rc+=$?
 # M66 节流×远峰共激活 (P2+FKXG1) + 远峰长程耐力/P16KP2048
 run_row 2 0 5 12 1 0 1024 0 PASS 3 1; rc+=$?
 run_row 11 0 5 280 0 0 1024 0 PASS; rc+=$?
