@@ -82,6 +82,9 @@ run_row 0 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 12 1 4 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
 run_row 2 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+# M60 长程组合 (FBPOLY2×T280, HALF9×T280) —— 覆盖曾误触 head 看门狗累算界的新组合点
+run_row 2 0 5 280 0 0 1024 2 PASS; rc+=$?
+run_row 0 0 9 280 0 0 1024 0 PASS; rc+=$?
 # M54 SEED 抽样扫 {5,9,13} + M57 FBPOLY=2 xorshift 长链
 run_row 0 5 5 12 1 0 1024 0 PASS; rc+=$?
 run_row 0 9 5 12 1 0 1024 0 PASS; rc+=$?

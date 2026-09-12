@@ -517,3 +517,9 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 **M59 KV 辅助环全长时收编**: 勘误 M46 误标——wb_unified (369s) 与 wb_diff (455s) 实含完整
   ALL PASS/FAIL+watchdog 诊断, 仅模拟期长被 60s 超时误读为静默。全链回归扩容耗尽 8 个
   独立 TB (M19/M21/M23/M24/kv/kr/wb/wd) + decode 门, rc=0, KV 环验证传染缺口闭合。
+
+**M60 head 看门狗累积误报修复 (TB, 1行)**: 新组合点 FBPOLY2×T280 与 HALF9×T280 触发
+  "head_vprune 看门狗" —— 定位为 hwdc 全程不复位, T280 下逐 token bake 累算≈196k 贴死
+  200k 界, 末 token 一开 bake 即误触 (扫计数/ncad 正常, 非 RTL 卡死)。修: head_run 低沿
+  hwdc=0, 转真单 token 看门狗。修复后三例 (fb2t280/h9t280/p2t280) 全 ALL PASS。两行入册
+  门, 回归门将重跑复核。
