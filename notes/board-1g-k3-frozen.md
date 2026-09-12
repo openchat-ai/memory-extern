@@ -579,3 +579,10 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   峰)、V512×FKXG1×K16 (小规模远峰 K16 剥钳角)、P11×H15×SEED{7,11}, 及 P8×H9×K16×
   V2048×FKXG1×T60 全维叠、P11×T280×K16 远峰大K长程 —— 全 ALL PASS。门扩 66P+11C
   (77 行) rc=0。FKXG 轴至此与 PROFILE/HALF/SEED/VOC/K/FBPOLY/TN 全交叉。
+
+**M73-M76 突变杀技扩至 8 模块 (累计 10 杀全捕)**: 新增 ①vocab_prune 峰选平局 `>=`
+  → argmax 漏窗捕 (P0/P4 双验); ②attn_window 缓冲寻址丢 block 字段 → o 累器错词捕;
+  ③gemv_array_128 MAC 乘→加 → o/GEMM 捕; ④router_sel 排序 `>`→`<` → GEMM t=0 词流
+  混入捕; ⑤attn_inner_ctl 前后差分→求和 → o 捕。全量台账: output_head×2, assembler,
+  head_vprune×2, vocab_prune, attn_window, gemv, router_sel, attn_inner = 10 杀/8 模块。
+  结合 TB 注入 F1-5, 断言族覆盖泛及窗界/缓冲寻址/MAC/选序/注意力差分路径, 全部转态源。
