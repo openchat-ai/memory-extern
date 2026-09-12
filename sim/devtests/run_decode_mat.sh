@@ -17,14 +17,16 @@ RTL=( rtl/41_decode_auto/decode_auto_tb.v rtl/40_head_vprune/head_vprune.v \
 # 表: PROFILE SEED HALF TN PROBEON FAULT 期望("PASS"|"CAUGHT")
 run_row() {
   local nk=${10:-3}
+  local fkxg=${11:-0}
   local prof=$1 seed=$2 half=$3 tn=$4 probeon=$5 fault=$6 voc=$7 fbpol=$8 want=$9
-  local tag=P${prof}S${seed}H${half}T${tn}F${fault}n${probeon}V${voc}B${fbpol}K${nk}
+  local tag=P${prof}S${seed}H${half}T${tn}F${fault}n${probeon}V${voc}B${fbpol}K${nk}X${fkxg}
   local out="$OUT/mat_$tag.out"
   local cerr="$OUT/mat_$tag.cerr"
   ( cd "$ROOT" && iverilog -g2012 -s decode_auto_tb \
       -P decode_auto_tb.PROFILE=$prof -P decode_auto_tb.SEED=$seed -P decode_auto_tb.HALF=$half \
       -P decode_auto_tb.TN=$tn -P decode_auto_tb.PROBEON=$probeon -P decode_auto_tb.FAULT=$fault \
       -P decode_auto_tb.NVOC=$voc -P decode_auto_tb.FBPOLY=$fbpol -P decode_auto_tb.NK=$nk \
+      -P decode_auto_tb.FKXG_P=$fkxg \
       -o "$out" "${RTL[@]}" > "$cerr" 2>&1 ) || { echo "COMPILE-FAIL $tag"; return 2; }
   if grep -qi "warning" "$cerr"; then echo "WARN   $tag (编译警告门)"; return 1; fi
   timeout 400 vvp "$out" > "$OUT/mat_$tag.log" 2>&1 || true
@@ -101,6 +103,10 @@ run_row 11 0 5 120 0 0 1024 2 PASS; rc+=$?
 run_row 11 0 9 12 1 0 512 0 PASS; rc+=$?
 run_row 11 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
 run_row 11 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
+# M66 节流×远峰共激活 (P2+FKXG1) + 远峰长程耐力/P16KP2048
+run_row 2 0 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+run_row 11 0 5 280 0 0 1024 0 PASS; rc+=$?
+run_row 11 0 5 60 0 0 2048 0 PASS 16; rc+=$?
 run_row 0 0 5 120 0 0 1024 2 PASS; rc+=$?
 # M49/M50 K 边界 {12,16} + 时钟极值 HALF {1,15}
 run_row 0 0 5 12 1 0 1024 0 PASS 12; rc+=$?
