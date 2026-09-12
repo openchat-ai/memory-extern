@@ -586,3 +586,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   混入捕; ⑤attn_inner_ctl 前后差分→求和 → o 捕。全量台账: output_head×2, assembler,
   head_vprune×2, vocab_prune, attn_window, gemv, router_sel, attn_inner = 10 杀/8 模块。
   结合 TB 注入 F1-5, 断言族覆盖泛及窗界/缓冲寻址/MAC/选序/注意力差分路径, 全部转态源。
+
+**M77 冷角收口 + 真尺寸 KV**: P11×HALF1 (快钟×远峰) 全绿; KV -DFULL 真尺寸 (D=128,
+  3.4MB/token) 写→读字节环回 426s ALL PASS rc=0 —— 缩尺 FAST D=8 之外的实规模路径首验;
+  收为全链可选深度档 FULLREG=1 (默认不跑, ~7min); relay_fifo/sched_flow 系 P1 侧辅助 TB
+  需 include 目录/多模块拼装, 不入 P2 主线链, 文档化搁置。

@@ -40,6 +40,18 @@ check M65-loop wb2kv_loop_tb 400 $D/30_kv_restore/wb2kv_loop_tb.v $D/29_wb_unifi
       $D/30_kv_restore/kv_restore.v $D/28_wb_diff/wb_diff.v $D/27_kv_writeback/kv_writeback.v \
       $D/24_wb_flow/wb_flow.v
 
+# M77: 真尺寸 KV 环回 (~426s) 为可选深度档: FULLREG=1 bash run_all_regression.sh
+if [ "${FULLREG:-0}" = "1" ]; then
+  echo "--[3/3] 真尺寸 KV 环回 (D=128, 3.4MB/token) --"
+  if iverilog -g2012 -s wb2kv_loop_tb -DFULL -o "$OUT/reg_wb2kv_full.out" \
+      $D/30_kv_restore/wb2kv_loop_tb.v $D/29_wb_unified/wb_unified.v $D/30_kv_restore/kv_restore.v \
+      $D/28_wb_diff/wb_diff.v $D/27_kv_writeback/kv_writeback.v $D/24_wb_flow/wb_flow.v >/dev/null 2>&1; then
+    if timeout 1800 vvp "$OUT/reg_wb2kv_full.out" 2>&1 | grep -qE "ALL PASS"; then
+      echo "PASS   M77-full"
+    else echo "FAIL   M77-full"; rc+=1; fi
+  else echo "CFAIL  M77-full"; rc+=2; fi
+fi
+
 echo "===================="
 echo "全链回归: rc=$rc (0=全绿)"
 exit $(( rc ? 1 : 0 ))
