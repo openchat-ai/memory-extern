@@ -18,7 +18,8 @@ module head_vprune #(
     parameter GRP  = 8,       // 组大小
     parameter BB   = 16,      // acc/logits 位宽
     parameter MAXE = 8,       // 窗半径上限 (cand 表容量 = (2*MAXE+1)*GRP)
-    parameter K    = 3        // top-K
+    parameter K    = 3,       // top-K
+    parameter FKXG = 0        // 远峰梯度 (M63: 与 VP 同合同; >0 激活 lbw 右支)
 )(
     input  wire clk, rst_n,
     input  wire head_go,                       // 输出头启动脉冲 (会话 acc 可用后)
@@ -41,16 +42,16 @@ module head_vprune #(
     localparam WV  = $clog2(CAP);
     localparam RNDW = 32;   // M38: 6→32, 传给内部 output_head (长流 round 账)
 
-    // 同 M22 的 logits 代理 (组峰用 fk; 头扫候选流也用同一 fk, 保持同源)
+    // 同 M22 的 logits 代理 (组峰用 fk; 头扫候选流也用同一 fk, 保持同源; M63: +FKXG 远峰梯度)
     function integer fk(input integer a, input integer x);
-        fk = (a*7 + x*17) % 23;
+        fk = (a*7 + x*17) % 23 + (FKXG * x);
     endfunction
 
     wire [$clog2(NG)-1:0] g_w;
     wire [31:0] ncad_w;
     wire [$clog2(VOC)-1:0] cand_w [0:CAP-1];
 
-    vocab_prune #(.VOC(VOC), .GRP(GRP), .BB(BB), .MAXE(MAXE)) VP(
+    vocab_prune #(.VOC(VOC), .GRP(GRP), .BB(BB), .MAXE(MAXE), .FKXG(FKXG)) VP(
         .acc(acc), .xext(xext), .G(g_w), .ncad(ncad_w), .cand(cand_w)
     );
     assign peak_g = g_w;

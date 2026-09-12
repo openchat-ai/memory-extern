@@ -267,7 +267,7 @@ module decode_auto_tb;
     wire [$clog2(NVOC/NGRP)-1:0] h_g_w;
     wire [31:0] h_lbw_w, h_ubw_w, h_ncad_w;
 
-    head_vprune #(.VOC(NVOC), .GRP(NGRP), .BB(16), .MAXE(NMAXE), .K(NK)) HV(
+    head_vprune #(.VOC(NVOC), .GRP(NGRP), .BB(16), .MAXE(NMAXE), .K(NK), .FKXG((PROFILE == 11) ? 1 : 0)) HV(
         .clk(clk), .rst_n(rst_n), .head_go(head_go),
         .acc(head_acc), .xext(h_xext),
         .out_valid(h_out_valid), .out_score(h_out_score), .out_token(h_out_token),
@@ -348,7 +348,8 @@ module decode_auto_tb;
     endfunction
     integer prevO = 0;
     function integer fk(input integer a, input integer x);
-        fk = (a*7 + x*17) % 23;
+        // M63.2: PROFILE=11 开远峰梯度 (FKXG=1), 与 head_vprune/vocab_prune 同源不同味
+        fk = (a*7 + x*17) % 23 + (((PROFILE == 11) ? 1 : 0) * x);
     endfunction
 
     // 全量黄金 argmax (tie=最小 idxc, 与逐 token 循环一致)
@@ -513,6 +514,7 @@ module decode_auto_tb;
     integer tok_unique = 0, ntok_unique = 0, state_unique = 0, dup_found = 0, tc_sum = 0, tc_max = 0;
     integer ovl_sum = 0, ovw_sum = 0, ov = 0; reg [31:0] prev_lb = 0, prev_ub = 0;
     integer ncad_sum = 0, ncad_min = 99999, ncad_max = 0;
+    integer gg = 0, gwin_lb = 0, gwin_ub = 0;
     integer n_trunc_l = 0, n_trunc_r = 0;
 
     initial begin
@@ -624,9 +626,18 @@ module decode_auto_tb;
             if (gk[0] < h_lbw_w || gk[0] >= h_ubw_w) begin
                 $display("FAIL t=%0d 黄金 argmax %0d 漏出窗 [%0d,%0d)", t, gk[0], h_lbw_w, h_ubw_w); $finish;
             end
+            // ── M63: TB 侧独立金窗 ── 由全局 argmax 词号推组号 gg, 消除与 RTL 自我指涉 ──
+            gg = gk[0] / NGRP;
+            gwin_lb = (gg >= h_xext) ? (gg - h_xext)*NGRP : 0;
+            gwin_ub = (((gg + h_xext + 1)*NGRP) > NVOC) ? NVOC : (gg + h_xext + 1)*NGRP;
+            if (gwin_lb != h_lbw_w || gwin_ub != h_ubw_w) begin
+                $display("FAIL t=%0d 窗界失配: RTL[%0d,%0d) != 独立金窗[%0d,%0d) gg=%0d xext=%0d",
+                         t, h_lbw_w, h_ubw_w, gwin_lb, gwin_ub, gg, h_xext); $finish;
+            end
             // ── M42 窗内受限黄金 = bake 契约 (剪枝窗只保窗内 top-K 排名, 非全局前缀) ──
+            //    M63 起金窗取独立 gwin_lb/gwin_ub (非 RTL 输出), 金卦才与 RTL 真正离源
             for (j = 0; j < NK; j = j + 1) begin gwsc[j] = -1; gwk[j] = -1; end
-            for (idxc = h_lbw_w; idxc < h_ubw_w; idxc = idxc + 1) begin
+            for (idxc = gwin_lb; idxc < gwin_ub; idxc = idxc + 1) begin
                 v0 = fk(dt, idxc);
                 ok2 = 0;
                 for (p = 0; p < NK && !ok2; p = p + 1)
