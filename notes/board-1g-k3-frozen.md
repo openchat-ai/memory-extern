@@ -523,3 +523,11 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   200k 界, 末 token 一开 bake 即误触 (扫计数/ncad 正常, 非 RTL 卡死)。修: head_run 低沿
   hwdc=0, 转真单 token 看门狗。修复后三例 (fb2t280/h9t280/p2t280) 全 ALL PASS。两行入册
   门, 回归门将重跑复核。
+
+**M61 看门狗修复后超组合**: K16×T280 (大K长程, 单token bake 更大, 验证新狗余裕)、
+  K16×T60×P2、FBPOLY2×HALF9×T280 三维叠、K16×V512×T120 全 ALL PASS。
+
+**M62 二期总账 (M25→M61)**: 门=41P+6C (47 行, rc=0); 全链=decode 门 + 8 独立 TB 一键
+  rc=0。本期实改: TB 层 2 处 (M52 FAULT 4/5 组合注入; M60 hwdc 单token 复位——后者为真
+  实 bug 捕获, 修为非 RTL 卡死实锤), RTL 层零改动。审计遗留 (非 P2 链): head_vprune_tb
+  `scanned==ncad` 等自检仍字节序；KV-P2 会话级组合欠账保留下期。
