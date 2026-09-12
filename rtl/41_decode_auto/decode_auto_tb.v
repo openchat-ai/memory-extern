@@ -703,7 +703,12 @@ module decode_auto_tb;
         if (r_stalls_w == 0) begin $display("FAIL 背压停顿 0 (r=%0d)", r_stalls_w); $finish; end
         if (ex_gemm_done !== NL || ex_attn_done !== NL) begin $display("FAIL exec 层账 %0d/%0d", ex_gemm_done, ex_attn_done); $finish; end
         if (rail_words !== TN*NL*GW || rail_frames !== TN*NL) begin $display("FAIL rail 词/帧"); $finish; end
-        if (gemm_bad !== 0 || gemm_ok < TN*NL*(GW-1)) begin $display("FAIL GEMM 对账"); $finish; end
+        // M69: 覆盖是构因恒量 —— 每 token 每层 GW-1 组为窗口词可对账, 第 GW 组恒为 o 流豁免,
+//      豁免数 = TN*NL*1 (P0-P9/V512-2048/K3-16/FKXG 全流恒等)。收紧为精确等式。
+        if (gemm_bad !== 0 || gemm_ok !== TN*NL*(GW-1)) begin
+            $display("FAIL GEMM 对账 (ok=%0d 期望精确 %0d, bad=%0d; 豁免 %0d/=TN*NL*1)",
+                     gemm_ok, TN*NL*(GW-1), gemm_bad, TN*NL*GW - gemm_ok); $finish;
+        end
         if (n_ok !== TN*NL*ROWS_TOT) begin $display("FAIL o 行数"); $finish; end
         if (rel_exp !== TN*NL) begin $display("FAIL 释放数 %0d != %0d", rel_exp, TN*NL); $finish; end
         if (pool_switches !== 2*TN*NL) begin $display("FAIL 池切换"); $finish; end
@@ -787,8 +792,8 @@ module decode_auto_tb;
                  PROFILE, HALF, TN, tc_cyc_arr[0], tc_cyc_arr[TN-1]);
         $display("== M28/M29 剪枝窗召回: 全 %0d token 真top-K 窗内含 (召回100%%), 覆盖 ncad %0d..%0d 均值 %0d/%0d=%0d%%, 左截%0d 右截%0d ==",
                  TN, ncad_min, ncad_max, ncad_sum/TN, NVOC, (ncad_sum*100)/(TN*NVOC), n_trunc_l, n_trunc_r);
-        $display("== M39 吞吐剖面 P%0d/H%0d: 会话周期 均值%0d/最大%0d 词对账覆盖 %0d/%0d (%0d%%) 窗重叠 %0d%% ==",
-                 PROFILE, HALF, tc_sum/TN, tc_max, gemm_ok, TN*NL*GW, (gemm_ok*100)/(TN*NL*GW),
+        $display("== M39 吞吐剖面 P%0d/H%0d: 会话周期 均值%0d/最大%0d 词对账覆盖 %0d/%0d (构因豁免 %0d) 窗重叠 %0d%% ==",
+                 PROFILE, HALF, tc_sum/TN, tc_max, gemm_ok, TN*NL*GW, TN*NL*GW - gemm_ok,
                  (ovl_sum*100)/(ovw_sum > 0 ? ovw_sum : 1));
         $display("== M28/M29 会话账 P%0d/H%0d: 装配层%0d 选条%0d 词%0d GEMM%0d/对账%0d o%0d 释放%0d 池切%0d 停r%0d/a%0d 累计%0d 唯一token%0d 状态%0d",
                  PROFILE, HALF, fill_counter, r_sel_w, a_words_w, rail_words, gemm_ok, n_ok, rel_exp, pool_switches,
