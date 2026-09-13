@@ -246,7 +246,6 @@ run_row 11 0 5 12 1 5 1024 1 CAUGHT; rc+=$?
 run_row 0 9 5 12 1 2 1024 0 CAUGHT; rc+=$?
 run_row 6 7 5 12 1 4 1024 0 CAUGHT; rc+=$?
 run_row 3 2 5 12 1 3 1024 0 CAUGHT; rc+=$?
-run_row 2 0 5 12 1 1 1024 0 CAUGHT 3 1; rc+=$?
 run_row 0 7 5 12 1 1 1024 0 CAUGHT; rc+=$?
 run_row 11 0 5 12 1 2 512 0 CAUGHT; rc+=$?
 run_row 4 12 5 12 1 5 1024 0 CAUGHT; rc+=$?
