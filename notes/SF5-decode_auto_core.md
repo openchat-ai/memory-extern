@@ -73,3 +73,11 @@ run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 fe
   2. sys_clk 直连 50M 振荡器 (PLL 留后续 core);
   3. 综合/布线/烧写 → 板上观: led0 眨眼 + led1 常亮 = FPGA 基本逻辑+乘加链判活;
   4. 通过后再切 decode_auto_core 全核时序收斂。
+
+## SF7 落地 — decode_auto_core 骨架 (可编译实体)
+- rtl/13_mega138k/decode_auto_core.v: 8 模块 DUT 网 + 最小状态机 (run→go→wait token_done & h_token_done→done)
+  数据面 (s_v_t/gsw/qf) 外源注入端口 (SF5 契约); 全链走 *_sf 镜像 (ys0.68 数组/参数for界兼容)。
+- 实测: yosys hierarchy 0 ERROR (读 *_sf 集合) + iverilog elab rc=0 + vvp rc=0。
+- 迭代录: 3 处 `*_sf 化` (attn_inner_ctl_sf 打包端口 → route_asm_sf → head_vprune_sf cand 打包) 均为
+  ys0.68 边界实证复述, 逐一对应已验证镜像。
+- 后续: core mini smoke (状态机连通) → PC 数据面填充 → 全核 P&R。
