@@ -602,3 +602,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   正则原先仅 GEMM/o/窗内top-K/GEM 对账四族, watchdog 族漏记 → 补 ` |watchdog`。累计
   突变台账 13 杀/10 模块: output_head×2, assembler, head_vprune×2, vocab_prune,
   attn_window, gemv, router_sel, attn_inner, sched_exec, sram_pool_arb。
+
+**M80 FKXG 末角 + 闸表首份诚实账**: P11×FBPOLY2 (xorshift+tok×远峰)、×H9 (中钟远峰)、
+  ×T120 (中长远峰) 全绿入闸。全量门终验台账 (首个诚实计数, 修正 M78 误标 76/80):
+  **82 行 = PASS 71 + CAUGHT 11, WARN/FAIL/MISSED/ESCAPE/COMPILE/UNKNOWN 全 0, rc=0**。
+  FKXG 轴与全部 7 维交叉覆盖闭合。

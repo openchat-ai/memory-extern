@@ -138,6 +138,10 @@ run_row 2 9 5 12 1 0 1024 0 PASS 3 1; rc+=$?
 run_row 2 13 5 12 1 0 1024 0 PASS 3 1; rc+=$?
 run_row 2 15 5 12 1 0 1024 0 PASS 3 1; rc+=$?
 run_row 11 0 5 12 1 0 1024 0 PASS 12; rc+=$?
+# M80 FKXG 末角: P11×FBPOLY2 / ×H9 / ×T120
+run_row 11 0 5 12 1 0 1024 2 PASS; rc+=$?
+run_row 11 0 9 12 1 0 1024 0 PASS; rc+=$?
+run_row 11 0 5 120 1 0 1024 0 PASS; rc+=$?
 
 echo "===================="
 echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
