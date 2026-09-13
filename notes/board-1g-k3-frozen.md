@@ -773,3 +773,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 **M114-闭**: TN 浸泡 45/45 = PASS15 + CAUGHT30 rc=0 (T12..280 × P0/P2/P11 × F0-2 全谱);
   DEGEN 0 (节流 T280 长程仍稳)。**M116-闭**: HALF 浸泡 60/60 = PASS15 + CAUGHT45 rc=0
   (H1/3/5/9/15 × P0/P2/P11 × F0-3)。两轴系统完证。
+
+**M119 FKXG×SEED 全相位轴浸泡完成**: P11 远峰 × SEED 0..15 × F0/F2 = 32/32
+  (16 PASS + 16 CAUGHT) rc=0 DEGEN=0。 远峰相位轴完证 (此前仅 S0/5/7/11 抽样)。
