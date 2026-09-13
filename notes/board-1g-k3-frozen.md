@@ -779,3 +779,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M120 PROFILE×FAULT 缺格补盲 (5/5 捕)**: P3×F5(GEMM)、P5×F5(窗界失配)、P7×F2(o)、
   P7×F4(o)、P9×F3(窗界失配) → 66/66 格全复 (掩蔽角除外)。
+
+**M121 独立 TB 链再证**: M19/M21/M23/M24/M38-kv/M38-kr/M59-wb/M59-wd/M65-loop 9/9 ALL PASS
+  (与门 205 并行, reg_*.out 无冲突)。
