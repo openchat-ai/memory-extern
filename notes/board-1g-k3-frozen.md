@@ -646,3 +646,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M88-闭 全门终验 (105 行)**: PASS=72 CAUGHT=33 WARN/FAIL/MISSED/ESCAPE/COMPILE/UNKNOWN
   全 0 rc=0。CAUGHT33=23(M85)+6(M86/87)+4(M88) 逐批自洽。门行静审: 105 行无越界无重复。
+
+**M90 入闸 (3 行)**: P5×F1、P2×F5×X1 三叠、P0×F2×V512(单验全捕)入脚本 → 门 108 行,
+  次轮全门闭环。
