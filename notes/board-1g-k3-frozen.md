@@ -816,3 +816,6 @@ gowin_pll_400 封装 + .cst 物理引脚 + 板级 tb) —— 属旧核。
 **上板路线**: 综合化改造 → 抽 decode_auto_core (TB 环路逆成 clk/rst/go/tok 闭环,
 反馈闭环) → 板上顶层 (PLL 400 + LED + rst + LCD/UART) → **PC 上 Gowin EDA** P&R+烧录
 (termux 侧到 yosys 综合为止)。
+
+**SF2 主门终验 (210 行)**: PASS=72 CAUGHT=138 (104+19+5+5+5 自洽, 含 M120 盲格5) 全净 rc=0。
+  至此主闸线 108→123→176→205→210 全绿; DUT 门已停, SF 综合化改造窗口打开。
