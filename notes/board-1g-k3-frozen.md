@@ -591,3 +591,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   3.4MB/token) 写→读字节环回 426s ALL PASS rc=0 —— 缩尺 FAST D=8 之外的实规模路径首验;
   收为全链可选深度档 FULLREG=1 (默认不跑, ~7min); relay_fifo/sched_flow 系 P1 侧辅助 TB
   需 include 目录/多模块拼装, 不入 P2 主线链, 文档化搁置。
+
+**M78 闸序/记账自举修正**: M78/M79 六行被 append 于 exit 之后成死码(横幅先于其打印,
+  M77 起 "77 行" 系记账错误——真执行数为 80 行); 修正为移入正文、exit 独立成行、
+  run_row 增计数分账 (PASS/CAUGHT/FAIL/WARN/MISSED/ESCAPE/COMPILE/UNKNOWN), 横幅打
+  诚实总计; 全门本应一律在横幅前收口, 收为脚本纪律。
