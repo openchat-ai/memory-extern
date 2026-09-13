@@ -680,3 +680,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M99 跨脚本 RTL 清单一致性**: run_decode_mat / run_all_mutations / run_decode_seed_sweep
   的 RTL 编译数组逐项 diff 全一致 (12 文件, 含 route_asm 壳)。三锚脚本载同业同清单。
+
+**M100 第六弹 5 角**: P0×F2×B2(o)、P0×F1×K5(GEMM t=1)、P3×F2(o)、P6×F1×H9(GEMM t=1) 全捕;
+  **F1@B1×V512 独立复证 0PASS 掩蔽** (与 M85 同因: 注入点落从不计分切片; 掩蔽与 V512 无关)。
