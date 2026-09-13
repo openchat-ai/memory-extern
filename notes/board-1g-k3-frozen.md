@@ -615,3 +615,10 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   attn_window寻址; watchdog←sram_pool_arb换权/M60反证; 窗族←F3/F5/head_vprune两株/
   vocab_prune平局(漏出窗@t=0)。冷族 (round/exec/rail/裕量8/acc扰动/head_vprune看门狗):
   无现行样本直接触发, 由跨族冗余守卫 (其它断言先火) 兜底 —— 诚实留档。
+
+**M82 突变击杀可重放回归 (13 株永久入仓)**: sim/devtests/mut/ 固化全部击杀样本 (M48×3
+  output_head比较/平局序+assembler截流, M63×2 head_vprune 固定偏移/去钳, M73×2
+  vocab_prune平局/attn_window寻址, M74 gemv MAC, M75 router_sel排序, M76 attn_inner差分,
+  M79 sram_pool换权, M80 sched_exec定址, M82 rail帧计数) + run_all_mutations.sh 重放器
+  (与闸同族匹配语义)。首验 KILL=13/13 rc=0。击杀回归永久绿 = 当前 RTL 仍被 10 模块断言族
+  钉死, 无逃逸。
