@@ -164,6 +164,12 @@ run_row 11 0 5 12 1 2 1024 0 CAUGHT; rc+=$?
 run_row 0 0 5 12 1 1 1024 0 CAUGHT 16; rc+=$?
 run_row 0 4 5 12 1 1 1024 0 CAUGHT; rc+=$?
 run_row 0 9 5 12 1 3 1024 0 CAUGHT; rc+=$?
+# M88 批: 时钟/FBPOLY/双错×seed/大词表节流/长程 红队 + 小词表xorshift PASS
+run_row 0 0 3 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 0 512 2 PASS; rc+=$?
+run_row 4 2 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 2 0 5 12 1 1 2048 0 CAUGHT; rc+=$?
+run_row 0 0 5 280 1 1 1024 0 CAUGHT; rc+=$?
 
 echo "===================="
 echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
