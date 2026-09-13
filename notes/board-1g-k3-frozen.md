@@ -776,3 +776,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M119 FKXG×SEED 全相位轴浸泡完成**: P11 远峰 × SEED 0..15 × F0/F2 = 32/32
   (16 PASS + 16 CAUGHT) rc=0 DEGEN=0。 远峰相位轴完证 (此前仅 S0/5/7/11 抽样)。
+
+**M120 PROFILE×FAULT 缺格补盲 (5/5 捕)**: P3×F5(GEMM)、P5×F5(窗界失配)、P7×F2(o)、
+  P7×F4(o)、P9×F3(窗界失配) → 66/66 格全复 (掩蔽角除外)。
