@@ -175,6 +175,22 @@ run_row 0 0 5 280 1 1 1024 0 CAUGHT; rc+=$?
 run_row 5 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
 run_row 2 0 5 12 1 5 1024 0 CAUGHT 3 1; rc+=$?
 run_row 0 0 5 12 1 2 512 0 CAUGHT; rc+=$?
+# M91-93 十五角入闸 (台账节次验)
+run_row 2 0 5 12 1 2 2048 0 CAUGHT; rc+=$?
+run_row 4 5 5 12 1 1 2048 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 4 1024 0 CAUGHT 8; rc+=$?
+run_row 3 0 5 12 1 4 1024 1 CAUGHT; rc+=$?
+run_row 7 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 6 0 5 12 1 3 1024 0 CAUGHT 3 1; rc+=$?
+run_row 1 0 5 12 1 2 512 0 CAUGHT; rc+=$?
+run_row 8 0 5 12 1 1 1024 0 CAUGHT 3 1; rc+=$?
+run_row 0 10 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 2 0 5 12 1 3 1024 0 CAUGHT 16; rc+=$?
+run_row 9 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 5 0 5 12 1 4 1024 0 CAUGHT 3 1; rc+=$?
+run_row 1 0 5 12 1 3 512 0 CAUGHT; rc+=$?
+run_row 4 0 5 12 1 2 1024 0 CAUGHT 16 1; rc+=$?
+run_row 7 0 5 12 1 3 1024 0 CAUGHT 3 1; rc+=$?
 
 echo "===================="
 echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
