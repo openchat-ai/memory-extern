@@ -643,3 +643,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 **M89/M90 全叠新角 + 闸谱系量学**: P5×F1(GEMM t=6)、P2×F5×FKXG1 三叠(节流×双错×
   远峰, 窗内top-K@[912,1024))、P0×F2×V512(o) 全捕, 待全门停后入闸。94 行谱系: CAUGHT
   = GEMM×10 + 窗内top-K×6 + o×6 + 窗界×1 (自洽 23); 窗重叠 93-100% 全 ≥90 不变量。
+
+**M88-闭 全门终验 (105 行)**: PASS=72 CAUGHT=33 WARN/FAIL/MISSED/ESCAPE/COMPILE/UNKNOWN
+  全 0 rc=0。CAUGHT33=23(M85)+6(M86/87)+4(M88) 逐批自洽。门行静审: 105 行无越界无重复。
