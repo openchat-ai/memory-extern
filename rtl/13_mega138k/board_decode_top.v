@@ -19,6 +19,7 @@ module board_decode_top (
     wire done_ir;
     reg [31:0] hsh = 0, prev_words = 0;
     reg [2:0] good = 0;
+    reg hsh_nz = 0;
 
     decode_auto_core U(
         .clk(clk), .rst_n(rst_n), .run(run), .busy(busy), .done(done_ir),
@@ -40,22 +41,25 @@ module board_decode_top (
             else if (tick[10:0] == 11'd1016) run <= 1'b0;
         end
 
-    // 帧哈希: 每帧 token_done 归零; emit 期间累计 out_expert/words 流指纹 (同 core_selftest)
+    // 帧哈希: 每帧 token_done 归零; emit 期间累计内容+流程指纹 (同 core_selftest 内容版)
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin
-            hsh <= 0;
+            hsh <= 0; hsh_nz <= 0;
         end else begin
-            if (token_done) hsh <= 0;
-            else if (out_valid && a_words > 0)
-                hsh <= {hsh[30:0], hsh[31] ^ out_expert[0]} ^ {out_expert[3:1], a_words[6:0]};
+            if (token_done) begin
+                hsh <= 0; hsh_nz <= 0;
+            end else if (out_valid && a_words > 0) begin
+                hsh_nz <= 1'b1;
+                hsh <= {hsh[30:0], hsh[31] ^ out_expert[0]} ^ {out_expert[3:1], out_data[3:0]};
+            end
         end
 
-    // 帧末对账: 每帧先给 +128 词 (全量) = 帧完整稳定 → GOOD (帧指纹 hsh 留作观测)
+    // 帧末对账: 每帧词量 +128 (全量) 且帧内内容流活跃 → GOOD (双证: 完整性+真数据面流动)
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin
             prev_words <= 0; good <= 0;
         end else if (token_done) begin
-            if (a_words - prev_words == 32'd128) good <= good >= 2 ? 3 : good + 1;
+            if ((a_words - prev_words == 32'd128) && hsh_nz) good <= good >= 2 ? 3 : good + 1;
             else good <= 0;
             prev_words <= a_words;
         end
