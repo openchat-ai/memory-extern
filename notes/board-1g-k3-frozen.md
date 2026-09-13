@@ -827,3 +827,9 @@ gowin_pll_400 封装 + .cst 物理引脚 + 板级 tb) —— 属旧核。
   P4 sram_pool_arb.v  mem[g_addr]/mem[a_addr] → 高云 BRAM (SP/DP) 原语化
   P5 词表/反馈 ROM 固化 (上板结构改造)
   已可综合: gemv_array_128 / attn_window / gemv_rail_ctl / sched_exec / assembler
+
+**SF3-P3 综合镜像打通**:
+  根因 = yosys 0.68 (termux) 彻底不支持 unpacked 数组端口 (声明+连接均报错, 已最小复现)。
+  方案 = SF 镜像 rtl/13_mega138k/attn_inner_ctl_sf.v: 与产品版逐行同步, 唯一差异 q_vec 端口打包
+  (32*WPR-1:0) + generate 切片。产品源码/验证 tb 零改动 (此前对该文件的 3 处编辑已回滚)。
+  资源账: LUT≈10831 当量, FF≈206, synth_gowin 一次过。
