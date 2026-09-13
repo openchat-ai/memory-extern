@@ -50,6 +50,14 @@ run_row() {
 }
 
 declare -i rc=0 np=0 nc=0 nf=0 nw=0 ne=0 nm=0 ncf=0 nun=0
+
+# 门序守卫 (M112): exit 若早于末行 run_row → 后列即成死码 (M78/M90-误 append 教训), 立即报死
+_dex=$(grep -n '^exit ' "$0" | head -1 | cut -d: -f1)
+_dlr=$(grep -n '^run_row ' "$0" | tail -1 | cut -d: -f1)
+if [ -n "$_dex" ] && [ -n "$_dlr" ] && [ "$_dex" -lt "$_dlr" ]; then
+  echo "门序错误: exit(行$_dex) 早于末行 run_row(行$_dlr) — 后列死码! 请修复列位"; exit 9
+fi
+
 # 主矩阵 (PROFILE SEED HALF TN PROBEON FAULT VOC FBPOLY WANT)
 for row in "0 0 5 12 1 0 1024 0 PASS" "1 0 5 12 1 0 1024 0 PASS" "2 0 5 12 1 0 1024 0 PASS" \
            "4 0 5 12 1 0 1024 0 PASS" "5 0 5 12 1 0 1024 0 PASS" "6 0 5 12 1 0 1024 0 PASS" \
@@ -192,11 +200,7 @@ run_row 1 0 5 12 1 3 512 0 CAUGHT; rc+=$?
 run_row 4 0 5 12 1 2 1024 0 CAUGHT 16 1; rc+=$?
 run_row 7 0 5 12 1 3 1024 0 CAUGHT 3 1; rc+=$?
 
-echo "===================="
-echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
-exit $(( rc ? 1 : 0 ))
-
-# M98-M111 十一弹 54 角入闸 (节次验)
+# M98-M111 十一弹 53 角入闸 (节次验, 已删 P2F1X1 重复)
 run_row 0 0 5 12 1 4 1024 0 CAUGHT 8; rc+=$?
 run_row 1 0 5 12 1 2 2048 0 CAUGHT; rc+=$?
 run_row 0 14 5 12 1 3 1024 0 CAUGHT; rc+=$?
@@ -251,4 +255,7 @@ run_row 11 0 5 12 1 2 512 0 CAUGHT; rc+=$?
 run_row 4 12 5 12 1 5 1024 0 CAUGHT; rc+=$?
 run_row 8 0 5 12 1 3 1024 0 CAUGHT 16 1; rc+=$?
 
+
 echo "===================="
+echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
+exit $(( rc ? 1 : 0 ))
