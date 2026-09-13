@@ -27,28 +27,28 @@ run_row() {
       -P decode_auto_tb.TN=$tn -P decode_auto_tb.PROBEON=$probeon -P decode_auto_tb.FAULT=$fault \
       -P decode_auto_tb.NVOC=$voc -P decode_auto_tb.FBPOLY=$fbpol -P decode_auto_tb.NK=$nk \
       -P decode_auto_tb.FKXG_P=$fkxg \
-      -o "$out" "${RTL[@]}" > "$cerr" 2>&1 ) || { echo "COMPILE-FAIL $tag"; return 2; }
-  if grep -qi "warning" "$cerr"; then echo "WARN   $tag (编译警告门)"; return 1; fi
-  timeout 400 vvp "$out" > "$OUT/mat_$tag.log" 2>&1 || true
-  local log="$OUT/mat_$tag.log"
-  if [ "$want" = "PASS" ]; then
-    if grep -q "ALL PASS" "$log"; then
-      if grep -q "窗重叠" "$log"; then
-        local ovl=$(sed -n 's/.*窗重叠 \([0-9]*\)%.*/\1/p' "$log")
-        if [ -n "$ovl" ] && [ "$ovl" -lt 90 ]; then echo "FAIL   $tag (窗滑移重叠率 $ovl%<90%%)"; return 1; fi
-      fi
-      echo "PASS   $tag"; return 0; fi
-    if grep -q "REDTEAM ESCAPE" "$log"; then echo "ESCAPE $tag"; return 3; fi
-    echo "FAIL   $tag"; return 1
-  else # CAUGHT: 期望某断言抓住注入
-    if grep -qE "FAIL (GEMM|o |t=5 )|FAIL GEMM 对账" "$log"; then echo "CAUGHT $tag"; return 0; fi
-    if grep -q "ALL PASS" "$log"; then echo "MISSED $tag (注入未触发, ALL PASS)"; return 1; fi
-    if grep -q "REDTEAM ESCAPE" "$log"; then echo "ESCAPE $tag"; return 3; fi
-    echo "UNKNOWN $tag"; return 1
-  fi
+-o "$out" "${RTL[@]}" > "$cerr" 2>&1 ) || { echo "COMPILE-FAIL $tag"; ncf+=1; return 2; }
+   if grep -qi "warning" "$cerr"; then echo "WARN   $tag (编译警告门)"; nw+=1; return 1; fi
+   timeout 400 vvp "$out" > "$OUT/mat_$tag.log" 2>&1 || true
+   local log="$OUT/mat_$tag.log"
+   if [ "$want" = "PASS" ]; then
+     if grep -q "ALL PASS" "$log"; then
+       if grep -q "窗重叠" "$log"; then
+         local ovl=$(sed -n 's/.*窗重叠 \([0-9]*\)%.*/\1/p' "$log")
+         if [ -n "$ovl" ] && [ "$ovl" -lt 90 ]; then echo "FAIL   $tag (窗滑移重叠率 $ovl%<90%%)"; nf+=1; return 1; fi
+       fi
+       echo "PASS   $tag"; np+=1; return 0; fi
+     if grep -q "REDTEAM ESCAPE" "$log"; then echo "ESCAPE $tag"; ne+=1; return 3; fi
+     echo "FAIL   $tag"; nf+=1; return 1
+   else # CAUGHT: 期望某断言抓住注入
+     if grep -qE "FAIL (GEMM|o |t=5 )|FAIL GEMM 对账" "$log"; then echo "CAUGHT $tag"; nc+=1; return 0; fi
+     if grep -q "ALL PASS" "$log"; then echo "MISSED $tag (注入未触发, ALL PASS)"; nm+=1; return 1; fi
+     if grep -q "REDTEAM ESCAPE" "$log"; then echo "ESCAPE $tag"; ne+=1; return 3; fi
+     echo "UNKNOWN $tag"; nun+=1; return 1
+   fi
 }
 
-declare -i rc=0
+declare -i rc=0 np=0 nc=0 nf=0 nw=0 ne=0 nm=0 ncf=0 nun=0
 # 主矩阵 (PROFILE SEED HALF TN PROBEON FAULT VOC FBPOLY WANT)
 for row in "0 0 5 12 1 0 1024 0 PASS" "1 0 5 12 1 0 1024 0 PASS" "2 0 5 12 1 0 1024 0 PASS" \
            "4 0 5 12 1 0 1024 0 PASS" "5 0 5 12 1 0 1024 0 PASS" "6 0 5 12 1 0 1024 0 PASS" \
@@ -131,7 +131,14 @@ run_row 0 0 5 12 1 0 1024 0 PASS 12; rc+=$?
 run_row 0 0 5 12 1 0 1024 0 PASS 16; rc+=$?
 run_row 0 0 1 12 1 0 1024 0 PASS; rc+=$?
 run_row 0 0 15 12 1 0 1024 0 PASS; rc+=$?
+# M78 FKXG 全 SEED 扫 + M79 P11×K12
+run_row 2 4 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+run_row 2 6 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+run_row 2 9 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+run_row 2 13 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+run_row 2 15 5 12 1 0 1024 0 PASS 3 1; rc+=$?
+run_row 11 0 5 12 1 0 1024 0 PASS 12; rc+=$?
 
 echo "===================="
-echo "decode_auto 回归门: rc=$rc (0=全绿)"
+echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
 exit $(( rc ? 1 : 0 ))
