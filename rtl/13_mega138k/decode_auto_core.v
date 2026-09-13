@@ -70,13 +70,11 @@ module decode_auto_core #(
     wire [2:0] ex_st; wire [$clog2(NL)-1:0] ex_layer_now;
     wire [31:0] ex_layers_done, ex_gemm_done, ex_attn_done, ex_sel_sw, ex_barrier, ex_wg_words, ex_wa_words;
 
-    wire [AW-1:0]  sl_adr; wire [DW-1:0] sl_dat;
-    assign sl_adr = {AW{1'b0}}; assign sl_dat = {DW{1'b0}};
     sched_exec #(.DW(DW), .AW(AW), .NL(NL), .GW(GW), .GDEPTH(GW), .ATW(ATW)) u_ex(
         .clk(clk), .rst_n(rst_n), .go(go), .busy(ex_busy),
         .layer_fill(lay_fill_ct[31:0]), .layer_sync(released[31:0]),
         .rl_valid(ex_rl_valid), .rl_layer(ex_rl_layer), .a_busy(aw_busy),
-        .sel_o(ex_sel_o), .slice_addr(sl_adr), .slice_rdata(sl_dat),
+        .sel_o(ex_sel_o), .slice_addr(), .slice_rdata(),
         .r_valid(ex_r_valid), .r_data(ex_r_data), .r_frame_done(ex_r_frame_done),
         .r_addr(ex_r_addr), .r_take(rail_r_take),
         .a_go(ex_a_go), .a_s_valid(ex_a_s_valid), .a_s_data(ex_a_s_data),
@@ -89,13 +87,13 @@ module decode_auto_core #(
     );
 
     // ---------------- gemv_rail_ctl ----------------
-    wire rail_r_take, rail_feed; wire [15:0] rail_act, rail_w;
+    wire rail_r_take; wire [15:0] rail_act, rail_w;
     wire [31:0] rail_words, rail_frames;
     gemv_rail_ctl #(.DW(DW), .TDEPTH(GW), .AIDX(4)) u_rail(
         .clk(clk), .rst_n(rst_n),
         .r_valid(ex_r_valid), .r_take(rail_r_take), .r_data(ex_r_data),
         .r_frame_done(ex_r_frame_done), .r_addr(ex_r_addr),
-        .act_in(rail_act), .weight_in(rail_w), .feed(rail_feed),
+        .act_in(rail_act), .weight_in(rail_w), .feed(),
         .words_fed(rail_words), .frames_done(rail_frames)
     );
 
@@ -125,7 +123,6 @@ module decode_auto_core #(
     // ---------------- attn_inner_ctl (SF 打包镜像; ys0.68 不支持数组端口) ----------------
     wire ctl_r_take, ctl_busy, ctl_o_valid; wire [15:0] ctl_o_data, ctl_act, ctl_w;
     wire [31:0] ctl_o_head, ctl_o_row, ctl_blk, ctl_words, ctl_rows, ctl_blocks_done;
-    assign rail_feed = 1'b0;   // 占位 (TB rail_feed 由 rail 内部发布; 骨架不接)
 
     attn_inner_ctl_sf #(.DW(DW), .HEADS(HEADS), .HBUF(HBUF), .BUFS(BUFS), .WPR(WPR)) u_ctl(
         .clk(clk), .rst_n(rst_n), .go(ex_c_go), .busy(ctl_busy),
