@@ -819,3 +819,11 @@ gowin_pll_400 封装 + .cst 物理引脚 + 板级 tb) —— 属旧核。
 
 **SF2 主门终验 (210 行)**: PASS=72 CAUGHT=138 (104+19+5+5+5 自洽, 含 M120 盲格5) 全净 rc=0。
   至此主闸线 108→123→176→205→210 全绿; DUT 门已停, SF 综合化改造窗口打开。
+
+**SF3 综合化改造白名单 (探针定位)**:
+  P1 router_sel.v:92  for 循环界 ii<TOP 非常量 → 常量循环+动态项数保护 (插入排序语义不变)
+  P2 head_vprune.v:55  cand_w [0:CAP-1] 数组索引语义 → 上界形式 + 使用点核对
+  P3 attn_inner_ctl.v:35 q_vec [0:(2*WPR)-1] 括号表达式数组声明 → localparam 无括号上界
+  P4 sram_pool_arb.v  mem[g_addr]/mem[a_addr] → 高云 BRAM (SP/DP) 原语化
+  P5 词表/反馈 ROM 固化 (上板结构改造)
+  已可综合: gemv_array_128 / attn_window / gemv_rail_ctl / sched_exec / assembler
