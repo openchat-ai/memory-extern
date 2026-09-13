@@ -737,3 +737,5 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M114 TN 轴扫描存量**: run_decode_tn_sweep.sh — P0/P2/P11 × TN{12,30,60,120,280} × F0/F1/F2 = 45
   行; 完证令牌数轴全谱覆盖。
+
+**M114 TN 轴扫描已启动**: ~40min 后台运行 (PID 新, tn_sweep.log)。
