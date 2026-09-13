@@ -734,3 +734,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M113 NVOC 轴宽浸泡完成**: 18 PASS + 35 CAUGHT + 1 OTHER; **P11V256F1 退化**(远峰×256
   词表过稀,窗内无触达词 → 断言无触发, 类 F1@B1 掩蔽机理, 刺激退化非产品缺陷)。其余全绿。
+
+**M114 TN 轴扫描存量**: run_decode_tn_sweep.sh — P0/P2/P11 × TN{12,30,60,120,280} × F0/F1/F2 = 45
+  行; 完证令牌数轴全谱覆盖。
