@@ -742,3 +742,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M115 K 轴扫描完成**: P0×K{5,8,12,16}×F1/F2/F3 + P11×K{5,12,16}×F2/F4(FKXG) + P2×K{5,16}
   ×F3/F5(FKXG) = 22/22 CAUGHT rc=0。头部提取数轴完证。
+
+**∇角批A 5角 (全捕, 待入闸)**: P11×S7×F4(o)、P11×S5×F5(GEMM)、P2×F1×V512(GEMM t=8 c-族)、
+  P2×F4×V512(o)、P0×H3×F1(GEMM)。
