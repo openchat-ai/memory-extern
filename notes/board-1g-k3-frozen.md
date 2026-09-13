@@ -758,3 +758,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **∇角批E 5角 (全捕, 待入闸)**: P11×S11×F5(GEMM)、P2×F4×V512×X1(o)、P4×S15×F3
   (窗界失配)、P6×S14×F2(o)、P9×S6×F1(GEMM)。
+
+**M116 HALF 轴浸泡存量**: run_decode_half_sweep.sh — P0/P2/P11 × HALF{1,3,5,9,15} × F0/F1/F2/F3
+  = 60 行; 完证中钟轴系统覆盖。
