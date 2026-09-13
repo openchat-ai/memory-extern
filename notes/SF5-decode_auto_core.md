@@ -62,3 +62,14 @@ run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 fe
 - 产品 RTL(01-41) + 41 TB 不动,210 门基线冻结;
 - 镜像 (*_sf) 只增不改产品, 每镜像列出唯一差异(见各文件头注释与 SF3 台账);
 - termux 侧等价性证据 = 逐行 diff 审查 + hierarchy 0 ERROR; LOCKSTEP 对账留 PC。
+## SF6 增补 — board_smoke 烧录就绪 (termux 侧全闭环)
+- rtl/13_mega138k/board_smoke_top.v: led[0]=clk 分频眨眼; led[1]=乘加自检 (LFSR 初值
+  CAFE_BEEF, 8 拍流水 16x16→32 累加) == GOLD 0xe552b3e0 (board_smoke_self_tb 标定);
+  led[3:2]=LFSR 位状态。合成一次过: LUT69 + ALU174 + FF268 (~819 LUT 当量)。
+- 自标定过程抓到 2 个真 bug: ① prod_r 16bit 截断 32bit 乘 ② tb double-loop 污染 GOLD。
+  断言体系生效; RTL 已修。
+- 烧录清单 (PC + Gowin EDA / nextpnr-gowin):
+  1. cst 复用 mega138k_engine.cst 引脚节 (sys_clk P16 / rst_n K16 / led[3:0]);
+  2. sys_clk 直连 50M 振荡器 (PLL 留后续 core);
+  3. 综合/布线/烧写 → 板上观: led0 眨眼 + led1 常亮 = FPGA 基本逻辑+乘加链判活;
+  4. 通过后再切 decode_auto_core 全核时序收斂。
