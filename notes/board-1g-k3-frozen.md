@@ -607,3 +607,11 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   ×T120 (中长远峰) 全绿入闸。全量门终验台账 (首个诚实计数, 修正 M78 误标 76/80):
   **82 行 = PASS 71 + CAUGHT 11, WARN/FAIL/MISSED/ESCAPE/COMPILE/UNKNOWN 全 0, rc=0**。
   FKXG 轴与全部 7 维交叉覆盖闭合。
+
+**M81 CAUGHT 分类器语义化 + 断言族映射**: 原正则 `FAIL (GEMM|o |t=5 )` 是时间戳字面量且
+  漏掉缩进 o 断言行/`t!=5` 窗族。修为关键字全行任意位族匹配 (GEMM/o/watchdog/round/exec/
+  rail/裕量/漏出窗/窗界失配/窗内top-K/acc扰动), 11 条 CAUGHT 源日志全过 (ONM/新无假阳)。
+  断言族↔样本映射: GEMM←F1/GEMM对账/m8-vocab? ; o←F2/F4/gemv-mac/attn_inner差分/
+  attn_window寻址; watchdog←sram_pool_arb换权/M60反证; 窗族←F3/F5/head_vprune两株/
+  vocab_prune平局(漏出窗@t=0)。冷族 (round/exec/rail/裕量8/acc扰动/head_vprune看门狗):
+  无现行样本直接触发, 由跨族冗余守卫 (其它断言先火) 兜底 —— 诚实留档。
