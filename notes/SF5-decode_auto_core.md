@@ -134,3 +134,15 @@ run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 fe
 - 预算: 50MHz=20ns → 按 0.5ns/LUT ≈ 40级余量充裕; @124MHz≈8ns 深度~16级紧贴,
   fk 建议 PC 侧改为两拍流水 (DBUFF) 再关联 (M63 已经 FKXG 远峰梯度, 深更深)。
 - 结论: M25 默认 50MHz 直连 (无 PLL) 收敛无虞; 若求 124+MHz 先处理 fk 流水。
+
+## SF12b 新发现缺陷 (KNOWN-DEFECT-DC01) — 信用停摆窗下 assembler 切片相位错位
+- 复现: core STRESS=1 (STC 60~68 拍 credit=0); uA(u=无背压) vs uB(背压) 同 seed 并行。
+- 观察: 同 128 词全量、done 均达, 但词级内容指纹 B≠A; 逐元素 diff@71 起 48 词
+  (切片偏移 +0x20, 即 B 读到 2 组之后的 slice) → 前 71 词逐位一致, 后段失相。
+- 归因假设: assembler S_TAKE/EMIT 层相位靠 router emit 流自同步, 信停期间无 re-sync 机制;
+  credit 恢复后层间 idx_slot 错配 → caddr=bebase(层,槽) 读错切片。
+- 判定: 真缺陷 (数据面正确性受信用断点影响), 非测试伪影 (A 为正确基准)。
+- 影响: 连续信用 (无停摆) 路径无此问题 (core_selftest 0104bef0 恒定); 板上若上游信用波动
+  需处理。PC 修复候选: ① assembler 层切换增加 router layer_done 对齐握手;
+  ② 断点窗口重定向 (S_TAKE 显式检查 in_valid 连续), ③ 装配 gating 后延迟 flush。
+- 保留 core_stress_tb 为缺陷复现用例 (确定性 log)。

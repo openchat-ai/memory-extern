@@ -9,8 +9,9 @@ module decode_auto_core #(
     parameter EX   = 16, TOP  = 4, EW   = 8,
     parameter NVOC = 1024, NGRP = 16, NMAXE = 14, NXEST = 6,
     parameter NCAP = (2*NMAXE+1)*NGRP, NK = 3,
-    SELFDRV = 1   // =1 板上自驱: 内嵌 LFSR 分值源跑真链 (确定性 token, 可两次同seed对账);
+    SELFDRV = 1,  // =1 板上自驱: 内嵌 LFSR 分值源跑真链 (确定性 token, 可两次同seed对账);
                   //   数据面外源 (s_valid/s_score/out_take/credit) 被内部替换, H 侧 acc/xext 仍外源。
+    STRESS = 0    // =1 自驱时注入信用停摆窗 (STC 60~68 拍 credit=0) → 背压内容等价对账
 ) (
     input  wire clk, rst_n, run,
     output reg  busy, done,
@@ -60,6 +61,14 @@ module decode_auto_core #(
     wire afill = a_layer_done || token_done;
     wire slot_ok = (lay_fill_ct < 2) || (released[31:0] > (lay_fill_ct - 2));
     reg credit_r = 1;
+    reg [7:0] stc = 0; reg stress_credit = 1;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) stc <= 0;
+        else if (sm == SM_RUN) stc <= (stc == 8'd255) ? 8'd255 : stc + 1'b1;
+        else stc <= 0;
+    always @(posedge clk or negedge rst_n)
+        if (!rst_n) stress_credit <= 1'b1;
+        else stress_credit <= ~((stc >= 8'd60) && (stc < 8'd68));
     always @(posedge clk or negedge rst_n)
         if (!rst_n) occ_q <= 0;
         else if (out_valid && credit_r) occ_q <= occ_q;          // 同拍吐+收存量不动
@@ -70,7 +79,7 @@ module decode_auto_core #(
             af_d1 <= afill;
             if (afill && !af_d1) lay_fill_ct <= lay_fill_ct + 1;
         end
-    always @(*) credit_r = SELFDRV ? 1'b1 : ((occ_q < 4096/2) && slot_ok);
+    always @(*) credit_r = SELFDRV ? (STRESS ? stress_credit : 1'b1) : ((occ_q < 4096/2) && slot_ok);
 
     wire ex_busy, ex_sel_o, ex_r_valid, ex_r_frame_done, ex_rl_valid;
     wire [DW-1:0] ex_r_data; wire [3:0] ex_r_addr; wire [31:0] ex_rl_layer;

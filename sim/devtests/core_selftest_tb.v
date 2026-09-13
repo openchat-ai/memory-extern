@@ -30,19 +30,21 @@ module core_selftest_tb;
     reg [31:0] h1 = 0, h2 = 0;
     reg donef = 0;
     reg td_f = 0, htd_f = 0;
+    reg [31:0] saw_w = 0;
 
     task run_once(output [31:0] hh);
         integer j;
         begin
-            hh = 0;
+            hh = 0; saw_w = 0;
             run = 1; @(posedge clk); run = 0;
             cyc = 0; donef = 0; td_f = 0; htd_f = 0;
             while (!donef) begin
                 @(posedge clk);
                 if (token_done && !td_f) begin $display("  token_done@%0d (a_words=%0d)", cyc, a_words); td_f = 1; end
                 if (U.h_token_done && !htd_f) begin $display("  h_token_done@%0d (h_round=%0d)", cyc, h_round); htd_f = 1; end
-                if (out_valid && a_words > 0) begin
+                if (out_valid && a_words > saw_w) begin
                     hh = {hh[30:0], hh[31]^out_expert[0]} ^ {out_expert[3:1], out_data[3:0], out_token[0], out_score[3:0]};
+                    saw_w <= a_words;
                 end
                 if (done) donef = 1;
                 cyc = cyc + 1;
