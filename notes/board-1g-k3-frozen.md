@@ -855,3 +855,12 @@ gowin_pll_400 封装 + .cst 物理引脚 + 板级 tb) —— 属旧核。
   - router_sel_sf 段移位已改"全并行每槽插入" (非阻塞取旧值 → 语义逐条等价; 记于文件注释)。
   - head_vprune_sf VOC512+ 重综合在 termux OOM; 降档 VOC64 因 ys0.68 无 -chparam 放弃。
   - 资源总表 (唯一落地 5 模块 + P3): 见 notes/SF5-decode_auto_core.md §3.2。
+
+**LOCKSTEP 等价对账矩阵 (termux, 产品×SF 镜像逐拍全等)**:
+  | 镜像 | cyc | 结果 | 关键 |
+  |---|---|---|---|
+  | router_sel_sf (全并行插入) | 3000 | PASS | 段移位→每槽并行+if 保护, 非阻塞旧值 |
+  | head_vprune_sf 系 | 1000 | PASS | VOC32/GRP8/MAXE8 缩档 (VOC128 组合重超时) |
+  | attn_inner_ctl_sf (打包) | 1500 | PASS | 早期 384 MISMATCH 实为 tb δ-cycle 竞态 → 激励改非阻塞后 PASS |
+  | route_asm_sf (全链) | 2000 | PASS | router_sel_sf+assembler 与原链逐拍同 |
+  镜像等价证据升级: 逐行 diff → LOCKSTEP 真运行时铁证。tb 文件: sim/devtests/*_lockstep_tb.v。
