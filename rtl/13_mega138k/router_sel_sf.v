@@ -93,14 +93,20 @@ module router_sel_sf #(
                         end
                         if (pp < 0 && tc < TOP) pp = tc;
                         if (pp >= 0) begin
-                            for (ii = RT - 1; ii >= 0; ii = ii - 1) begin
-                                if (ii > pp && ii < TOP) begin
-                                    t_score[ii] <= t_score[ii-1];
-                                    t_idx[ii]   <= t_idx[ii-1];
+                            // 全槽并行 top-T 插入 (非阻塞取旧值, 段移位语义等价;
+                            //   ys0.68 muxtree 对运行界段移位多驱, 改每槽独立避免)
+                            for (ii = 0; ii < RT; ii = ii + 1) begin
+                                if (ii < TOP) begin
+                                    if (ii == pp) begin
+                                        t_score[ii] <= s_score;
+                                        t_idx[ii]   <= idx;
+                                    end
+                                    else if (ii > pp) begin
+                                        t_score[ii] <= t_score[ii-1];
+                                        t_idx[ii]   <= t_idx[ii-1];
+                                    end
                                 end
                             end
-                            t_score[pp] <= s_score;
-                            t_idx[pp]   <= idx;
                             if (tc < TOP) tc <= tc + 1;
                         end
                         if (idx + 1 == EX) begin

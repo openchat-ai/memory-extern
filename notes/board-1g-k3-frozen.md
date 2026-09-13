@@ -845,3 +845,13 @@ gowin_pll_400 封装 + .cst 物理引脚 + 板级 tb) —— 属旧核。
   - 待办: LOCKSTEP 等价对账 (产品×镜像同激励比对) 计划 PC 平台补验; 手机 CPU 对
     head_vprune (VOC512 全组合 fk) 重综合易 OOM, 一并留 PC。
   - 环境纪律: termux 会话长前台/重 yosys 合成会挂断会话 (alumacc 大展开), 一律后台化+轮询。
+
+**SF3 补记 (ys0.68 综合边界确定, 综合/时序/烧录归 PC)**:
+  - route_asm_sf/router_sel_sf 综合 3 变体 (RT=128 段移位 / RT=16 / 全并行每槽插入)
+    均触发 muxtree duplicate-driver: `$procmux 重复驱动 A.in_idx/out_idx`。
+    根因 = ys0.68 对"数组部分写 (t_score/t_idx 多槽 if 分支)"的已知缺陷 -- 与结构无关。
+    镜像语义等价证据: 逐行 diff + 产品 210 门全绿; LOCKSTEP 对账列 PC。
+  - route_asm_sf 已交付 (router_sel_sf @34 实例换件, 公众号镜像纪律)。
+  - router_sel_sf 段移位已改"全并行每槽插入" (非阻塞取旧值 → 语义逐条等价; 记于文件注释)。
+  - head_vprune_sf VOC512+ 重综合在 termux OOM; 降档 VOC64 因 ys0.68 无 -chparam 放弃。
+  - 资源总表 (唯一落地 5 模块 + P3): 见 notes/SF5-decode_auto_core.md §3.2。
