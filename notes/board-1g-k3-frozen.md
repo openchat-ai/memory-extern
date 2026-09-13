@@ -728,3 +728,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 **M98-M111-闭 全门终验 (176 行)**: PASS=72 CAUGHT=104 (51+53 自洽) 全零 rc=0。
   门序守卫首役无死码, 176 行全行使。后续角批 (FKXG×seed×双错/H3/T30/T60/V512@节流)
   待验待入闸。
+
+**M113 NVOC 轴宽浸泡存量**: run_decode_vocab_sweep.sh — P0/P2/P11 × NVOC{256,384,512,768,
+  1024,2048} × F0(期望PASS)/F1/F2(期望CAUGHT) = 54 行; 完证词表轴宽度覆盖。
