@@ -751,3 +751,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **∇角批C 5角 (全捕, 待入闸)**: P3×T60×F1(GEMM t=1 c-族)、P6×T60×F4(o)、P5×T120×F2(o)、
   P7×T30×F5(窗内top-K)、P0×H15×T30×F2(o)。
+
+**∇角批D**: P11×S7×F2×V512(o)、P11×S5×F4×V2048(o)、P2×S13×F2×X1(o)、P8×S6×F5
+  (GEMM t=3 gw=8) 全捕; **P0×S11×F1 掩蔽 0PASS** (注入点恒 (L0,e15,w1), 此 seed 流下
+  gold/hw 不发散, 同 F1@B1 机理; 非缺陷, 掩蔽角独立计数不入闸)。
