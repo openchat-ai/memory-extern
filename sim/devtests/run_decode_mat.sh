@@ -195,3 +195,61 @@ run_row 7 0 5 12 1 3 1024 0 CAUGHT 3 1; rc+=$?
 echo "===================="
 echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
 exit $(( rc ? 1 : 0 ))
+
+# M98-M111 十一弹 54 角入闸 (节次验)
+run_row 0 0 5 12 1 4 1024 0 CAUGHT 8; rc+=$?
+run_row 1 0 5 12 1 2 2048 0 CAUGHT; rc+=$?
+run_row 0 14 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 3 512 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 5 1024 0 CAUGHT 8; rc+=$?
+run_row 0 0 5 12 1 2 1024 2 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 1 1024 0 CAUGHT 5; rc+=$?
+run_row 3 0 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 6 0 9 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 4 2048 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 1 512 0 CAUGHT; rc+=$?
+run_row 9 0 5 12 1 2 512 0 CAUGHT; rc+=$?
+run_row 5 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 8 0 5 12 1 4 1024 0 CAUGHT 12; rc+=$?
+run_row 11 0 5 12 1 3 1024 1 CAUGHT; rc+=$?
+run_row 0 8 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 1 2048 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 2 1024 0 CAUGHT 5; rc+=$?
+run_row 2 0 5 12 1 4 1024 0 CAUGHT 12; rc+=$?
+run_row 11 7 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 11 5 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 0 3 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 4 10 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 2 13 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 9 0 5 12 1 4 512 0 CAUGHT; rc+=$?
+run_row 6 0 5 12 1 4 1024 0 CAUGHT 12; rc+=$?
+run_row 2 3 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 1 0 5 12 1 5 2048 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 1 2048 0 CAUGHT; rc+=$?
+run_row 11 5 5 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 0 15 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 4 6 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 7 4 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 11 0 5 60 1 4 1024 0 CAUGHT 16; rc+=$?
+run_row 0 5 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 0 12 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 11 11 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 1 9 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 4 8 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 1 1024 0 CAUGHT 16; rc+=$?
+run_row 0 14 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 2 6 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 8 5 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 5 12 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 2 0 5 12 1 5 512 0 CAUGHT 3 1; rc+=$?
+run_row 11 0 5 12 1 5 1024 1 CAUGHT; rc+=$?
+run_row 0 9 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 6 7 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 3 2 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 2 0 5 12 1 1 1024 0 CAUGHT 3 1; rc+=$?
+run_row 0 7 5 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 11 0 5 12 1 2 512 0 CAUGHT; rc+=$?
+run_row 4 12 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 8 0 5 12 1 3 1024 0 CAUGHT 16 1; rc+=$?
+
+echo "===================="
