@@ -692,3 +692,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M103 第九弹 5 角 (全捕)**: P11×S7×F2(o)、P11×S5×F3(窗内top-K@lbw+110)、P0×S3×F2(o)、
   P4×S10×F2(o)、P2×S13×F4(o)。FKXG×非零 seed 相位独立成角。
+
+**M104 快速回归门 (run_decode_mat_fast.sh)**: 提交前/增量 CI, ~10min; PASS 综合 10 行 +
+  6 断言族例 (GEMM/o/窗内top-K/窗界失配/远峰双错/FKXG三叠); 首跑 10P+6C rc=0。
+  主门 = run_decode_mat_123 全量 (服务端闭环以主门为准)。
