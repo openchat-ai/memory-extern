@@ -717,3 +717,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M111 第十五弹 5 角 (全捕, 待入闸)**: P2×F1×X1(GEMM t=9 gw=12)、S7×F1(GEMM t=9 gw=12
   宽窗)、P11×F2×V512(o)、P4×S12×F5(GEMM t=5)、P8×F3×K16×X1(窗内top-K@lbw+111)。
+
+**M91-93-闭 全门终验 (123 行)**: PASS=72 CAUGHT=51 (36+15 自洽) 全零 rc=0。
+  十一弹 54 角 (M98/M100-103/M105/M107-111) 待入闸 → 门 177 行。
