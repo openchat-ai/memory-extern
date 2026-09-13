@@ -1,0 +1,64 @@
+# SF5 — decode_auto_core 设计契约(上板真硬件主目标)
+
+## 1. 目的
+把 M25 连续多步解码闭环(tb 内嵌 8 模块 DUT 网)抽为可综合 core,f在 Tang Mega 138K 上
+跑真硬件,替代 termux 仿真验证。资源账与障碍在 termux 侧收敛,综合/时序/烧录归 PC。
+
+## 2. 拓扑(与 rtl/41_decode_auto/decode_auto_tb.v 同名 DUT 网逐点同构)
+| 实例 | 来源 | 参数冻结口径 | 端口要点 |
+|---|---|---|---|
+| u_ras   | route_asm      | EX16/TOP4/EW8/NL4/SW16 | in_token 链 → s_score/s_valid → asm/logit |
+| u_ex    | sched_exec     | DW32/AW8/NL4/GW16/ATW128 | rail 调度,GDEPTH=GW |
+| u_rail  | gemv_rail_ctl  | TDEPTH16/AIDX4 | act_in/weight_in/feed |
+| u_pool  | sram_pool_arb  | AW8/DW32 | 池控 |
+| aw      | attn_window    | HEADS4/HBUF16/BUFS2 | 窗口 |
+| u_ctl   | attn_inner_ctl | DW32/HEADS4/WPR2 | q_vec_p/mul 流水 |
+| u_arr   | gemv_array_128 | MAC128 | 128 LANE 乘加 |
+|  HV     | head_vprune    | VOC1024/GRP16/BB16/MAXE14/K3/FKXG | 去母 top-K |
+
+NVOC=1024, NK=3, TN=12 (M35/TN, M41/NVOC, M42/NK 冻结)。
+
+## 3. 端口契约(最小锚碇, 与 tb 前端喂送方式一致)
+```
+module decode_auto_core #(EX=16,TOP=4,EW=8,SW=16,NL=4,NVOC=1024,NK=3,TN=12,
+    DW=32,AW=8,GW=16,ATW=128,HEADS=4,HBUF=16,BUFS=2,WPR=2,FEED=4,WA=64,ROWS_TOT=32,BLK=8)( 
+  input               clk, rst_n, run,         // run: 起 TB 级循环
+  input  [DW-1:0]     query_in,                // 首 token/query (外源)
+  input  [DW-1:0]     fresh_in,                // rail 权重/词表注入 (外源, 寄存器级)
+  input  [DW-1:0]     weight_in, act_in,       // gemv1 双路向量
+  input  [DW-1:0]     ctl_w, ctl_a,            // attn 双路向量
+  input  [DW-1:0]     arr_w, arr_a,            // gemv2 双路向量
+  output              busy, done,              // done: TN 步终
+  output [$clog2(NVOC)-1:0] out_tok, orig_tok, // 每步 argmax + 原始词号
+  output [11:0]       out_logit,               // 适配 head_vprune 出口
+  output [31:0]       rounds, stall_ct
+);
+```
+### 3.1 闭环(内嵌状态机, 待 PC top 补齐)
+run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 feed →
+若 rounds<TN-1 继续; 否则 done=1。backpressure 全走 s_take/svc 与 credit(产品语义)。
+
+### 3.2 资源预估(termux 已账合计, LUT 当量)
+| 模块 | LUT当量 | 来源 |
+|---|---|---|
+| gemv_array_128       | 10378 | probe |
+| sched_exec           | 11799 | probe |
+| attn_window          |  1392 | probe |
+| gemv_rail_ctl        |   654 | probe |
+| assembler            |    ~  | probe(未出账但可综合) |
+| attn_inner_ctl_sf    | 10831 | SF3-P3 |
+| router_sel_sf        |  待PC | ys0.68 muxtree 数组段移位 |
+| route_asm_sf         |  待PC | 同左(链上 R.k 实例) |
+| head_vprune 系       |  待PC | VOC512 全组合 fk 重, termux OOM |
+| **合计(乐观)**        | ~3.5万 | 138K LUT4 富余; 时序/BRAM 归 PC |
+
+## 4. PC 侧执行清单
+1. nextpnr-gowin/Gowin EDA 读 rtl/13_mega138k/ 全部 *_sf + 产品同源模块;
+2. head_vprune/词表 ROM 化(VOC 表 ASYNC_RAM→2K BRAM);
+3. 板上 smoke: led 心跳 + core 自检 SUM 校验 (复用 tb 确定性 LCG 权重, 固化 LFSR);
+4. 测列: 40-060 microbench pump 600 cts ×2 ................................. 具体测列届时定。
+
+## 5. 与验证体系接口
+- 产品 RTL(01-41) + 41 TB 不动,210 门基线冻结;
+- 镜像 (*_sf) 只增不改产品, 每镜像列出唯一差异(见各文件头注释与 SF3 台账);
+- termux 侧等价性证据 = 逐行 diff 审查 + hierarchy 0 ERROR; LOCKSTEP 对账留 PC。
