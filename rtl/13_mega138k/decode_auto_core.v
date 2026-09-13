@@ -8,7 +8,9 @@ module decode_auto_core #(
     parameter HEADS = 4, HBUF = 16, BUFS = 2, WPR = 2, FEED = 2*WPR,
     parameter EX   = 16, TOP  = 4, EW   = 8,
     parameter NVOC = 1024, NGRP = 16, NMAXE = 14, NXEST = 6,
-    parameter NCAP = (2*NMAXE+1)*NGRP, NK = 3
+    parameter NCAP = (2*NMAXE+1)*NGRP, NK = 3,
+    SELFDRV = 1   // =1 板上自驱: 内嵌 LFSR 分值源跑真链 (确定性 token, 可两次同seed对账);
+                  //   数据面外源 (s_valid/s_score/out_take/credit) 被内部替换, H 侧 acc/xext 仍外源。
 ) (
     input  wire clk, rst_n, run,
     output reg  busy, done,
@@ -32,9 +34,16 @@ module decode_auto_core #(
     wire [($clog2(EX)-1):0] r_cur_w; wire [$clog2(NL)-1:0] a_lay_w2;
 
     // 上板构件一律 *_sf 镜像 (ys0.68 兼容: 参数for界/数组端口; 各镜像 LOCKSTEP 已证)
+    // ---- 自驱数据面选择 (SELFDRV=1 时接管 s_stream/credit/out_take) ----
+    wire int_drv = SELFDRV && (sm == SM_RUN) && !token_done;
+    wire [SW-1:0] s_score_in = int_drv ? slfsr[15:0] : s_score;
+    wire          s_valid_in = int_drv ? 1'b1       : s_valid;
+    wire          out_take_in = SELFDRV ? credit_r  : out_take;
+    wire          credit_in   = SELFDRV ? credit_r  : credit;
+
     route_asm_sf #(.EX(EX), .TOP(TOP), .EW(EW), .NL(NL), .SW(SW)) u_ras(
-        .clk(clk), .rst_n(rst_n), .go(go), .credit(credit), .s_valid(s_valid), .s_score(s_score),
-        .out_take(out_take), .out_valid(out_valid), .out_data(out_data), .out_expert(out_expert),
+        .clk(clk), .rst_n(rst_n), .go(go), .credit(credit_in), .s_valid(s_valid_in), .s_score(s_score_in),
+        .out_take(out_take_in), .out_valid(out_valid), .out_data(out_data), .out_expert(out_expert),
         .wr_en(wr_en), .wr_addr(wr_addr), .wr_data(wr_data),
         .a_layer_done(a_layer_done), .r_layer_done(),
         .token_done(token_done), .r_token_done(r_token_done),
@@ -53,7 +62,7 @@ module decode_auto_core #(
     reg credit_r = 1;
     always @(posedge clk or negedge rst_n)
         if (!rst_n) occ_q <= 0;
-        else if (out_valid && credit_r) occ_q <= occ_q + 1 - (occ_q > 0 ? 1 : 0);
+        else if (out_valid && credit_r) occ_q <= occ_q;          // 同拍吐+收存量不动
         else if (occ_q > 0) occ_q <= occ_q - 1;
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin af_d1 <= 0; lay_fill_ct <= 0; end
@@ -61,7 +70,7 @@ module decode_auto_core #(
             af_d1 <= afill;
             if (afill && !af_d1) lay_fill_ct <= lay_fill_ct + 1;
         end
-    always @(*) credit_r = (occ_q < 4096/2) && slot_ok;
+    always @(*) credit_r = SELFDRV ? 1'b1 : ((occ_q < 4096/2) && slot_ok);
 
     wire ex_busy, ex_sel_o, ex_r_valid, ex_r_frame_done, ex_rl_valid;
     wire [DW-1:0] ex_r_data; wire [3:0] ex_r_addr; wire [31:0] ex_rl_layer;
@@ -166,24 +175,28 @@ module decode_auto_core #(
     assign a_stalls   = a_stalls_w;
     assign a_words    = a_words_w;
 
-    // ---------------- 状态机 (run→go→wait→done) ----------------
+    // ---------------- 状态机 (run→go→wait→done) + 自驱 LFSR ----------------
     reg go = 0;
+    reg [31:0] slfsr = 32'hC0FF_EE13;
     reg [1:0] sm = 0;
+    reg h_td_cap = 0;
     localparam SM_IDLE = 2'd0, SM_GO = 2'd1, SM_RUN = 2'd2, SM_DONE = 2'd3;
     always @(posedge clk or negedge rst_n)
         if (!rst_n) begin
-            sm <= SM_IDLE; go <= 0; busy <= 0; done <= 0; h_go <= 0; start_tok <= 0;
+            sm <= SM_IDLE; go <= 0; busy <= 0; done <= 0; h_go <= 0; start_tok <= 0; slfsr <= 32'hC0FF_EE13; h_td_cap <= 0;
         end else begin
+            if (int_drv) slfsr <= {slfsr[30:0], slfsr[31] ^ slfsr[21] ^ slfsr[1] ^ slfsr[0]};
             case (sm)
                 SM_IDLE: if (run) begin
-                    sm <= SM_GO; go <= 1'b1; h_go <= 1'b1; start_tok <= 1'b1;
+                    sm <= SM_GO; go <= 1'b1; h_go <= 1'b1; start_tok <= 1'b1; h_td_cap <= 0;
                 end
                 SM_GO: begin
                     go <= 1'b0; h_go <= 1'b0; start_tok <= 1'b0;
                     busy <= 1'b1; sm <= SM_RUN;
                 end
                 SM_RUN: begin
-                    if (token_done && h_token_done) begin
+                    if (h_token_done) h_td_cap <= 1'b1;
+                    if (token_done && h_td_cap) begin
                         sm <= SM_DONE; busy <= 1'b0; done <= 1'b1;
                     end
                 end
