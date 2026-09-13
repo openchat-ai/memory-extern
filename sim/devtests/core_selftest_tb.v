@@ -42,7 +42,7 @@ module core_selftest_tb;
                 if (token_done && !td_f) begin $display("  token_done@%0d (a_words=%0d)", cyc, a_words); td_f = 1; end
                 if (U.h_token_done && !htd_f) begin $display("  h_token_done@%0d (h_round=%0d)", cyc, h_round); htd_f = 1; end
                 if (out_valid && a_words > 0) begin
-                    hh = {hh[30:0], hh[31]^out_expert[0]} ^ {out_expert[3:1], U.u_ras.A.words[6:0]};
+                    hh = {hh[30:0], hh[31]^out_expert[0]} ^ {out_expert[3:1], out_data[3:0], out_token[0], out_score[3:0]};
                 end
                 if (done) donef = 1;
                 cyc = cyc + 1;

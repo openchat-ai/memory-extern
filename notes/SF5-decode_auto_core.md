@@ -113,3 +113,24 @@ run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 fe
 - 帧哈希 hsh 留观测 (首帧 ff81ff81 与 core_selftest 同 seed 同值 = 仿真/板上同基准)。
 - board_good_tb PASS: GOOD(led3)@帧3起亮; led[2]=done led[1]=busy led[0]=心跳。
 - 帧间 LFSR 持续推进 (不重置) → hsh 逐帧不同属预期; 同 seed 对账由 core_selftest 承担。
+
+## SF12 内容级确定性闭环 (消除词表 x)
+- 定位: head_vprune 词表 = 纯组合 (fk(acc,x)=(a*7+x*17)%23 流式, 无 RAM);
+  唯一 x 源 = assembler slice_mem (词内容切片 LUT), 其 wr 通路 (core→u_ras→A) 已直连。
+- core_selftest 哈希扩回内容域 (out_data/out_token/out_score) + tb 512 深度 wr 预灌
+  (词内容=序号) → 哈希从结构的 ff81ff81 升级为内容级 0104bef0, 两次同 seed 逐位一致,
+  全 x 消除 → 译码内容对账在 termux 闭环。
+- board_decode_top GOOD 双证 (SF12): 每帧词量+128 全量 且 帧内 out_data 内容流活跃 (hsh_nz)
+  → led[3]; board_good_tb PASS 保持。
+- 语义: slice LUT=词表切片映像 (每实体8词), 板上真采 out_data 后 = 真 token 内容; 
+  PC 换真词表数据 = 烧录时预灌值变更, 结构/通路零改。
+
+## SF12+ P8 速度预算 (M25 逻辑深度预估, ys0.68 无时序报告, 供 PC 收敛参照)
+- 关键链1 router_sel 逐拍 top-T 插入: 16bit key {score,~idx} 比较 + pp 选 + 装载
+  ≈ 16位比较 ~5级 + select ~2级 = ~7-8 LUT 级。
+- 关键链2 assemble slice 读: slice_mem[caddr] 组合 ~9bit 地址 MUX = ~3级。
+- 关键链3 HV 候选 logit: fk(acc,cand) = (a*7+x*17)%23+FKXG*x —— 16×9 乘法 + mod23
+  组合 ≈ 9~12级; + output_head 窗内 top-K 插入 ~7级 ≈ 16-19级 (整链最重)。
+- 预算: 50MHz=20ns → 按 0.5ns/LUT ≈ 40级余量充裕; @124MHz≈8ns 深度~16级紧贴,
+  fk 建议 PC 侧改为两拍流水 (DBUFF) 再关联 (M63 已经 FKXG 远峰梯度, 深更深)。
+- 结论: M25 默认 50MHz 直连 (无 PLL) 收敛无虞; 若求 124+MHz 先处理 fk 流水。
