@@ -658,3 +658,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M93 第四弹 5 角 (单验全捕, 待入闸)**: P9×F5(窗界失配)、P5×F4×X1(o)、P1×F3×V512(窗内
   top-K)、P4×F2×K16×X1(o)、P7×F3×X1(窗内top-K@[912,1024))。
+
+**M94 SEED 全域浸泡 (run_decode_seed_sweep.sh) + 首捕刺激退化**: P0/P2 × SEED 0..15 全扫,
+  31 PASS; **P2S11 触发多样性守卫 4/12<5** (自回归近常数)。旁谱交叉: P0/P4/P5/P6/P8 S11 全
+  PASS, P2 与 P3 (双双节流谱) S11 退化 → 节流三态×seed11 的刺激退化 (守卫检测的是刺激质,
+  非产品缺陷; GEMM/o/rail 全断言仍绿)。守卫阈值保持 5 不动, 浸泡改为显式 DEGEN 计数留档。
