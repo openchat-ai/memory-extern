@@ -106,3 +106,10 @@ run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 fe
 - core_selftest PASS: token_done@160 a_words=128 全量; done@162 连续两次同 seed 哈希 ff81ff81 逐位一致;
   哈希域 = out_expert/words 流程稳态 (词表内容 x 属 PC 预灌, 见 SF5 契约)。
 - 词流实证: 128 词 / 每层 4 专家 ×8 词 × 4 层; 决策 expert 序 [0,4,1,14,...] 确定性。
+
+## SF11 板上自动判定 — board_decode_top v2
+- 帧制: tick[10:0] 帧周期 2048 拍, run 脉冲 16 拍 → 每 ~1632 拍一帧 token_done。
+- 判定: 每帧 token_done 时 a_words 增量恒 =128 → good++, 连续≥2 帧 → led[3]=GOOD 直接判活。
+- 帧哈希 hsh 留观测 (首帧 ff81ff81 与 core_selftest 同 seed 同值 = 仿真/板上同基准)。
+- board_good_tb PASS: GOOD(led3)@帧3起亮; led[2]=done led[1]=busy led[0]=心跳。
+- 帧间 LFSR 持续推进 (不重置) → hsh 逐帧不同属预期; 同 seed 对账由 core_selftest 承担。
