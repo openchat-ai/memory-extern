@@ -745,3 +745,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **∇角批A 5角 (全捕, 待入闸)**: P11×S7×F4(o)、P11×S5×F5(GEMM)、P2×F1×V512(GEMM t=8 c-族)、
   P2×F4×V512(o)、P0×H3×F1(GEMM)。
+
+**∇角批B 5角 (全捕, 待入闸)**: P1×T30×F1(GEMM t=11 gw=12)、P8×T30×F4(o)、P0×H9×T30×F3
+  (窗内top-K)、P4×T120×F5(窗内top-K)、P9×T120×F2(o)。
