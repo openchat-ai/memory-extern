@@ -649,3 +649,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M90 入闸 (3 行)**: P5×F1、P2×F5×X1 三叠、P0×F2×V512(单验全捕)入脚本 → 门 108 行,
   次轮全门闭环。
+
+**M91 第二弹 5 角 (单验全捕, 待入闸)**: P2×F2×V2048(o)、P4×F1×S5×V2048(GEMM t=11)、
+  F4@P11×K8(o)、P3×F4×B1(o 三叠)、P7×F5(窗内top-K)。CAUGHT 全模型族 +3 p-noise 角。
