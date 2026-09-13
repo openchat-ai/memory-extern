@@ -666,3 +666,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M90-闭 全门终验 (108 行)**: PASS=72 CAUGHT=36 WARN/FAIL/MISSED/ESCAPE/COMPILE/UNKNOWN
   全 0 rc=0。CAUGHT36=33(M88闭)+3(M90) 逐批自洽。M91-93 (15 角) 已台账待次轮闸。
+
+**M95 陈旧产物防呆**: run_row 编译前 rm -f 旧 .out/.log/.cerr —— 防某行失编译时 vvp
+  落旧绿 (伪造 PASS)。失编译路径将立即报 COMPILE-FAIL; 全门语义不变。
