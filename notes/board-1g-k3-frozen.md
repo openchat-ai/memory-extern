@@ -622,3 +622,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   M79 sram_pool换权, M80 sched_exec定址, M82 rail帧计数) + run_all_mutations.sh 重放器
   (与闸同族匹配语义)。首验 KILL=13/13 rc=0。击杀回归永久绿 = 当前 RTL 仍被 10 模块断言族
   钉死, 无逃逸。
+
+**M83/M84 远峰红队末角 + 语义分类器实跑终验**: F5@P11 (双错×远峰)、F1@P11×K12
+  (GEMM 族 t=2)、F2@P11×K16 (o 族) 全捕入闸; 全量门 (85 行 = PASS 71 + CAUGHT 14,
+  WARN/FAIL/ESCAPE/COMPILE 全 0) rc=0。M81 语义化分类器经全门实跑端到端验证。
