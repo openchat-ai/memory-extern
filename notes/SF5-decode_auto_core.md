@@ -97,3 +97,12 @@ run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 fe
   ③sl_reg 自保持被 iverilog 拒 unresolved ④ 端口悬空=干净 (input/output 均无连接即可)。
 - 状态: decode_auto_core (SF7) 与 board_decode_top (SF9) 均 iverilog/vvp/ys0.68 hierarchy 兼容;
   core_smoke PASS (run→busy 状态机连通)。
+
+## SF10 自驱闭环 — core 内嵌数据面 (SELFDRV=1), 真链真跑全完成
+- decode_auto_core 修改: ①SELFDRV 内嵌 LFSR 分值源, RUN 期每拍供专家(int_drv), full cred الم恒开;
+  ②occ_q 同拍吞吐 bug 修复: 通拍 out_valid&&credit_r 存量不动(原式在occ=0 时净+1 →
+  单调顶 2048 → 信用钳死 → assembler 卡死, 96拍后 cr=0 实证);
+  ③done 巡检 h_td_cap sticky 采集 (h_token_done@115 早于 token_done@160, 错拍两高永不达原条件)。
+- core_selftest PASS: token_done@160 a_words=128 全量; done@162 连续两次同 seed 哈希 ff81ff81 逐位一致;
+  哈希域 = out_expert/words 流程稳态 (词表内容 x 属 PC 预灌, 见 SF5 契约)。
+- 词流实证: 128 词 / 每层 4 专家 ×8 词 × 4 层; 决策 expert 序 [0,4,1,14,...] 确定性。
