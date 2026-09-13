@@ -81,3 +81,19 @@ run → 每步: query/feed 进→8 模块网→HV out_tok→ argmax→ 写回 fe
 - 迭代录: 3 处 `*_sf 化` (attn_inner_ctl_sf 打包端口 → route_asm_sf → head_vprune_sf cand 打包) 均为
   ys0.68 边界实证复述, 逐一对应已验证镜像。
 - 后续: core mini smoke (状态机连通) → PC 数据面填充 → 全核 P&R。
+
+## SF8 补记 — sram_pool_arb 账 (P4 定案)
+- termux 综合: LUT=95175/ALU=288/FF=428 (rc=0)。95K LUT 失真 = mem 数组未映射 BRAM 摊成
+  大 LUT 逻辑 (SF1 观察复证)。P4: 换 Gowin_DPB/SDPB 原语 (厂商工艺映射, 归 PC; termux 无网表) 。
+- core 资源预估更新: 现全部 *_sf 链单独账皆在; 全核 P&R 时以 BRAM 化后为准。
+
+## SF9 收口 — board_decode_top 整包可烧 (termux 全链闭环)
+- rtl/13_mega138k/board_decode_top.v: sys_clk 直连 50M / rst_n / led[3:0] (cst 复用 engine);
+  core 例化 + 周期 run 脉冲; led[0]=心跳 led[1]=busy led[2]=done led[3]=out_token[0]。
+- synth_gowin -top board_decode_top 全 *_sf 链 (14 文件) rc=0:
+  LUT=1410 ALU=750 FF=552 (LUT当量2.9K) — 占位数据面被常化折叠的激活核;
+  PC 夯真数据面 (ROM/外源) 后按真规模 P&R。
+- 迭代录: ①slice_addr 常数驱动拒 (ys) → 悬空 ②rail_feed 常数驱动拒 → 悬空
+  ③sl_reg 自保持被 iverilog 拒 unresolved ④ 端口悬空=干净 (input/output 均无连接即可)。
+- 状态: decode_auto_core (SF7) 与 board_decode_top (SF9) 均 iverilog/vvp/ys0.68 hierarchy 兼容;
+  core_smoke PASS (run→busy 状态机连通)。
