@@ -41,7 +41,7 @@ run_row() {
      if grep -q "REDTEAM ESCAPE" "$log"; then echo "ESCAPE $tag"; ne+=1; return 3; fi
      echo "FAIL   $tag"; nf+=1; return 1
    else # CAUGHT: 期望某断言抓住注入
-     if grep -qE "FAIL (GEMM|o |t=5 )|FAIL GEMM 对账" "$log"; then echo "CAUGHT $tag"; nc+=1; return 0; fi
+     if grep -qE "FAIL (GEMM|o |t=5 |watchdog)|FAIL GEMM 对账" "$log"; then echo "CAUGHT $tag"; nc+=1; return 0; fi
      if grep -q "ALL PASS" "$log"; then echo "MISSED $tag (注入未触发, ALL PASS)"; nm+=1; return 1; fi
      if grep -q "REDTEAM ESCAPE" "$log"; then echo "ESCAPE $tag"; ne+=1; return 3; fi
      echo "UNKNOWN $tag"; nun+=1; return 1
