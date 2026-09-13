@@ -146,6 +146,16 @@ run_row 11 0 5 120 1 0 1024 0 PASS; rc+=$?
 run_row 11 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
 run_row 11 0 5 12 1 1 1024 0 CAUGHT 12; rc+=$?
 run_row 11 0 5 12 1 2 1024 0 CAUGHT 16; rc+=$?
+# M85 红队残角批: profile/时钟/FBPOLY × 注入 (f1b1 掩蔽角不入 CAUGHT, 见 notes)
+run_row 3 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 7 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 8 0 5 12 1 2 1024 0 CAUGHT 16; rc+=$?
+run_row 6 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 0 0 1 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 0 0 15 12 1 3 1024 0 CAUGHT; rc+=$?
+run_row 0 0 5 12 1 1 1024 2 CAUGHT; rc+=$?
+run_row 9 0 5 12 1 1 1024 0 CAUGHT; rc+=$?
+run_row 1 0 5 12 1 4 1024 0 CAUGHT; rc+=$?
 
 echo "===================="
 echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"

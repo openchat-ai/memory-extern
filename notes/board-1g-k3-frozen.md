@@ -626,3 +626,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 **M83/M84 远峰红队末角 + 语义分类器实跑终验**: F5@P11 (双错×远峰)、F1@P11×K12
   (GEMM 族 t=2)、F2@P11×K16 (o 族) 全捕入闸; 全量门 (85 行 = PASS 71 + CAUGHT 14,
   WARN/FAIL/ESCAPE/COMPILE 全 0) rc=0。M81 语义化分类器经全门实跑端到端验证。
+
+**M85 红队残角批次 (9 行入闸)**: P3×F3、P7×F1、P8×F2×K16、P6×F5、F1@H1、F3@H15、
+  F1@B2、P9×F1、P1×F4 —— 全捕 (GEMM/o/窗族), 门 94 行 = PASS 71 + CAUGHT 23 rc=0。
+  **F1@B1 掩蔽角分析**: 固定注入点 (L0,e15,w1) 在 B1 粗态窗下落入"从不计分"切片 → 0PASS
+  (非缺陷; B1 专测态塌缩, 其余 10 剖面 F1 全捕)。留档不作 CAUGHT 门行, 注入点粒度问题记录。
