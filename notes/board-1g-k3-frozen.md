@@ -596,3 +596,9 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   M77 起 "77 行" 系记账错误——真执行数为 80 行); 修正为移入正文、exit 独立成行、
   run_row 增计数分账 (PASS/CAUGHT/FAIL/WARN/MISSED/ESCAPE/COMPILE/UNKNOWN), 横幅打
   诚实总计; 全门本应一律在横幅前收口, 收为脚本纪律。
+
+**M79 第13杀/第10模块 (sram_pool_arb) + watchdog 族分类器补洞**: 换权仲裁 `sel != act`
+  → `sel == act` (永不换权) 被 head 看门狗 t=0 捕 (ex_busy=1 st=5 卡死)。闸 CAUGHT 分类
+  正则原先仅 GEMM/o/窗内top-K/GEM 对账四族, watchdog 族漏记 → 补 ` |watchdog`。累计
+  突变台账 13 杀/10 模块: output_head×2, assembler, head_vprune×2, vocab_prune,
+  attn_window, gemv, router_sel, attn_inner, sched_exec, sram_pool_arb。
