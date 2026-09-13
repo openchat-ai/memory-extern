@@ -708,3 +708,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M108 第十二弹 5 角 (全捕, 待入闸)**: S5×F4(o)、S12×F3(窗界失配)、P11×S11×F3(窗内
   top-K, FKXG·seed11)、P1×S9×F5(窗界失配)、P4×S8×F4(o)。窗界失配族累计多谱复现。
+
+**M109 第十三弹 5 角 (全捕, 待入闸)**: P11×F1×K16(GEMM)、S14×F4(o)、P2×S6×F2(o)、
+  P8×S5×F3(窗内top-K)、P5×S12×F2(o)。
