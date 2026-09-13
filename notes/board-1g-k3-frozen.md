@@ -785,3 +785,34 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M98-111/A-F-闭 全门终验 (205 行)**: PASS=72 CAUGHT=133 (104+19+5+5 自洽) 全零 rc=0。
   门序守卫续役无死码。M120 盲格 5 行 (P3F5/P5F5/P7F2/P7F4/P9F3) 待入闸 → 门 210。
+
+## ===== 上板支线 (SF) 启动 =====
+
+**SF1 板上侦察 + 首份资源账**: 目标板 = Sipeed Tang Mega 138K (GW5AST-138, ~138K LUT4,
+DSP 298, DDR3 32bit)。既有基建: rtl/13_mega138k/ (board_top + engine_core 128-MAC MXFP4 +
+gowin_pll_400 封装 + .cst 物理引脚 + 板级 tb) —— 属旧核。
+待上板目标核 = rtl/41_decode_auto (验证最充分的 P2 算主线), DUT 网 8 模块
+(route_asm/sched_exec/gemv_rail_ctl/sram_pool_arb/attn_window/attn_inner_ctl/gemv_array_128/head_vprune)。
+
+**synth_gowin 首测资源账 (yosys 0.68, tb 默认参数)**:
+| 模块 | LUT 当量 | FF | 备注 |
+|---|---|---|---|
+| gemv_array_128 (128MAC) | ~10.3K | 80 | 主力 |
+| sched_exec | ~11.8K | 1895 | |
+| attn_window | ~1.4K | 1305 | |
+| gemv_rail_ctl | ~0.65K | 475 | |
+| sram_pool_arb | 95K(失真) | 535 | 8Kb 数组被 LUT 展开 → 需 BRAM 化 |
+| route_asm/router_sel | — | — | v:92 for 循环界非常量 → 不可综合 |
+| head_vprune | — | — | v:55 cand_w 数组索引不足 → 不可综合 |
+(说明: ALU≈2 LUT 折算; 未 BRAM 化前数组被逻辑展开, 故内存面账待改造后重测)
+
+**综合化改造清单 (SF2 起, 每刀保持语义 + 走 210/独立TB 回归护航)**:
+1. router_sel.v for 循环边界 (ii<TOP 非常量) → 常量展开/生成
+2. head_vprune.v cand_w 索引语义 (55 行) → 常数界重构
+3. sram_pool_arb.v mem → 高云 BRAM 原语 (SP/DP 宏)
+4. 词表/反馈 → ROM 固化 (PROFILE0 确定性; EX16×TOP4×EW8×NL4 = 4KB 量级)
+5. attn_inner_ctl/route_asm 后续逐个 synth 复核
+
+**上板路线**: 综合化改造 → 抽 decode_auto_core (TB 环路逆成 clk/rst/go/tok 闭环,
+反馈闭环) → 板上顶层 (PLL 400 + LED + rst + LCD/UART) → **PC 上 Gowin EDA** P&R+烧录
+(termux 侧到 yosys 综合为止)。
