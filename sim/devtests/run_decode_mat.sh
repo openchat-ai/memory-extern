@@ -22,6 +22,7 @@ run_row() {
   local tag=P${prof}S${seed}H${half}T${tn}F${fault}n${probeon}V${voc}B${fbpol}K${nk}X${fkxg}
   local out="$OUT/mat_$tag.out"
   local cerr="$OUT/mat_$tag.cerr"
+  rm -f "$out" "$OUT/mat_$tag.log" "$cerr"      # 防陈旧产物: 失编译=vvp无物=必报, 不落旧绿
   ( cd "$ROOT" && iverilog -g2012 -s decode_auto_tb \
       -P decode_auto_tb.PROFILE=$prof -P decode_auto_tb.SEED=$seed -P decode_auto_tb.HALF=$half \
       -P decode_auto_tb.TN=$tn -P decode_auto_tb.PROBEON=$probeon -P decode_auto_tb.FAULT=$fault \
