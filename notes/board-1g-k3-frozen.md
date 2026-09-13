@@ -689,3 +689,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M102 第八弹 5 角 (全捕, 待入闸)**: P11×F3×B1(窗内top-K@lbw+109)、S8×F2(o)、P0×F1×V2048
   (GEMM gw=4)、P11×F2×K5(o)、P2×F4×K12(o)。角谱覆盖已近稠密。
+
+**M103 第九弹 5 角 (全捕)**: P11×S7×F2(o)、P11×S5×F3(窗内top-K@lbw+110)、P0×S3×F2(o)、
+  P4×S10×F2(o)、P2×S13×F4(o)。FKXG×非零 seed 相位独立成角。
