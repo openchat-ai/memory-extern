@@ -833,3 +833,15 @@ gowin_pll_400 封装 + .cst 物理引脚 + 板级 tb) —— 属旧核。
   方案 = SF 镜像 rtl/13_mega138k/attn_inner_ctl_sf.v: 与产品版逐行同步, 唯一差异 q_vec 端口打包
   (32*WPR-1:0) + generate 切片。产品源码/验证 tb 零改动 (此前对该文件的 3 处编辑已回滚)。
   资源账: LUT≈10831 当量, FF≈206, synth_gowin 一次过。
+
+**SF3-P1/P2 镜像就绪 (综合留 PC)**:
+  - P1 router_sel_sf.v: 4 处 for 常量变换 (RT=16; 运行条件 ii<TOP/ii>pp 全部提进 if;
+    2nd 表达式纯常量 ii>=0)。ys0.68 对 RT 大展开的 max-tree 有多驱 bug (out_* 重复驱动,
+    128/16 均触发) → 上板综合留 PC Gowin EDA; 等价性由逐行 diff 审查支撑。
+  - P2 head_vprune_sf/vocab_prune_sf/output_head_sf.v: vocab_prune 数组端口打包 (CAP*CW-1:0) +
+    output_head 6 处 for KT 常量变换 (KT=16, 含 &&!ok 提入 if —— 2nd expr 纯常量约束)。
+    全链 hierarchy 检查 0 ERROR。
+  - P3 attn_inner_ctl_sf.v 已账 (LUT≈10.8K FF≈206) 为本轮唯落地综合账。
+  - 待办: LOCKSTEP 等价对账 (产品×镜像同激励比对) 计划 PC 平台补验; 手机 CPU 对
+    head_vprune (VOC512 全组合 fk) 重综合易 OOM, 一并留 PC。
+  - 环境纪律: termux 会话长前台/重 yosys 合成会挂断会话 (alumacc 大展开), 一律后台化+轮询。
