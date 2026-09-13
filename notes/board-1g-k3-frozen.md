@@ -663,3 +663,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   31 PASS; **P2S11 触发多样性守卫 4/12<5** (自回归近常数)。旁谱交叉: P0/P4/P5/P6/P8 S11 全
   PASS, P2 与 P3 (双双节流谱) S11 退化 → 节流三态×seed11 的刺激退化 (守卫检测的是刺激质,
   非产品缺陷; GEMM/o/rail 全断言仍绿)。守卫阈值保持 5 不动, 浸泡改为显式 DEGEN 计数留档。
+
+**M90-闭 全门终验 (108 行)**: PASS=72 CAUGHT=36 WARN/FAIL/MISSED/ESCAPE/COMPILE/UNKNOWN
+  全 0 rc=0。CAUGHT36=33(M88闭)+3(M90) 逐批自洽。M91-93 (15 角) 已台账待次轮闸。
