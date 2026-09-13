@@ -766,3 +766,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
   主轴全复 (SEED16/16, FAULT 0-5, HALF{1,3,5,9,15}, TN{12,30,60,120,280}, K{3,5,8,12,16},
   FKXG{0,1}, FBPOLY{0,1,2}, NVOC{512,1024,2048}@门), PROBEON{0,1};
   PROFILE×FAULT 56/66 格 (掩蔽角 F1@B1/F1@S11 除外)。V256/V384 由 NVOC 浸泡谱补证。
+
+**∇角批F 5角 (全捕, 待入闸)**: P11×F1×V384(GEMM gw=8)、P2×F2×V768×K12(o)、P0×H9×T60×F4(o)、
+  P6×H15×T60×F1(GEMM gw=8)、P11×T60×F3(窗内top-K@窗[912,1024))。
