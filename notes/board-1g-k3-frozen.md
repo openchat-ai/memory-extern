@@ -711,3 +711,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M109 第十三弹 5 角 (全捕, 待入闸)**: P11×F1×K16(GEMM)、S14×F4(o)、P2×S6×F2(o)、
   P8×S5×F3(窗内top-K)、P5×S12×F2(o)。
+
+**M110 第十四弹 5 角 (全捕, 待入闸)**: P2×F5×V512×X1(GEMM t=2, c 族移位码型 4dcc)、
+  P11×F5×B1(窗内top-K)、P0×S9×F2(o)、P6×S7×F4(o)、P3×S2×F3(窗内top-K)。
