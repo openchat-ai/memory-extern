@@ -702,3 +702,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M106 门行元组静审 (123 行)**: 参数元组 (P,S,H,T,PR,FL,V,B,K,NK,FKXG) 含默认 K3X0 规范化后
   无任何重复; 首审误报 10 处为审计正则剥默认之误, 已双通道复核。
+
+**M107 第十一弹 5 角 (全捕, 待入闸)**: P11×S5×F1(GEMM t=1, seed 移相)、S15×F2(o)、
+  P4×S6×F3(窗内top-K)、P7×S4×F5(窗内top-K)、P11×T60×F4×K16(o)。
