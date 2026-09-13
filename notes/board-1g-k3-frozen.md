@@ -669,3 +669,8 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M95 陈旧产物防呆**: run_row 编译前 rm -f 旧 .out/.log/.cerr —— 防某行失编译时 vvp
   落旧绿 (伪造 PASS)。失编译路径将立即报 COMPILE-FAIL; 全门语义不变。
+
+**M97 断言支路活性盘点**: 门/突变谱 live 族 = {窗内top-K、窗界失配、GEMM对账、o-镜像、
+  watchdog(M79)、rail(M82)}; 其余 FAIL 支 (释放数/裕量8/14/装配层完成/节流下/背压停顿/
+  池切换/头吐条数/头round/全账累计/总增量/周期超限/acc扰动/黄金漏出) 在 108 行×15 注×13
+  突变全谱内**零失配** —— 双记账/Sanity 防御带行为符合设计 (与镜像恒 lockstep), 跨族冗余兜底。
