@@ -286,6 +286,12 @@ run_row 2 0 5 12 1 2 768 0 CAUGHT 12; rc+=$?
 run_row 0 0 9 60 1 4 1024 0 CAUGHT; rc+=$?
 run_row 6 0 15 60 1 1 1024 0 CAUGHT; rc+=$?
 run_row 11 0 5 60 1 3 1024 0 CAUGHT; rc+=$?
+# ∇M120 补盲格 (5 行入闸)
+run_row 3 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 5 0 5 12 1 5 1024 0 CAUGHT; rc+=$?
+run_row 7 0 5 12 1 2 1024 0 CAUGHT; rc+=$?
+run_row 7 0 5 12 1 4 1024 0 CAUGHT; rc+=$?
+run_row 9 0 5 12 1 3 1024 0 CAUGHT; rc+=$?
 
 echo "===================="
 echo "decode_auto 回归门: PASS=$np CAUGHT=$nc WARN=$nw FAIL=$nf MISSED=$nm ESCAPE=$ne COMPILE=$ncf UNKNOWN=$nun 总计=$((np+nc+nf+nw+ne+nm+ncf+nun)) rc=$rc (0=全绿)"
