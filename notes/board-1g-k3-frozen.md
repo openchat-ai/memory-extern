@@ -769,3 +769,7 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **∇角批F 5角 (全捕, 待入闸)**: P11×F1×V384(GEMM gw=8)、P2×F2×V768×K12(o)、P0×H9×T60×F4(o)、
   P6×H15×T60×F1(GEMM gw=8)、P11×T60×F3(窗内top-K@窗[912,1024))。
+
+**M114-闭**: TN 浸泡 45/45 = PASS15 + CAUGHT30 rc=0 (T12..280 × P0/P2/P11 × F0-2 全谱);
+  DEGEN 0 (节流 T280 长程仍稳)。**M116-闭**: HALF 浸泡 60/60 = PASS15 + CAUGHT45 rc=0
+  (H1/3/5/9/15 × P0/P2/P11 × F0-3)。两轴系统完证。
