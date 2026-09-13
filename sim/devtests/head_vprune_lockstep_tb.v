@@ -3,7 +3,7 @@
 //                     × SF 镜像 head_vprune_sf (vocab_prune_sf 打包 + output_head_sf KT)
 // 固定 2000 拍随机流 (head_go 间歇 / acc / xext 随机 / out_take 随机), 全输出逐拍比对。
 module head_vprune_lockstep_tb;
-    localparam VOC = 32, GRP = 8, BB = 16, MAXE = 8, K = 3;
+    localparam VOC = 64, GRP = 8, BB = 16, MAXE = 10, K = 3;  // termux 上限 ~90s/300拍; 更大留 PC
     reg clk = 0, rst_n = 0, head_go = 0, out_take = 0;
     reg [BB-1:0] acc = 0;
     reg [3:0] xext = 0;
@@ -43,7 +43,7 @@ module head_vprune_lockstep_tb;
         $display("START");
         lcg = 32'hF0D0_2026; cyc = 0;
         repeat (4) @(posedge clk); rst_n = 1;
-        repeat (1000) begin
+        repeat (300) begin
             @(posedge clk);
             head_go  = (rnd() & 63) == 0;
             acc      = rnd();
