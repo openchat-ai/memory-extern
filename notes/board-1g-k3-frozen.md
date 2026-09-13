@@ -782,3 +782,6 @@ calc_k3_shared_pool.py 新增 `--batch N`(trunk 摊销 55.6/N) + `--stall F`(无
 
 **M121 独立 TB 链再证**: M19/M21/M23/M24/M38-kv/M38-kr/M59-wb/M59-wd/M65-loop 9/9 ALL PASS
   (与门 205 并行, reg_*.out 无冲突)。
+
+**M98-111/A-F-闭 全门终验 (205 行)**: PASS=72 CAUGHT=133 (104+19+5+5 自洽) 全零 rc=0。
+  门序守卫续役无死码。M120 盲格 5 行 (P3F5/P5F5/P7F2/P7F4/P9F3) 待入闸 → 门 210。
