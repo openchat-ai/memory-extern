@@ -1,15 +1,26 @@
-# freq800_sentry PnR 结果�?800 哨兵，PLL-X800 + fabric 1.25ns 收敛判定�?
+# freq800_sentry PnR + 上硅结果 (800 哨兵, PLL-X800)
+# ===== PnR (2026-09-14) =====
 route_option = 2
 place_option = 3
 max_fanout = 100
-elapsed_s = 72
+elapsed_s = 66
 status = PNR-DONE
+# clk_800 域最差 SETUP slack = -1.177ns (计数链); HOLD 正; TA1123/PA1019 已随
+#   FBDIV 修正消失(工具采纳 1.25ns 约束后方有此负值) -> fabric 1.25ns 收不住,
+#   但这是计数链固有延迟, 与 PLL 是否锁无关。
 
-# PC 物理烧录观测 (2026-09-14, SRAM -r 2, ID 0x0001081B)
-# led 引脚偏差: 文档 led_lock=L25 非板载 LED, 真表改 J14(LED0); led_slow=M25(LED3); led_go=R26(LED1)
-# LED 共阳低亮, board 顶层对 led_lock/led_go/led_slow 取反后驱动 (锁定时亮)
-pll_lock = OFF (LED0/LED1 全灭)
-led_slow = NOTTOGGLE (LED3 恒亮, cnt 卡 0, 无 800 时钟)
-verdict = SENTRY-FAIL
-note = 800 全数据面维持 600 保底 (见 notes/FREQ800-FEASIBILITY.md)
-evidence = PA1019(VCO/CLKOUT0 越界) + TA1123(PLL 模型不符) + timing_paths 最差 SETUP -0.184ns / MPW -0.801ns
+# ===== 关键修正 (BUG, 2026-09-14) =====
+# gowin_pll_x800.v 原 FBDIV_SEL=16 + MDIV_SEL=16 -> VCO=12800MHz 越界(650-1300)
+#   -> PLL 物理不锁, 导致首烧 SENTRY-FAIL 为假象。修正 FBDIV_SEL=1 (VCO=800MHz,
+#   ODIV0=1 -> 800MHz 输出), PA1019/TA1123 消失。
+
+# ===== 上硅观测 (2026-09-14 第二次烧录, key-LED 诊断版) =====
+# 视图000(松手):  LED0(pll_lock) 常亮 + LED1(cnt[4])/LED3(cnt[5]) 微亮(50%占空)
+# 视图111(三键):  0/1/3 全常亮 = pll_lock 恒 1
+# -> PLL-X800 真锁 800MHz, 计数器在 800 域持续翻转。
+
+# ===== 定论 =====
+# PLL-X800: PASS (锁得住)
+# fabric 800MHz: FAIL-TIMING (计数链 setup -1.177ns) -> 全数据面 800MHz 不可强制,
+#   800 决策仍维持指向 600 保底, 但根因已澄清为"fabric 时序"而非"PLL 不锁"。
+# 详见 notes/FREQ800-FEASIBILITY.md。

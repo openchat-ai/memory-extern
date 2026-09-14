@@ -1,10 +1,8 @@
 // ============================================================================
-// freq800_sentry.cst — 800 哨兵引脚约束
+// freq600_sentry.cst — 600 哨兵引脚约束 (与 800 版同引脚)
 // 芯片：GW5AST-LV138FPG676AC1/I0（封装 FCPBG676A，Device Version: B）
-// 引脚：sys_clk=P16(50M) rst_n=K16(S0) LED: J14/LED0 R26/LED1 M25/LED3
-// 注：docs/PC-BURN-EXECUTION.md 原定 led_lock=L25 —— L25 经 PnR 报告为自由
-//     GPIO(IOR89[B]) 非板载 LED(板上 LED=N23/N21/M25/L20/R26/J14)，观测不到，
-//     故 led_lock 改接真实 LED0=J14。led_slow=M25 / led_go=R26 按文档。
+// 引脚：sys_clk=P16(50M) rst_n=K16(S0) key1/2/3=F15/G15/G16
+//       LED: J14/LED0 R26/LED1 M25/LED3
 // ============================================================================
 
 // ---- 时钟（P16 板载 50MHz 振荡器）----

@@ -6,10 +6,10 @@
 //Device: GW5AST-138B
 //Device Version: B
 //Created Time: Tue Aug 08 21:50:55 2023
-// --- modified: X200 模板改 ODIV0_SEL 4->1, 输出 800MHz (VCO=800 / ODIV0=1) ---
-// --- FIX 2026-09-14: 原 FBDIV_SEL=16 双重乘 16 → VCO=12800MHz 越界(650-1300),
-//     PLL 物理不锁。正确 FBDIV_SEL=1 (VCO=50*1*16=800MHz), ODIV0=1 → 800MHz。 ---
-module Gowin_PLL_X800 (clkout0, lock, clkin);
+// --- modified: X800 模板改输出 600MHz ---
+// VCO = FCLKIN*FBDIV_SEL*MDIV/IDIV = 50*1*24/1 = 1200MHz (650-1300 合法)
+// CLKOUT0 = FVCO/ODIV0 = 1200/2 = 600MHz
+module Gowin_PLL_X600 (clkout0, lock, clkin);
 
 output wire clkout0;
 output wire lock;
@@ -101,7 +101,7 @@ defparam PLL_inst.FCLKIN = "50";
 defparam PLL_inst.IDIV_SEL = 1;
 defparam PLL_inst.FBDIV_SEL = 1;
 defparam PLL_inst.CLKFB_SEL = "INTERNAL";
-defparam PLL_inst.ODIV0_SEL = 1;
+defparam PLL_inst.ODIV0_SEL = 2;
 defparam PLL_inst.ODIV0_FRAC_SEL = 0;
 defparam PLL_inst.ODIV1_SEL = 8;
 defparam PLL_inst.ODIV2_SEL = 8;
@@ -109,7 +109,7 @@ defparam PLL_inst.ODIV3_SEL = 8;
 defparam PLL_inst.ODIV4_SEL = 8;
 defparam PLL_inst.ODIV5_SEL = 8;
 defparam PLL_inst.ODIV6_SEL = 8;
-defparam PLL_inst.MDIV_SEL = 16;
+defparam PLL_inst.MDIV_SEL = 24;
 defparam PLL_inst.MDIV_FRAC_SEL = 0;
 defparam PLL_inst.CLKOUT0_EN = "TRUE";
 defparam PLL_inst.CLKOUT1_EN = "FALSE";
@@ -175,4 +175,4 @@ defparam PLL_inst.CLKOUT0_DT_STEP = 0;
 defparam PLL_inst.CLKOUT1_DT_STEP = 0;
 defparam PLL_inst.CLKOUT2_DT_STEP = 0;
 defparam PLL_inst.CLKOUT3_DT_STEP = 0;
-endmodule //Gowin_PLL_X800
+endmodule //Gowin_PLL_X600
