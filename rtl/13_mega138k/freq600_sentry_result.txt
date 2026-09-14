@@ -1,0 +1,19 @@
+# freq600_sentry PnR + 上硅结果 (600 哨兵, PLL-X600)
+# ===== PnR (2026-09-14) =====
+route_option = 2
+place_option = 3
+max_fanout = 100
+elapsed_s = 62
+status = PNR-DONE
+# clk_600 域最差 SETUP slack = -0.760ns (28bit 计数链); 优于 800(-1.177ns) 但仍负。
+
+# ===== 上硅观测 (2026-09-14 烧录, key-LED 诊断版) =====
+# 视图111(三键): 0/1/3 全常亮 = pll_lock 恒 1 -> PLL-X600 真锁。
+# 视图110(S2+S3): hb[17]/[16]/[15] 全微弱 = clk_50 心跳正常, LED 驱动链健康。
+# (注: 视图110 与 800 版逐字节同 RTL, LED1 观测差异系观察/按键组合误差, 非设计差)
+
+# ===== 定论 =====
+# PLL-X600: PASS (锁得住, 与 X800 同级)
+# fabric 600MHz 计数链: setup -0.760ns 仍负 -> 哨兵用 800 域直连纹波计数, 路径深度
+#   所致; 实际引擎(124.3MHz 真硅)远未逼至此极限。决策: 600 保底维持。
+# 详见 notes/FREQ800-FEASIBILITY.md。

@@ -7,6 +7,8 @@
 //Device Version: B
 //Created Time: Tue Aug 08 21:50:55 2023
 // --- modified: X200 模板改 ODIV0_SEL 4->1, 输出 800MHz (VCO=800 / ODIV0=1) ---
+// --- FIX 2026-09-14: 原 FBDIV_SEL=16 双重乘 16 → VCO=12800MHz 越界(650-1300),
+//     PLL 物理不锁。正确 FBDIV_SEL=1 (VCO=50*1*16=800MHz), ODIV0=1 → 800MHz。 ---
 module Gowin_PLL_X800 (clkout0, lock, clkin);
 
 output wire clkout0;
@@ -97,7 +99,7 @@ defparam PLL_inst.DYN_ICP_SEL = "FALSE";
 defparam PLL_inst.DYN_LPF_SEL = "FALSE";
 defparam PLL_inst.FCLKIN = "50";
 defparam PLL_inst.IDIV_SEL = 1;
-defparam PLL_inst.FBDIV_SEL = 16;
+defparam PLL_inst.FBDIV_SEL = 1;
 defparam PLL_inst.CLKFB_SEL = "INTERNAL";
 defparam PLL_inst.ODIV0_SEL = 1;
 defparam PLL_inst.ODIV0_FRAC_SEL = 0;

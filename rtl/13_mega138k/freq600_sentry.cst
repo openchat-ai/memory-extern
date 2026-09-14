@@ -1,0 +1,30 @@
+// ============================================================================
+// freq600_sentry.cst — 600 哨兵引脚约束 (与 800 版同引脚)
+// 芯片：GW5AST-LV138FPG676AC1/I0（封装 FCPBG676A，Device Version: B）
+// 引脚：sys_clk=P16(50M) rst_n=K16(S0) key1/2/3=F15/G15/G16
+//       LED: J14/LED0 R26/LED1 M25/LED3
+// ============================================================================
+
+// ---- 时钟（P16 板载 50MHz 振荡器）----
+IO_LOC  "sys_clk" P16;
+IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF PULL_STRENGTH=STRONG BANK_VCCIO=3.3;
+
+// ---- 复位按键（S0）----
+IO_LOC  "rst_n" K16;
+IO_PORT "rst_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+
+// ---- 功能按键（S1/S2/S3）：key-LED 诊断视图选择 ----
+IO_LOC  "key1" F15;
+IO_PORT "key1" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+IO_LOC  "key2" G15;
+IO_PORT "key2" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+IO_LOC  "key3" G16;
+IO_PORT "key3" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+
+// ---- LED：led_lock(lock 同步链) / led_slow(800 域翻转) / led_go ----
+IO_LOC  "led_lock" J14;
+IO_PORT "led_lock" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led_slow" M25;
+IO_PORT "led_slow" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led_go" R26;
+IO_PORT "led_go" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
