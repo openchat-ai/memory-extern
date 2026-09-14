@@ -1,0 +1,24 @@
+// ============================================================================
+// freq800_sentry.cst — 800 哨兵引脚约束
+// 芯片：GW5AST-LV138FPG676AC1/I0（封装 FCPBG676A，Device Version: B）
+// 引脚：sys_clk=P16(50M) rst_n=K16(S0) LED: J14/LED0 R26/LED1 M25/LED3
+// 注：docs/PC-BURN-EXECUTION.md 原定 led_lock=L25 —— L25 经 PnR 报告为自由
+//     GPIO(IOR89[B]) 非板载 LED(板上 LED=N23/N21/M25/L20/R26/J14)，观测不到，
+//     故 led_lock 改接真实 LED0=J14。led_slow=M25 / led_go=R26 按文档。
+// ============================================================================
+
+// ---- 时钟（P16 板载 50MHz 振荡器）----
+IO_LOC  "sys_clk" P16;
+IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF PULL_STRENGTH=STRONG BANK_VCCIO=3.3;
+
+// ---- 复位按键（S0）----
+IO_LOC  "rst_n" K16;
+IO_PORT "rst_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+
+// ---- LED：led_lock(lock 同步链) / led_slow(800 域翻转) / led_go ----
+IO_LOC  "led_lock" J14;
+IO_PORT "led_lock" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led_slow" M25;
+IO_PORT "led_slow" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led_go" R26;
+IO_PORT "led_go" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;

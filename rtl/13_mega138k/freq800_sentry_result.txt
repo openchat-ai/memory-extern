@@ -1,0 +1,15 @@
+# freq800_sentry PnR 结果�?800 哨兵，PLL-X800 + fabric 1.25ns 收敛判定�?
+route_option = 2
+place_option = 3
+max_fanout = 100
+elapsed_s = 72
+status = PNR-DONE
+
+# PC 物理烧录观测 (2026-09-14, SRAM -r 2, ID 0x0001081B)
+# led 引脚偏差: 文档 led_lock=L25 非板载 LED, 真表改 J14(LED0); led_slow=M25(LED3); led_go=R26(LED1)
+# LED 共阳低亮, board 顶层对 led_lock/led_go/led_slow 取反后驱动 (锁定时亮)
+pll_lock = OFF (LED0/LED1 全灭)
+led_slow = NOTTOGGLE (LED3 恒亮, cnt 卡 0, 无 800 时钟)
+verdict = SENTRY-FAIL
+note = 800 全数据面维持 600 保底 (见 notes/FREQ800-FEASIBILITY.md)
+evidence = PA1019(VCO/CLKOUT0 越界) + TA1123(PLL 模型不符) + timing_paths 最差 SETUP -0.184ns / MPW -0.801ns
