@@ -84,3 +84,4 @@ LLCBench/
 # 路演交付产物
 项目路演.html
 项目路演PPT.pptx
+.build/

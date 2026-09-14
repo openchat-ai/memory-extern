@@ -50,7 +50,10 @@ module core_stress_tb;
         wr_en = 0;
         run = 1; @(posedge clk); run = 0;
         for (cyc = 0; cyc < 5000; cyc = cyc + 1) begin
-            @(posedge clk);
+@(posedge clk);
+            if (0)
+                $display("t=%0d cred=%0b R=%0d A=%0d lay=%0d caddr=%3d Bwords=%0d", cyc, UB.stress_credit,
+                    UB.u_ras.R.st, UB.u_ras.A.st, UB.u_ras.A.lay_idx, UB.u_ras.A.caddr, awB);
             if (ovA && awA > swA) begin hA = {hA[30:0], hA[31]^expA[0]} ^ {expA[3:0], odA[3:0]}; seqA[awA-1] = {expA, odA[3:0]}; swA <= awA; end
             if (ovB && awB > swB) begin hB = {hB[30:0], hB[31]^expB[0]} ^ {expB[3:0], odB[3:0]}; seqB[awB-1] = {expB, odB[3:0]}; swB <= awB; end
             if (doneA) dfA = 1;
