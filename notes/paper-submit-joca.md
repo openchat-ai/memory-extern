@@ -1,4 +1,4 @@
-# 命中率指标掩盖的慢介质全量重读：MoE 推理平台的实证分析与排查判据
+# 命中率掩盖的慢介质全量重读：跨介质复用落地方法（CUReM）与实证
 
 （按《计算机应用》投稿格式编排，2026-09）
 
@@ -10,19 +10,19 @@
 
 ## 摘要
 
-针对受内存约束的混合专家（MoE）大模型推理平台，本文实测发现一个被"缓存命中率"白板指标完全掩盖的带宽问题：引擎报告命中率 100% 时，每个 token 仍须从慢介质全量重读专家权重。以 2.8T 参数开源模型在 k3 x86 主机上的冷启动推理为对象，字节级台账显示每 token 专家段从慢盘读取 25.83 GB、耗时 303.58 s、占端到端 94%，而命中率指标未反映这一事实。本文将问题归因于"复用未落在数据能到达的最快介质层"，给出形式化判据：若复用发生在最快层，各慢层的最小读取次数为 1，且该下界可通过缓存调度达到。对照实验中，专家权重迁入 L2 介质后专家段耗时降低约 37%，方向与判据一致；进一步按判据引导的替换策略与元数据持久化改动使专家盘读降低 19%、稳态耗时降低 10%。实测数字仅对本实验成立，判据与排查次序可迁移至同类平台。
+针对受内存约束的混合专家（MoE）大模型推理平台，本文实测发现一个被"缓存命中率"白板指标完全掩盖的带宽问题：引擎报告命中率 100% 时，每个 token 仍须从慢介质全量重读专家权重。以 2.8T 参数开源模型在 k3 x86 主机上的冷启动推理为对象，字节级台账显示每 token 专家段从慢盘读取 25.83 GB、耗时 303.58 s、占端到端 94%，而命中率指标未反映这一事实。本文先将问题归因于"复用未落在数据能到达的最快介质层"，形式化判据"若复用发生在最快层，各慢层最小读取次数为 1"；进而将判据落地为可执行方法 CUReM（跨介质复用落地方法），含双观测、介质迁移、替换策略选择、双断言验收四步。对照实验中专家迁入 L2 介质使专家段耗时降低 37%；按 CUReM 实现的 heat 替换策略与 L2 元数据持久化使专家盘读降低 19%、稳态耗时降低 10%，输出逐 id 一致。实测数字仅对本实验成立，判据与 CUReM 方法可迁移至同类平台。
 
-**关键词：** 混合专家模型；大模型推理；缓存命中率；存储层次；带宽墙；工程实测；缓存替换策略
+**关键词：** 混合专家模型；大模型推理；缓存命中率；存储层次；带宽墙；缓存替换策略；工程实测方法
 
 ## Title
 
-**Slow-Media Full Re-Reads Masked by Hit-Rate Metrics: An Empirical Analysis and Diagnostic Criterion for MoE Inference Platforms**
+**Slow-Media Full Re-Reads Masked by Hit-Rate Metrics: A Cross-media Reuse Method (CUReM) with Empirical Evaluation**
 
 Author Name; Affiliation, City Province, China
 
-**Abstract:** Mixture-of-Experts (MoE) large-model inference on memory-constrained hosts can be bounded by weight movement rather than compute. This paper reports an empirical finding: although the engine reported a 100% cache hit rate, byte-level tracing showed every token still re-read 25.83 GB of expert weights from the slow disk, taking 303.58 s or 94% of end-to-end time. The hit-rate metric and byte-transfer fact are two observation surfaces, and the former can completely mask the latter. We formalize a diagnostic criterion: if reuse happens in the fastest media layer, each slower layer must be read at least once, and the bound is reachable by caching. A controlled experiment moving experts into an L2 tier cut expert-stage time by 37%; criterion-guided changes (replacement policy, metadata persistence) further cut expert disk reads by 19% and steady-state time by 10%. Figures hold only for this experiment; the criterion and triage order transfer to similar platforms.
+**Abstract:** Mixture-of-Experts (MoE) large-model inference on memory-constrained hosts can be bounded by weight movement rather than compute. This paper reports an empirical finding: although the engine reported a 100% cache hit rate, byte-level tracing showed every token still re-read 25.83 GB of expert weights from the slow disk, taking 303.58 s or 94% of end-to-end time. The hit-rate metric and byte-transfer fact are two observation surfaces, and the former can completely mask the latter. We formalize a diagnostic criterion (if reuse happens in the fastest media layer, each slower layer must be read at least once) and instantiate it as an executable method CUReM (Cross-media Reuse Method) with four steps: dual observation, media migration, replacement-policy selection, and dual-assertion validation. A controlled experiment moving experts into an L2 tier cut expert-stage time by 37%; criterion-guided changes (heat replacement policy, L2 metadata persistence) further cut expert disk reads by 19% and steady-state time by 10% with token-identical output. Figures hold only for this experiment; the criterion and CUReM transfer to similar platforms.
 
-**Keywords:** Mixture-of-Experts; LLM inference; cache hit rate; storage hierarchy; bandwidth wall; engineering measurement; cache replacement policy
+**Keywords:** Mixture-of-Experts; LLM inference; cache hit rate; storage hierarchy; bandwidth wall; cache replacement policy; engineering measurement method
 
 ## 1 引言
 
@@ -44,7 +44,7 @@ Author Name; Affiliation, City Province, China
 
 1. 提供可逐字节回查的字节流台账，揭示"命中率白板指标与慢介质全量重读并存"的现实；
 2. 把现象归因提炼为一条可排查的判据（复用必须落在数据能到达的最快介质层），并给出形式化表述与证明；
-3. 用对照实验（专家迁入 L2 介质，专家段耗时 −37%）验证判据的方向有效性，并报告判据引导的三次后续开发决策及其可测收益，形成"实测发现 → 抽象判据 → 反哺开发"的闭环。
+3. 将判据落地为可执行方法 CUReM（双观测、介质迁移、替换策略选择、双断言验收四步），用对照实验（专家迁入 L2 介质，专家段耗时 −37%）与替换策略/元数据持久化改动（专家盘读 −19%、稳态 −10%）验证方法有效性，输出逐 id 一致。
 
 ## 2 相关工作
 
@@ -130,32 +130,21 @@ vLLM/PagedAttention[9] 用分页缓存消除 KV 碎片，可视为"让复用尽�
 
 第 3 章判据属逻辑层，其真值不依赖本节任何数字；本节台账属真机层，账实一致、可回查，但只对本实验（该模型、该介质、该负载、该冷启动时序）成立。台账中如实记录挂死/FAIL 条目（如 D-state 永久挂起），未选择性剔除负样本。
 
-## 5 讨论与应用
+## 5 跨介质复用落地方法（CUReM）
 
-### 5.1 排查次序：先问"复用落在哪一层"
+第 3 章判据回答"复用应落在哪一层、下界是多少"，但按 3.4 的边界，它不回答"如何达到"。本节把第 4 章三次实测决策（L2 介质迁移、L1 替换策略、双观测）组织成一条可执行的方法 **CUReM（Cross-media Reuse Method，跨介质复用落地方法）**：输入是"命中率白板 + 字节账"两个观测面，输出是让慢层读取次数逼近判据下界的一组最小改动。该方法以判据为理论依据，每一步都以第 4 章与台账[13]的真机数字验证。
 
-1. 算法能否免读：该数据项是否必须被读取（如专家是否真是路由集合的必要输入）；
-2. 能否缓存复用：读取结果能否在快层驻留并被复用（即判据在场条件）；
-3. 落盘位置：若必须慢读，权重是否至少置于参与路径中较快的介质；
-4. 落盘前压缩：能否先压缩再落盘，减少届时必须搬动的字节。
+### 5.1 步骤一：双观测（命中率与字节账并行）
 
-本案例中引擎在第 2 条失守（命中不落内存、每次仍全量搬迁），纵使第 1、4 条成立，带宽墙仍占端到端 94%。
+判据要求"复用落在哪一层"以字节事实判定，故方法第一步即建立双观测：引擎自报命中率（白板口径）与内建字节级 READ 计数（字节口径）并行记录，且同一窗口内对齐。4.2 已证明两口径可能完全分歧（命中率 100% 与 25.83 GB/token 重读并存），因此任何单一口径都不足以支撑后续决策。本步的验收为：两口径在同一 token 步内的读数可同时回查（台账行号对应）。
 
-### 5.2 与调度/预取工作的衔接
+### 5.2 步骤二：介质迁移决策（逼近 R_i = 1）
 
-本文判据不替代调度器，而是为既有调度工作[9-12]提供可回查的落点：当方案声称"缓存命中"或"预取成功"时，应核实字节层是否真的避免了慢层重读——命中率指标与非易失介质上的字节搬迁指标可能互相遮蔽（见 4.4）。这正是本文想提醒平台开发者与评测者的一条业务操作步骤。
+对每个慢层 M_i，统计其实测读取次数 R_i。若 R_i 明显大于判据下界 1，则在场条件未满足，决策树前进：先排除"算法可免读"（专家为路由集合必要输入，不可免）与"字节可压缩"（本模型专家已是 MXFP4 出厂格式，无再压缩空间），再将数据迁至下一快层。第 4.4 的对照实验即此步的实例：专家从慢盘 sde 迁入 L2 介质 sdd7 后，R_sde 由每次全量重读逼近 1（L2 元数据持久化后命中率由冷启动 33% 升至稳态 100%），专家段耗时 −37%。本步的验收为：目标慢层实测 R_i 显著下降且端到端不劣化。
 
-### 5.3 判据作为开发闭环的方法论
+### 5.3 步骤三：替换策略选择（热集保留）
 
-第 3 章判据不只用于事后排查，也在后续开发中充当决策护栏，把"该试什么"从对存储层次的枚举收敛为"复用应落在哪一层"这一单一问题。本文在此报告三次由判据引导的开发决策及其可测结果，作为判据工程有效性的证据（完整台账见[13]）。
-
-1. 缓存扩容无收益时，判据将原因定位到替换策略而非容量。当把专家内存缓存从 8 GB 扩至 15 GB 而未获得端到端收益时，判据排除了"字节可压缩"（该模型专家权重已是 MXFP4 出厂格式，无再压缩空间）与"慢层可免读"两条路径，将问题收敛到"复用是否真的落在内存层"。据此实现 L1 heat 替换策略（驱逐"累计请求最少且本 token 未触碰"的专家，保留热集跨 token 驻留）：专家每 token 盘读由 25.83 GB 降至 20.99 GB（−19%），稳态端到端由 107.3 s/token 降至 96.4 s/token（−10%），多 token 输出逐 id 一致。期间一个未加"本 token 未触碰"保护的早期实现因驱逐正在计算的专家而输出全零——该故障本身亦由判据的"复用不得被逐出在途使用"约束定位。
-
-2. 判据目标 R_sde = 1 驱动 L2 元数据持久化。判据给出慢层读取下界 1；让专家迁入 L2 介质后，只有持久化 L2 槽位元数据才能让慢盘 sde 在进程间真正只读一次（命中率由冷启动的 33% 升至稳态 100%，见 4.4 与台账）。该改动直接由"在场条件应达到下界"的反向核查触发。
-
-3. 判据要求命中率与字节账并行观测，直接产生了本文 4.2 的核心发现——单独的白板命中率无法反映慢层重读。这使后续所有缓存策略 A/B 都以"输出一致性 + 字节账"双断言为验收标准，而非仅看命中率。
-
-三次决策的共同结构是：判据定位问题层 → 据此选择最小改动 → 以字节账与输出一致性验证。与 4.2 的单点排查相比，闭环的价值在于把判据从"诊断工具"提升为贯穿开发周期的测量与决策框架，减少了在无关方向（如字节压缩）上的探索成本。本段不修改判据本身的逻辑地位（3.4 已声明判据不回答"如何达到"），仅报告其作为工程护栏的实测有效性。
+当快层容量不足以容纳活集（即判据"不在场"的容量情形）时，替换策略决定复用能否真正落在快层。本节给出两条实测规则：(1) 容量充足、无驱逐时，策略差异不显现（L2 槽 11397 远大于 7213 resident，heat 与 LRU 无差）；(2) 容量不足、需驱逐时，**保留热集**优于时间局部性——L1 由 LRU 换为 heat（驱逐"累计请求最少且本 token 未触碰"的专家）后，专家盘读由 25.83 GB 降至 20.99 GB（−19%），稳态端到端由 107.3 s/token 降至 96.4 s/token（−10%），多 token 输出逐 id 一致（表 2）。本步的关键实现约束是**在途使用保护**：驱逐必须排除"本 token 正在计算"的专家（used_at 高于本 token 起点的槽），否则热策略会在 matmul 进行中驱逐其输入，输出全零——该故障在早期实现中真实发生，是方法对正确性约束的实证。
 
 表 2　L1 缓存替换策略对照（gen=8 incremental，cgroup 26 GB，n=3，输出逐 id 一致）
 
@@ -166,17 +155,40 @@ vLLM/PagedAttention[9] 用分页缓存消除 KV 碎片，可视为"让复用尽�
 | LRU | 15 | 106.52 | 25.83 | — |
 | heat | 15 | 100.17 | 17.44 | −6% |
 
-### 5.4 局限性
+### 5.4 步骤四：双断言验收
+
+方法的每一步改动都以双断言验收，而非仅看命中率：(1) 字节账断言——专家盘读量较改动前不增或下降；(2) 输出一致性断言——同一 prompt 下多 token 生成序列逐 id 不变。理由由 4.2 给出：命中率可能上升而字节账不变（L2 命中 100% 仍搬 25.83 GB），仅看命中率会把"换介质"误判为"省字节"。第 5.3 的 heat 改动即以此双断言通过（盘读 25.83→20.99 GB 且输出逐 id 一致）。
+
+### 5.5 方法的完整结构
+
+CUReM 的四步构成一个闭环：**双观测发现问题 → 介质迁移降低慢层读取 → 替换策略保留热集 → 双断言确认收益**。与 4.2 的单点排查相比，方法的价值在于把判据从"诊断工具"提升为贯穿开发周期的测量与决策框架，每一步都有确定性的验收标准，从而减少在无关方向（如字节压缩）上的探索成本。方法不修改判据的逻辑地位（3.4 已声明判据不回答"如何达到"），而是用可执行步骤补上"如何达到"这一环；四个步骤中的每一步均已在本实验真机验证（台账[13]可逐字节回查）。
+
+## 6 讨论与应用
+
+### 6.1 排查次序：先问"复用落在哪一层"
+
+1. 算法能否免读：该数据项是否必须被读取（如专家是否真是路由集合的必要输入）；
+2. 能否缓存复用：读取结果能否在快层驻留并被复用（即判据在场条件）；
+3. 落盘位置：若必须慢读，权重是否至少置于参与路径中较快的介质；
+4. 落盘前压缩：能否先压缩再落盘，减少届时必须搬动的字节。
+
+本案例中引擎在第 2 条失守（命中不落内存、每次仍全量搬迁），纵使第 1、4 条成立，带宽墙仍占端到端 94%。CUReM 步骤一至四正是该次序的可执行化：第 1 条（算法免读）是步骤二的排除项，第 2 条（缓存复用）对应步骤三，第 3 条（落盘位置）对应步骤二，第 4 条（压缩）在本模型已由出厂 MXFP4 排除。
+
+### 6.2 与调度/预取工作的衔接
+
+CUReM 不替代调度器，而是为既有调度工作[9-12]提供可回查的落点：当方案声称"缓存命中"或"预取成功"时，应核实字节层是否真的避免了慢层重读——命中率指标与非易失介质上的字节搬迁指标可能互相遮蔽（见 4.4）。这正是本文想提醒平台开发者与评测者的一条业务操作步骤。
+
+### 6.3 局限性
 
 存储模型假设单向逐层搬移，未覆盖旁路、直接 DMA 到计算侧等非逐层实现路径——"逐层"是可达性的充分构造，非必要路径。
 
 真机数字来自单一模型、单次冷启动实测，不声明跨工作量恒真；判据可达性由第 3 步构造保证，与读者是否阅读本文无关。
 
-表 1 的绝对速度（303.58/324.36 s）对应专家驻留慢盘 sde 的 2026-08 配置；此后判据引导的改进（L2 持久化、L1 heat，见 5.3）已将稳态端到端降至 96~107 s/token。绝对数值随时间与配置演进，判据结论不随数值改变而改变。
+表 1 的绝对速度（303.58/324.36 s）对应专家驻留慢盘 sde 的 2026-08 配置；此后判据引导的改进（L2 持久化、L1 heat，见 5.2-5.3）已将稳态端到端降至 96~107 s/token。绝对数值随时间与配置演进，判据结论不随数值改变而改变。CUReM 四步已在单一平台验证，其在多模型/多平台的可迁移性留待后续工作。
 
-## 6 结论
+## 7 结论
 
-本文通过逐字节可回查的真机台账揭示了一个在受内存约束的 MoE 推理平台上真实存在的现象：引擎自报缓存命中率 100% 的同时，每 token 仍从慢盘全量重读 25.83 GB 专家权重，占端到端耗时的 94%。"命中率"白板与字节搬运是两个观测面，前者可能完全遮蔽后者。本文从该现象抽象出一条可迁移的排查判据（复用必须落在数据能到达的最快介质层，否则慢层读取次数必然大于其下界 1），并用专家迁入 L2 介质后的 −37% 对照实验验证了判据的方向有效性。对同类平台的开发者与评测者，本文建议把"复用发生在哪一层介质"作为排查带宽墙的第一步，并与"缓存命中率"指标并行观测。进一步的开发实践表明，该判据可贯穿开发周期充当决策护栏：由它定位的替换策略与元数据持久化改动分别带来专家盘读 −19% 与稳态 −10% 的可测收益（见 5.3），形成了"实测发现 → 抽象判据 → 反哺开发"的闭环。
+本文通过逐字节可回查的真机台账揭示了一个在受内存约束的 MoE 推理平台上真实存在的现象：引擎自报缓存命中率 100% 的同时，每 token 仍从慢盘全量重读 25.83 GB 专家权重，占端到端耗时的 94%。"命中率"白板与字节搬运是两个观测面，前者可能完全遮蔽后者。本文从该现象抽象出一条可迁移的排查判据（复用必须落在数据能到达的最快介质层，否则慢层读取次数必然大于其下界 1），并将判据落地为一条可执行的方法 CUReM：双观测发现分歧、介质迁移逼近 R_i=1、替换策略保留热集、双断言验收收益。专家迁入 L2 介质后的 −37% 对照实验验证了判据方向；heat 替换策略与 L2 元数据持久化带来专家盘读 −19% 与稳态 −10% 的可测收益，输出逐 id 一致。对同类平台的开发者与评测者，本文建议把"复用发生在哪一层介质"作为排查带宽墙的第一步，以 CUReM 四步为操作手册，并与"缓存命中率"指标并行观测。
 
 ## 参考文献
 
