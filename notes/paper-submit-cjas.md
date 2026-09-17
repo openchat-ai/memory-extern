@@ -18,7 +18,7 @@
 
 Author Name; Affiliation, City Province, China
 
-**Abstract:** Mixture-of-Experts (MoE) large-model inference can be bounded by weight movement rather than compute on memory-constrained hosts. This paper reports an empirical finding on such a platform (k3 x86, cold start, 2.8T-parameter open model): although the engine reported a 100% cache hit rate, byte-level tracing showed that every token still re-read 25.83 GB of expert weights from the slow disk, taking 303.58 s, which is 94% of end-to-end time. The whiteboard hit-rate metric and the underlying byte-transfer fact are two different observation surfaces, and the former can completely mask the latter. We attribute the issue to "reuse not occurring in the fastest media layer the data can reach" and formalize a diagnostic criterion: if reuse truly happens in the fastest layer, each slower layer needs to be read at least once, and that lower bound is reachable via caching (e.g., moving weights into a faster tier). In a controlled experiment, moving experts into an L2-tier medium cut expert-stage time by about 37%, consistent with the criterion's direction. The reported figures hold only for this experiment, but the criterion and the triage order transfer to similarly memory-constrained inference platforms.
+**Abstract:** Mixture-of-Experts (MoE) large-model inference can be bounded by weight movement rather than compute on memory-constrained hosts. This paper reports an empirical finding on such a platform (k3 x86, cold start, 2.8T-parameter open model): although the engine reported a 100% cache hit rate, byte-level tracing showed that every token still re-read 25.83 GB of expert weights from the slow disk, taking 303.58 s, which is 94% of end-to-end time. The whiteboard hit-rate metric and the underlying byte-transfer fact are two different observation surfaces, and the former can completely mask the latter. We attribute the issue to "reuse not occurring in the fastest media layer the data can reach" and formalize a diagnostic criterion: if reuse truly happens in the fastest layer, each slower layer needs to be read at least once, and that lower bound is reachable via caching (e.g., moving weights into a faster tier). In a controlled experiment, moving experts into an L2-tier medium cut expert-stage time by about 37%, consistent with the criterion's direction. Follow-up development further shows the criterion acting as a decision guardrail: replacement-policy and metadata-persistence changes it motivated cut per-token expert disk reads by 19% and steady-state time by 10%, forming a measured "empirical finding → criterion → development feedback" loop. The reported figures hold only for this experiment, but the criterion and the triage order transfer to similarly memory-constrained inference platforms.
 
 **Keywords:** Mixture-of-Experts; LLM inference; cache hit rate; storage hierarchy; bandwidth wall; engineering measurement
 
@@ -118,6 +118,8 @@ vLLM/PagedAttention[9] 用分页缓存消除 KV 碎片，可视为"让复用尽�
 
 说明：表中 84 MB/s 与 85 MB/s 两值各有出身——84 MB/s 是介质性能刻画的整值（慢盘近满、巨型 O_DIRECT pread 的实测形态），85 MB/s 是 25.83 GB 与 303.58 s 的精确商。本文据实并列，不引入第三个"速率"声称。
 
+**口径限定**：表 1 为 `--gen 1 --cache-gb 1`（专家不入 L2、缓存仅容纳单步 top-16）的单 token 冷启动读数。"命中率 100%"对应的是该步 getmany 预取后 admit 全命中，而 25.83 GB 是该步从慢盘的首载字节——两者在同一行并列，正是"白板命中"与"字节搬迁"两个观测面在单步快照下的并存。多 token 稳态下 L1 命中率与字节账随缓存策略演变（见 5.3 及台账二测），判据结论不依赖具体数值。
+
 ### 4.3 为什么白板指标"看不见"这一事实
 
 对照第 3 章判据：该平台的问题是"在场条件"被违背——被激活专家的复用没有落在它能到达的最快介质（内存）层，而是每次落回慢盘。引擎自报的"命中率"建立在白板计数口径上，这一口径与字节搬迁是两个观测面，前者无法反映后者。由此得到一条经验：**对受内存约束的推理平台，"缓存命中率"不应单独作为健康度指标，需与字节级 READ 计数对照使用。**
@@ -147,14 +149,25 @@ vLLM/PagedAttention[9] 用分页缓存消除 KV 碎片，可视为"让复用尽�
 
 本文判据不替代调度器，而是为既有调度工作[9-12]提供可回查的落点：当方案声称"缓存命中"或"预取成功"时，应核实字节层是否真的避免了慢层重读——命中率指标与非易失介质上的字节搬迁指标可能互相遮蔽（见 4.4）。这正是本文想提醒平台开发者与评测者的一条业务操作步骤。
 
-### 5.3 局限性
+### 5.3 判据作为开发闭环的方法论
+
+第 3 章判据不只用于事后排查，也在后续开发中充当决策护栏，把"该试什么"从对存储层次的枚举收敛为"复用应落在哪一层"这一单一问题。本文在此报告三次由判据引导的开发决策及其可测结果，作为判据工程有效性的证据（完整台账见[13]）。
+
+1. **缓存扩容无收益时，判据将原因定位到替换策略而非容量**。当把专家内存缓存从 8 GB 扩至 15 GB 而未获得端到端收益时，判据排除了"字节可压缩"（该模型专家权重已是 MXFP4 出厂格式，无再压缩空间）与"慢层可免读"两条路径，将问题收敛到"复用是否真的落在内存层"。据此实现 L1 heat 替换策略（驱逐"累计请求最少且本 token 未触碰"的专家，保留热集跨 token 驻留）：专家每 token 盘读由 25.83 GB 降至 20.99 GB（−19%），稳态端到端由 107.3 s/token 降至 96.4 s/token（−10%），多 token 输出逐 id 一致。期间一个未加"本 token 未触碰"保护的早期实现因驱逐正在计算的专家而输出全零——该故障本身亦由判据的"复用不得被逐出在途使用"约束定位。
+2. **判据目标 R_sde = 1 驱动 L2 元数据持久化**。判据给出慢层读取下界 1；让专家迁入 L2 介质后，只有持久化 L2 槽位元数据才能让慢盘 sde 在进程间真正只读一次（命中率由冷启动的 33% 升至稳态 100%，见 4.4 与台账）。该改动直接由"在场条件应达到下界"的反向核查触发。
+3. **判据要求命中率与字节账并行观测**，直接产生了本文 4.2 的核心发现——单独的白板命中率无法反映慢层重读。这使后续所有缓存策略 A/B 都以"输出一致性 + 字节账"双断言为验收标准，而非仅看命中率。
+
+三次决策的共同结构是：**判据定位问题层 → 据此选择最小改动 → 以字节账与输出一致性验证**。与 4.2 的单点排查相比，闭环的价值在于把判据从"诊断工具"提升为贯穿开发周期的测量与决策框架，减少了在无关方向（如字节压缩）上的探索成本。本段不修改判据本身的逻辑地位（§3.4 已声明判据不回答"如何达到"），仅报告其作为工程护栏的实测有效性。
+
+### 5.4 局限性
 
 - 存储模型假设单向逐层搬移，未覆盖旁路、直接 DMA 到计算侧等非逐层实现路径——"逐层"是可达性的充分构造，非必要路径。
 - 真机数字来自单一模型、单次冷启动实测，不声明跨工作量恒真；判据可达性由第 3 步构造保证，与读者是否阅读本文无关。
+- 表 1 的绝对速度（303.58/324.36 s）对应专家驻留慢盘 sde 的 2026-08 配置；此后判据引导的改进（L2 持久化、L1 heat，见 5.3）已将稳态端到端降至 96~107 s/token。绝对数值随时间与配置演进，判据结论不随数值改变而改变。
 
 ## 6 结论
 
-本文通过逐字节可回查的真机台账揭示了一个在受内存约束的 MoE 推理平台上真实存在的现象：**引擎自报缓存命中率 100% 的同时，每 token 仍从慢盘全量重读 25.83 GB 专家权重，占端到端耗时的 94%**。"命中率"白板与字节搬运是两个观测面，前者可能完全遮蔽后者。本文从该现象抽象出一条可迁移的排查判据（复用必须落在数据能到达的最快介质层，否则慢层读取次数必然大于其下界 1），并用专家迁入 L2 介质后的 −37% 对照实验验证了判据的方向有效性。对同类平台的开发者与评测者，本文建议把"复用发生在哪一层介质"作为排查带宽墙的第一步，并与"缓存命中率"指标并行观测。
+本文通过逐字节可回查的真机台账揭示了一个在受内存约束的 MoE 推理平台上真实存在的现象：**引擎自报缓存命中率 100% 的同时，每 token 仍从慢盘全量重读 25.83 GB 专家权重，占端到端耗时的 94%**。"命中率"白板与字节搬运是两个观测面，前者可能完全遮蔽后者。本文从该现象抽象出一条可迁移的排查判据（复用必须落在数据能到达的最快介质层，否则慢层读取次数必然大于其下界 1），并用专家迁入 L2 介质后的 −37% 对照实验验证了判据的方向有效性。对同类平台的开发者与评测者，本文建议把"复用发生在哪一层介质"作为排查带宽墙的第一步，并与"缓存命中率"指标并行观测。进一步的开发实践表明，该判据可贯穿开发周期充当决策护栏：由它定位的替换策略与元数据持久化改动分别带来专家盘读 −19% 与稳态 −10% 的可测收益（见 5.3），形成了"实测发现 → 抽象判据 → 反哺开发"的闭环。
 
 ## 参考文献
 
@@ -170,5 +183,5 @@ vLLM/PagedAttention[9] 用分页缓存消除 KV 碎片，可视为"让复用尽�
 [10] Zeng S, Liu J, et al. FlightLLM: Efficient Large Language Model Inference with a Complete Mapping Flow on FPGAs. FPGA 2024.
 [11] Liu D, Yu Y. CXL-SpecKV: A Disaggregated FPGA Speculative KV-Cache for Datacenter LLM Serving. FPGA 2026:56-66.
 [12] Jo D, Song J, Kim Y, Kim J-J. FastKV: Decoupling of Context Reduction and KV Cache Compression for Prefill-Decoding Acceleration. Findings of ACL 2026.
-[13] 作者自建真机字节流台账（k3 x86 冷启动，2026-08），项目内文件：notes/byteflow-matrix.md.
+[13] 作者自建真机字节流台账（k3 x86，2026-08 至 09，含冷启动基线、L2 对照、L1 heat 策略对照与判据闭环记录），项目内文件：notes/byteflow-matrix.md.
 [14] 作者. kimi-k3-in-c: Kimi K3 推理引擎实现与本文字节流台账分析代码. https://github.com/openchat-ai/kimi-k3-in-c, 2026.
