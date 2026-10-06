@@ -24,7 +24,7 @@ import time
 
 HZ = os.sysconf("SC_CLK_TCK")
 LOAD_ZONES = (73, 78, 62, 75, 0, 77)
-MODEL = os.path.expanduser("~/models/qwen2-0.5b-q4_0.gguf")
+MODEL = os.environ.get("BENCH_MODEL", os.path.expanduser("~/models/qwen2-0.5b-q4_0.gguf"))
 
 
 def child_ticks(pid):
@@ -51,13 +51,35 @@ def temp_load():
     return max(l) if l else -1.0
 
 
-def bench_once(gen, threads=8):
-    """跑一次 llama-bench，返回 (tps, cpu_s, wall_s, tokens)。"""
+BIG_CORES = (4, 5, 6, 7)   # 实测上限 2496MHz，§5f 绑核组
+LITTLE_CORES = (0, 1, 2, 3)  # 实测上限 1804MHz
+
+
+def parse_cpus(spec):
+    """'big' | 'little' | 'all' | '4,5,6' -> 核集合或 None(None=不绑)。"""
+    if spec in (None, "", "none", "free"):
+        return None
+    if spec == "big":
+        return set(BIG_CORES)
+    if spec == "little":
+        return set(LITTLE_CORES)
+    if spec == "all":
+        return None
+    return {int(x) for x in spec.split(",") if x.strip()}
+
+
+def bench_once(gen, threads=8, cpus=None):
+    """跑一次 llama-bench，返回 (tps, cpu_s, wall_s, tokens)。
+
+    cpus 非 None 时绑核 —— §5f：绑大核比自由调度快 5.70×，
+    故所有跨组比较必须声明绑核方式。"""
     cmd = ["llama-bench", "-m", MODEL, "-t", str(threads),
            "-p", "8", "-n", str(gen), "-r", "1"]
     t0 = time.time()
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL, text=True)
+                         stderr=subprocess.DEVNULL, text=True,
+                         preexec_fn=(lambda: os.sched_setaffinity(0, cpus))
+                         if cpus else None)
     # 边跑边轮询累积：子进程可能在 communicate() 前就退出，
     # 只读起止两点会拿到 None（首版实测 cpu_s=-1 即此因）。
     c0 = child_ticks(p.pid)
@@ -100,11 +122,15 @@ def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 6
     gen = int(sys.argv[2]) if len(sys.argv) > 2 else 48
     gap = int(sys.argv[3]) if len(sys.argv) > 3 else 5
-    out = "results/thermal/norm_cpu.csv"
+    pin = sys.argv[4] if len(sys.argv) > 4 else "big"   # 默认绑大核（§5f 最优）
+    out = sys.argv[5] if len(sys.argv) > 5 else "results/thermal/norm_cpu.csv"
+    cpus = parse_cpus(pin)
 
     hdr = ["idx", "temp_c", "tps", "cpu_s", "wall_s", "tokens",
-           "cpu_ms_per_tok", "bandwidth_GBs"]
-    print("== 归一化 CPU 账（%d 点 × %d tok，间隔 %ds）==" % (n, gen, gap))
+           "cpu_ms_per_tok", "bandwidth_GBs", "pin"]
+    print("== 归一化 CPU 账（%d 点 × %d tok，间隔 %ds，绑核=%s）=="
+          % (n, gen, gap, pin))
+    print("绑核集合: %s" % (sorted(cpus) if cpus else "不绑（自由调度）"))
     print(",".join(hdr))
     rows = []
     with open(out, "w", newline="") as f:
@@ -112,14 +138,15 @@ def main():
         w.writerow(hdr)
         for i in range(n):
             tc = temp_load()
-            tps, cpu, wall, tok = bench_once(gen)
+            tps, cpu, wall, tok = bench_once(gen, threads=len(cpus) if cpus else 8,
+                                              cpus=cpus)
             if tps and cpu > 0 and tok > 0:
                 mspt = cpu / tok * 1000
-                bw = 255656193.0 * tps / 1e9
+                bw = float(os.environ.get("BENCH_BYTES", "255656193.0")) * tps / 1e9
             else:
                 mspt = bw = -1
             row = [i, round(tc, 1), tps, round(cpu, 2), round(wall, 2),
-                   round(tok) if tok > 0 else -1, round(mspt, 2), round(bw, 3)]
+                   round(tok) if tok > 0 else -1, round(mspt, 2), round(bw, 3), pin]
             w.writerow(row)
             f.flush()
             rows.append(row)
@@ -128,7 +155,8 @@ def main():
                 time.sleep(gap)
 
     print("\n完成 → %s" % out)
-    print("判读：t/s 降 而 cpu_ms_per_tok 升 ⇒ 算力被压（功耗/调度收缩）")
+    print("判读（仅同一 pin 内可比，§5f.3 跨组等比关系不成立）：")
+    print("      t/s 降 而 cpu_ms_per_tok 升 ⇒ 算力被压")
     print("      t/s 降 而 cpu_ms_per_tok 平 ⇒ 非算力问题（内存/等待）")
 
 
