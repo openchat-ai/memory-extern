@@ -1,0 +1,2 @@
+idx,temp_c,tps,cpu_s,wall_s,tokens,cpu_ms_per_tok,bandwidth_GBs,pin
+0,51.0,25.64,10.42,3.41,88,119.01,9.098,big
