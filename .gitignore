@@ -5,6 +5,7 @@ __pycache__/
 *.o
 *.a
 *.so
+tools/*_bench
 .venv/
 
 # RTL 编译产物与仿真日志
