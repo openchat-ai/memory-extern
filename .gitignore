@@ -88,3 +88,10 @@ pro_ex/
 项目路演.html
 项目路演PPT.pptx
 .build/
+
+# 个人论文稿件（含姓名/电话/邮箱等隐私，不入库）
+dl.before
+.dl.before
+
+# K3 同步/打包产物（大文件，不入库）
+usage/
