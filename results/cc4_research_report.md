@@ -201,3 +201,13 @@ Q1T 结构: 每块 32 元素 = 1B e7m0 scale + 4B 符号位 (1 bit/elem)。解�
 - `IQ1_S` (官方, 1.56 bpw): `。.。. . . .` —— 标点退化。
 
 **修正 §8.4 结论: Q1T 端到端并非"全 @ 崩溃", 而是与 Q2T 同级的单字碎片; 且在 1-bit 家族中语言性最好 (真实汉字>官方 Q1_0/IQ1_S)。** 但单字即崩, 离可用仍远。教训: gating 前必须无 NaN (数据布局正确性); 所有 b<4 的"崩坏"结论应视为位宽极限而非格式缺陷。**模型文件从此保留不再删 (重建一次 10 分钟)。**
+
+### 8.7 官方 Q1_0/IQ1_S 重测: embedding 保护是关键修复 (用户指出"官方不至于这么烂")
+
+用户质疑"官方 Q1_0/IQ1_S 不至于只能出字母碎片/标点"——核查发现: 本机那两个文件是**本地 `llama-quantize` 从 q8_0 requantize** 的, **token_embd 被压成 Q1_0/IQ1_S** (type 14/13)。而官方下载的 Q2_K/Q4_0/q8_0 的 token_embd **一律保持 Q8_0 (type 8)**。这是乱码主因, 不是官方模型本身的水平。
+
+重新生成 (imatrix + `--token-embedding-type q8_0` + `--leave-output-tensor`):
+- `Q1_0_embqing.gguf` (1.125 bpw, 233MB): token_embd=Q8_0 → 对话仍 `otenunted(.)BM rollsBVBB` 碎片。**保护 embedding 后仍不可用** → Q1_0 核心 196 权重 1-bit 信息量本身不足。
+- `IQ1_S_embqing.gguf` (1.5625 bpw, 266MB): token_embd=Q8_0 → 对话 `是者. is.考生 目标.用.的` —— **有真实中文词**(考生/目标/用) + 英文 is, 1-bit 家族最佳。
+
+**结论**: 官方 Q1_0 确实就是这个水平 (单 bit 权重承载不了 0.6B 推理), embedding 保护是必需操作而非充分条件。IQ1_S 在 1.5625 bpw 借 imatrix + embedding 保护能产出零散语义词, 是 1-bit 的真实天花板。**QxT (Q1T/Q2T) 与这些官方底线对比后地位: 单字级碎片, 不如 IQ1_S 但接近 Q1_0, 端到端均不可用。** 附带方法经验: requantize 比格式更重要的是 **--token-embedding-type q8_0**。
