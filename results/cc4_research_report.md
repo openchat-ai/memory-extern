@@ -211,6 +211,7 @@ Q1_0 官方格式就是现成 1-bit 紧凑容器 (`{half d; 32位位图}`=6B/块
 **结果 (`qwen3-0.6b-Q1T_as_Q1_0.gguf`, 217MB vs 原 610MB)**:
 - quantize 日志: `model 604MiB (8.5BPW) -> quant 217MiB (3.05BPW)`; 末层 attn_output 2024x1024 2.12MiB→0.28MiB。
 - 端到端 (同 --reasoning off 协议): `妇妇\(妇妇\(维生素` —— 与官方 Q1_0 (`...enteryBVPPMockRev...`) / IQ1_S (`$$ 数 数`) 同档, 都是单字/碎片级。**Q1T 在紧凑 1-bit 同级下不辱官方, 均不可用但位宽极限成立。**
+- 速度: 同 Q1_0 容器故同速。二次重测 Prompt 22.0/Gen 4.8 t/s vs 官方 26.4/6.4 t/s (首跑 0.1 t/s 系 Termux CPU throttle/缓存预热假象, 复测即恢复)。
 
 **结论: "有多少真信息用多大磁盘"在 QxT 上成立 (217MB≈信息量); 609MB 只是此前 q8_0 壳的虚胖, 现已有真正紧凑的 Q1T 版。** Q1_0/IQ1_S 官方也是单字碎片 → 1-bit 端到端极限不是 QxT 独有, 是位宽本身的硬约束。
 
