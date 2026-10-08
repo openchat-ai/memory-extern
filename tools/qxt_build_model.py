@@ -74,8 +74,9 @@ def quant_q8(f32):
 def main():
     b = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     tag = f"Q{b}T"
-    src = "/data/data/com.termux/files/home/models/qwen3-0.6b-q8_0.gguf"
-    dst = f"/data/data/com.termux/files/home/models/qxt/qwen3-0.6b-{tag}_lloyd.gguf"
+    src = sys.argv[2] if len(sys.argv) > 2 else "/data/data/com.termux/files/home/models/qwen3-0.6b-q8_0.gguf"
+    base = os.path.splitext(os.path.basename(src))[0]
+    dst = f"/data/data/com.termux/files/home/models/qxt/{base}-{tag}_lloyd.gguf"
     if not os.path.exists(dst):
         import shutil; shutil.copyfile(src, dst)
     raw = bytearray(open(src, "rb").read())
