@@ -129,3 +129,17 @@ notes/archive/paper-*.md
 notes/archive/paper-*.tex
 notes/archive/paper-*.pdf
 notes/*.pdf
+
+# 训练/蒸馏产物（二进制，180M+，git 历史不可逆，误提交后再删就得重写历史）
+# 仓库当前未跟踪任何 .npz，加此规则不影响既有文件。
+# 基准数据走 results/ 与 bench_train.json（纯 JSON，可 diff）。
+*.npz
+
+# 实验日志与临时输出（体积极小，但属原始证据，保留在本地不入库；
+# 结论已整理进 docs/QXT_QUANT_DISTILL_LOG.md）
+*.log
+
+# 蒸馏生成的样例输出与临时 prompt/错误输出
+distill_gen/
+q8prompt.txt
+*_err.txt
