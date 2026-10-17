@@ -143,3 +143,15 @@ notes/*.pdf
 distill_gen/
 q8prompt.txt
 *_err.txt
+
+# 钢筋符号识别（矢量图纸/CAD 方向，2026-10-17 撤回入库）。
+# 结论：不适合投稿，方向已终止；磁盘副本全部保留，未删除。
+# 6 份专用文件：5 份路径带 rebar + pdf_lines_extract（仅被 rebar_stitch 调用，无其它使用者）。
+# OCR 线共用件（labels.py/glyphbank.py/findsym.py/textline.py/mkfont.py）仍入库
+# ——labels.py 被 QxT 的 crnn/trainocr/ledger 引用。
+docs/UNICODE_PROPOSAL_rebar.md
+notes/rebar-onboarding.md
+tools/rebar.py
+tools/rebar_rebuild.py
+tools/rebar_stitch.py
+tools/pdf_lines_extract.py
