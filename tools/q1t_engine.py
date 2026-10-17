@@ -62,7 +62,7 @@ def load_packslim_tensor(path, entry, cb, dtype=np.float32):
 
 
 def rmsnorm(x, w, eps):
-    return x * np.sqrt(np.mean(x * x, axis=-1, keepdims=True) + eps) * w
+    return x * (1.0 / np.sqrt(np.mean(x * x, axis=-1, keepdims=True) + eps)) * w
 
 
 def build_rope(head_dim, n_ctx, freq_base, dtype=np.float32):
@@ -73,12 +73,14 @@ def build_rope(head_dim, n_ctx, freq_base, dtype=np.float32):
 
 
 def apply_rope(x, cos, sin, pos):
-    """x (T, nh, hd) interleaved-pair RoPE."""
+    """x (T, nh, hd); cos/sin (n_ctx, hd/2). Qwen3/NeoX 风格: 前后半分配对."""
     T, nh, hd = x.shape
-    p = x.reshape(T, nh, hd // 2, 2)
-    x0, x1 = p[..., 0], p[..., 1]
-    c, s = cos[pos][:, None, :], sin[pos][:, None, :]
-    return np.stack((x0 * c - x1 * s, x0 * s + x1 * c), axis=-1).reshape(T, nh, hd)
+    h2 = hd // 2
+    x1 = x[..., :h2]
+    x2 = x[..., h2:]
+    c = cos[pos][:, None, :]
+    s = sin[pos][:, None, :]
+    return np.concatenate([x1 * c - x2 * s, x1 * s + x2 * c], axis=-1)
 
 
 class Q1TEngine:
@@ -159,10 +161,10 @@ class Q1TEngine:
             q = (h @ W[p+"attn_q.weight"].astype(dt)).reshape(T, nh, hd)
             kk = (h @ W[p+"attn_k.weight"].astype(dt)).reshape(T, nkv, hd)
             vv = (h @ W[p+"attn_v.weight"].astype(dt)).reshape(T, nkv, hd)
-            q = apply_rope(q, cos, sin, seq)
-            kk = apply_rope(kk, cos, sin, seq)
             q = rmsnorm(q, W[p+"attn_q_norm.weight"], self.eps)
             kk = rmsnorm(kk, W[p+"attn_k_norm.weight"], self.eps)
+            q = apply_rope(q, cos, sin, seq)
+            kk = apply_rope(kk, cos, sin, seq)
             kk = np.repeat(kk, rep, axis=1)
             vv = np.repeat(vv, rep, axis=1)
             sc = np.einsum("qhd,khd->hqk", q, kk) / math.sqrt(hd)   # (nh, Tq, Tk)

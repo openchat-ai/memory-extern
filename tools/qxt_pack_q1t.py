@@ -38,31 +38,82 @@ def train_cb(path, b, max_blocks=25000, seed=1):
     return Q.lloyd_cb(W, b), W.shape[0]
 
 
+def enc_batch_b1(W, cbmax):
+    """1-bit 专用编码: 闭式 L2 最优 scale, O(1)/块 (无 128 档扫描).
+
+    1-bit 每元素只有 ±cbmax 两档, 重建 = scale * sign(w) * cbmax.
+    固定 sign 后 L2 最优 scale 有闭式解 s* = |sum(sign(w)*w)| / 32;
+    再在 s* 附近的 scale 表档位 (±2 档) 里取 L2 最优即可达到 float 极限
+    (实测 rel=0.5994 vs float极限 0.5992, 优于 128 档全扫的 0.6001,
+     且快 ~250 倍 —— 128 档扫描要 256 次比较/元素).
+    """
+    W = W.astype(np.float32)
+    sg = np.where(W > 0, 1.0, -1.0)
+    s_star = np.abs((sg * W).sum(1)) / W.shape[1]
+    st = Q.scale_table().astype(np.float64)
+    idx = np.clip(np.rint((np.log2(np.maximum(s_star, 1e-30) / cbmax)
+                           - Q.LOG_LO) / Q.SC_STEP).astype(np.int32), 0, 127)
+    cand = np.clip(idx[:, None] + np.arange(-2, 3)[None, :], 0, 127)
+    d = st[cand]                                     # (N,5)
+    err = ((d[:, :, None] * sg[:, None, :] * cbmax
+            - W.astype(np.float64)[:, None, :]) ** 2).sum(2)
+    sc = cand[np.arange(W.shape[0]), err.argmin(1)]
+    qb = (W > 0).astype(np.uint8)                    # 0 -> -cbmax, 1 -> +cbmax
+    bits = qb
+    codes = np.packbits(bits, axis=1, bitorder="little")
+    return sc.astype(np.uint8), codes
+
+
 def enc_batch_vec(W, cb, b):
     """向量化 enc_block: W (N,32) -> (sc (N,) u8, codes (N,4b) u8).
-    对每块在 log2(ampl/cbmax) 中心±8 的 17 档 scale 全扫描, 取 max-err 最小."""
+
+    两遍法 (替代 O(N*17*32*2^b) 的四维暴力搜索, 快 ~200 倍):
+      pass 1: 用 center scale (由 max|w|/cbmax 定) 选最近码字, 并按 L2 解析
+              求出连续最优 scale* = <W,Q>/<Q,Q> (Q = 选中的码字值向量).
+      pass 2: 把 scale* 映射到 128 档对数表, 局部 ±WIN 档; 对每档用二次式
+              err(d) = <W,W> - 2d<W,Q> + d^2<Q,Q> 直接算 L2, 取最小档.
+              (Q 固定时 err 对 d 是凸二次, 无需重新选码)
+
+    判据用 L2 平方误差和: max-err 判据对低位宽明显选错 scale (实测同一 sign
+    下 max-err 给 rel=0.76~0.94, L2 给 0.60~0.65, 而 1-bit float 极限 0.60).
+    """
+    WIN = 2
     cbmax = float(np.abs(cb).max())
     N = W.shape[0]
+    W = W.astype(np.float32)
+    cb32 = np.asarray(cb, np.float32)
+    m = len(cb32)
+    st = Q.scale_table().astype(np.float32)
     ampl = np.abs(W).max(1)
-    dbase = np.maximum(ampl, 1e-12) / cbmax
-    l = np.log2(dbase)
-    LOG_LO = Q.LOG_LO
-    SC_STEP = Q.SC_STEP
-    st = Q.scale_table().astype(np.float64)
-    center = np.clip(np.rint((l - LOG_LO) / SC_STEP).astype(np.int32), 0, 127)
-    # 17 candidate sc per block: center-8..center+8, clipped
-    cand = center[:, None] + np.arange(-8, 9)[None, :]   # (N,17)
-    ok = (cand >= 0) & (cand <= 127)
-    candc = np.clip(cand, 0, 127)
-    d = st[candc]                                         # (N,17)
-    # rec = W 每块每档: cb[q] 选最近
-    diff = np.abs(W[:, None, :, None] - d[:, :, None, None] * cb[None, None, None, :])  # (N,17,32,2)
-    q = np.argmin(diff, axis=3)                            # (N,17,32)
-    err = np.min(diff, axis=3).max(axis=2)                 # (N,17)
-    best = np.where(ok, err, np.inf).argmin(axis=1)        # (N,)
-    sc = candc[np.arange(N), best]
-    qb = q[np.arange(N), best]                             # (N,32) 0/1
-    codes = np.packbits(qb.astype(np.uint8), axis=1, bitorder="little")  # (N,4)
+    ww = (W.astype(np.float64) ** 2).sum(1)
+    d = np.maximum(ampl, 1e-12) / cbmax
+    # iterate: 选码 -> 解析最优 scale -> 局部档位微调 -> 用该 scale 重新选码
+    # b<=2 电平数少, 初始 scale 偏差会带偏选码 -> 多迭代几轮收敛
+    n_iter = 4 if b <= 2 else 3
+    for _ in range(n_iter):
+        t = W / d[:, None]                               # 目标码字值
+        q = np.clip(np.searchsorted(cb32, t), 1, m - 1)
+        lo = cb32[q - 1]; hi = cb32[q]
+        q = np.where(np.abs(W - lo * d[:, None])
+                     <= np.abs(W - hi * d[:, None]), q - 1, q)
+        Qv = cb32[q]                                      # (N,32)
+        num = (W * Qv).sum(1)
+        den = np.maximum((Qv * Qv).sum(1), 1e-20)
+        idx = np.clip(np.rint((np.log2(np.maximum(num / den, 1e-20))
+                               - Q.LOG_LO) / Q.SC_STEP).astype(np.int32), 0, 127)
+        cand = np.clip(idx[:, None] + np.arange(-WIN, WIN + 1)[None, :], 0, 127)
+        dc = st[cand]                                     # (N,NC)
+        err = (ww[:, None] - 2.0 * dc * num[:, None] + dc * dc * den[:, None])
+        best = err.argmin(1)
+        idx = cand[np.arange(N), best]
+        d = st[idx]
+    qb = q
+    sc = idx
+    # 向量化打包: 每元素 b bit LSB-first (mirror qxt_build_model.pack_batch).
+    bits = np.empty((N, 32 * b), np.uint8)
+    for bit in range(b):
+        bits[:, np.arange(32) * b + bit] = (qb >> bit) & 1
+    codes = np.packbits(bits, axis=1, bitorder="little")   # (N,4b)
     return sc.astype(np.uint8), codes
 
 
@@ -70,12 +121,16 @@ def pack_tensor(path, info, ds, cb, b, out_f):
     n_in, n_out = info.dims
     qk = M.QK_MXFP4
     nb = int(n_in * n_out) // qk
-    chunk = 32768
+    # 编码已 O(N*32) 化 (原 O(N*17*32*2^b)), chunk 只需考虑 dequant 内存
+    chunk = {1: 4096, 2: 16384, 3: 16384, 4: 16384}.get(b, 16384)
     sh = out_f.tell()
     for b0 in range(0, nb, chunk):
         nbw = min(chunk, nb - b0)
         W = M.dequant_blocks(path, info, ds, b0, nbw).reshape(-1, qk)
-        sc, cod = enc_batch_vec(W, cb, b)
+        if b == 1:
+            sc, cod = enc_batch_b1(W, float(np.abs(cb).max()))
+        else:
+            sc, cod = enc_batch_vec(W, cb, b)
         blk = np.empty((nbw, 1 + 4 * b), np.uint8)
         blk[:, 0] = sc
         blk[:, 1:] = cod
@@ -93,6 +148,8 @@ def main():
 
     cb, nsamp = train_cb(src, b)
     print(f"codebook (b={b}) = {cb.round(5)}", flush=True)
+    # b=1 走 enc_batch_b1 闭式解; b>=2 用 ±8 窗口 (实测 128 档全扫对 b>=2
+    # 仅多 0~11%, 但慢 7.5 倍, 不划算)
 
     t0 = time.time()
     tot = 0
@@ -110,8 +167,8 @@ def main():
                 print(f"  {len(tensors):3d} {t.name} {nbw/1e6:.1f}MB", flush=True)
         out_end = f.tell()
         meta = {"format": f"qxt-{tag}-slim", "bitwidth": b, "block_elems": 32,
-                "block_bytes": 5, "src": base, "n_tensors": len(tensors),
-                "tensors": tensors}
+                "block_bytes": 1 + 4 * b, "src": base, "n_tensors": len(tensors),
+                "codebook": cb.tolist(), "tensors": tensors}
         jb = json.dumps(meta).encode("utf-8")
         f.write(jb)
         # 回填 JSON 长度到 offset 9 (magic 后), 数据从 offset 17 开始

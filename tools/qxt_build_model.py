@@ -74,7 +74,13 @@ def quant_q8(f32):
 def main():
     b = int(sys.argv[1]) if len(sys.argv) > 1 else 1
     tag = f"Q{b}T"
-    src = sys.argv[2] if len(sys.argv) > 2 else "/data/data/com.termux/files/home/models/qwen3-0.6b-q8_0.gguf"
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    b = int(args[0]) if args else 1
+    forced_cb = None
+    if "--cb" in sys.argv:
+        i = sys.argv.index("--cb")
+        forced_cb = np.array([float(sys.argv[i+1]), -float(sys.argv[i+1])])  # -> [-a,a]
+    src = args[1] if len(args) > 1 else "/data/data/com.termux/files/home/models/qwen3-0.6b-q8_0.gguf"
     base = os.path.splitext(os.path.basename(src))[0]
     dst = f"/data/data/com.termux/files/home/models/qxt/{base}-{tag}_lloyd.gguf"
     if not os.path.exists(dst):
@@ -95,7 +101,7 @@ def main():
         W = M.dequant_blocks(src, t, data_start, b0, nb).reshape(-1, qk)
         sample.append(W)
     train = np.concatenate(sample)[:200_000]
-    cb = Q.lloyd_cb(train, b)
+    cb = Q.lloyd_cb(train, b) if forced_cb is None else forced_cb
     print(f"{tag} lloyd codebook (b={b}) = {cb.round(4)}", flush=True)
 
     n_t = 0

@@ -25,7 +25,9 @@ machines pay ~1.12x for Q4F8-nl; linear Q4F8 stays ~1.0x there.
 """
 import numpy as np
 
-LOG_LO, LOG_HI = -12.0, -4.0           # log2 scale domain (abs |d|)
+LOG_LO, LOG_HI = -12.0, 0.0            # log2 scale domain (abs |d|); HI=0 so scale table
+                                        # reaches 2^0=1, covering ampl/cbmax for real blocks
+                                        # (LOG_HI=-4 clamped ~80% of blocks at sc=127 -> noise)
 SC_STEP = (LOG_HI - LOG_LO) / 127.0
 KVAL = np.array([-127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113])
 
