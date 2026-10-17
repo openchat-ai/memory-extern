@@ -118,3 +118,14 @@ usage/
 # 论文稿件正文（含邮箱 2 处 / 手机号 1 处；见 §62.6）。
 # 远端 origin/main 已将其移出历史，本地仅留磁盘副本。
 notes/论文*.md
+
+# 论文稿件（md/pdf/tex/投稿信）一律不入库。
+# 2026-10-17: 磁盘副本也一并删除, 本机不再保留任何论文文件。
+notes/论文*.md
+notes/投稿*.md
+notes/*投稿*.md
+notes/archive/*投稿*.md
+notes/archive/paper-*.md
+notes/archive/paper-*.tex
+notes/archive/paper-*.pdf
+notes/*.pdf
