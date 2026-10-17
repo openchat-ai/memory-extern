@@ -75,6 +75,15 @@ rtl/07_phy_wavious/
 # 各仓库许可证未逐一核查，本仓库又无 LICENSE，绝不可入库）
 corpus_gh/
 
+# Magicoder 原始语料 jsonl（64M，Apache-2.0，第三方）。
+# 派生训练数据 data/ 已入库，原始 jsonl 无需入库；
+# 且 git 历史不可逆，误提交后再想移除就得再重写一次历史。
+magicoder_a3.jsonl
+
+# 另一项目的源码（3.2M，压缩/蒸馏方向），与本仓库主线无关，暂不入库。
+# 确认要合并进主线时再删掉此行并显式 git add。
+distill_data/
+
 # pim 芯片模拟器构建产物
 pim/research-cli/bench_chip
 pim/research-cli/chip-backend/*.so
