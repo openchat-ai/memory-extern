@@ -11,6 +11,11 @@ module decode_auto_core #(
     parameter NCAP = (2*NMAXE+1)*NGRP, NK = 3,
     SELFDRV = 1,  // =1 板上自驱: 内嵌 LFSR 分值源跑真链 (确定性 token, 可两次同seed对账);
                   //   数据面外源 (s_valid/s_score/out_take/credit) 被内部替换, H 侧 acc/xext 仍外源。
+    SELFREL = 0,  // =1 板级自释放替身 (侧支#8): released (wb_flow 释放计数) 板级无人赋值,
+                  //   恒 0 → sched_exec 卡在 S_REL 等 layer_sync, 引擎只跑完第 1 层。
+                  //   SELFREL=1 时用"引擎自己的层进度+1"当释放源: 板级没有下游消费者
+                  //   (无 wb_flow), 每层做完后自放行 → 引擎可跑满 NL 层再回 S_IDLE。
+                  //   语义提醒: 这是"无消费者时的替身", 不等于真实写回完成。
     STRESS = 0    // =1 自驱时注入信用停摆窗 (STC 60~68 拍 credit=0) → 背压内容等价对账
 ) (
     input  wire clk, rst_n, run,
@@ -26,7 +31,14 @@ module decode_auto_core #(
     output wire out_valid, output wire [SW-1:0] out_data, output wire [$clog2(EX)-1:0] out_expert,
     output wire token_done, output wire r_token_done,
     output wire [$clog2(NCAP)-1:0] out_token, output wire [15:0] out_score, output reg  h_go,
-    output wire [31:0] r_round, h_round, r_stalls, a_stalls, a_words
+    output wire [31:0] r_round, h_round, r_stalls, a_stalls, a_words,
+    // ---- 引擎活动观测 (2026-10-21, 板级 LED 判活用; 未接则悬空无害) ----
+    output wire        eng_o_valid,      // attn 内积输出有效 (引擎 attn 段在出结果)
+    output wire [15:0] eng_o_data,       // attn 内积输出数据 (非零 => 乘法链真在算)
+    output wire [31:0] eng_rail_frames,  // rail 帧数 (GEMM 段活动, 跨会话累计)
+    output wire [31:0] eng_attn_done,    // attn 段收口计数
+    output wire [31:0] eng_gemm_done,    // GEMM 段收口计数
+    output wire [31:0] eng_layers_done   // 层完成计数 (每会话清零; 峰值=本会话爬到第几层)
 );
 
     // ---------------- route_asm ----------------
@@ -84,20 +96,42 @@ module decode_auto_core #(
     wire ex_busy, ex_sel_o, ex_r_valid, ex_r_frame_done, ex_rl_valid;
     wire [DW-1:0] ex_r_data; wire [3:0] ex_r_addr; wire [31:0] ex_rl_layer;
     wire ex_a_go, ex_a_s_valid, ex_c_go, aw_busy, aw_s_ready;
-    wire [DW-1:0] ex_a_s_data; wire [31:0] ex_c_blocks; wire [1:0] ex_phase;
+    wire [DW-1:0] ex_a_s_data; wire [1:0] ex_phase;
     wire [2:0] ex_st; wire [$clog2(NL)-1:0] ex_layer_now;
     wire [31:0] ex_layers_done, ex_gemm_done, ex_attn_done, ex_sel_sw, ex_barrier, ex_wg_words, ex_wa_words;
 
+    // 2026-10-21: 窗的写/读累计数必须回接 sched_exec.a_ww/a_wr。
+    //   原为悬空 (.words_written(), .words_read()) → sched_exec 的 attn 段收口条件
+    //   (a_ww-wbase >= ATW && a_wr-rbase >= ATW) 恒为 X → attn_done 永不增 →
+    //   引擎卡死 S_ATEND, 后续会话的 go 脉冲被忽略 (只跑一次)。
+    //   Gowin 早已警告: EX2565 "Input 'a_wr[24]' on this instance is undriven"。
+    //   声明必须在使用点之前 (Verilog-2001): 放在 sched_exec 例化之前。
+    wire [31:0] aw_words_written, aw_words_read;
+
+    // 2026-10-21: attn 内积链观测 + ctl 侧计数 (同样必须先声明后用)。
+    //   ctl_blocks_done 必须直接喂 sched_exec.c_blocks —— 原先隔了个从没人驱动的
+    //   ex_c_blocks (声明后只出现在例化口上) → c_blocks 恒 Z → 收口条件恒 X。
+    wire ctl_r_take, ctl_busy, ctl_o_valid; wire [15:0] ctl_o_data, ctl_act, ctl_w;
+    wire [31:0] ctl_o_head, ctl_o_row, ctl_blk, ctl_words, ctl_rows, ctl_blocks_done;
+
+    // 2026-10-21 侧支#8 自释放: layer_sync 源选择。
+    //   SELFREL=0 (产品默认): 原样用 released (wb_flow 释放计数) → 行为不变。
+    //   SELFREL=1 (板级): released 无人赋值恒 0 → 引擎永卡 S_REL。用"自己的层进度+1"
+    //     当释放源: 当前层做完 → layer_sync = layers_done+1 > lay → 放行本层。
+    //     板级无下游消费者, 这是替身而非真实写回完成 (已在参数注释里写明)。
+    wire [31:0] layer_sync_src = SELFREL ? (ex_layers_done + 32'd1) : released[31:0];
+
     sched_exec #(.DW(DW), .AW(AW), .NL(NL), .GW(GW), .GDEPTH(GW), .ATW(ATW)) u_ex(
         .clk(clk), .rst_n(rst_n), .go(go), .busy(ex_busy),
-        .layer_fill(lay_fill_ct[31:0]), .layer_sync(released[31:0]),
+        .layer_fill(lay_fill_ct[31:0]), .layer_sync(layer_sync_src),
         .rl_valid(ex_rl_valid), .rl_layer(ex_rl_layer), .a_busy(aw_busy),
-        .sel_o(ex_sel_o), .slice_addr(), .slice_rdata(),
+        .sel_o(ex_sel_o), .slice_addr(), .slice_rdata(32'h0),
         .r_valid(ex_r_valid), .r_data(ex_r_data), .r_frame_done(ex_r_frame_done),
         .r_addr(ex_r_addr), .r_take(rail_r_take),
         .a_go(ex_a_go), .a_s_valid(ex_a_s_valid), .a_s_data(ex_a_s_data),
-        .a_s_ready(aw_s_ready), .a_ww(), .a_wr(),
-        .c_go(ex_c_go), .c_busy(ctl_busy), .c_blocks(ex_c_blocks),
+        .a_s_ready(aw_s_ready),
+        .a_ww(aw_words_written), .a_wr(aw_words_read),
+        .c_go(ex_c_go), .c_busy(ctl_busy), .c_blocks(ctl_blocks_done),
         .phase(ex_phase), .st_o(ex_st), .layer_now(ex_layer_now),
         .layers_done(ex_layers_done), .gemm_done(ex_gemm_done),
         .attn_done(ex_attn_done), .sel_switches(ex_sel_sw),
@@ -135,13 +169,12 @@ module decode_auto_core #(
         .a_wdata(aw_a_wdata), .a_rdy(a_rdy), .a_rdata(a_rdata),
         .s_valid(ex_a_s_valid), .s_data(ex_a_s_data), .s_ready(aw_s_ready),
         .r_valid(aw_r_valid), .r_take(ctl_r_take), .r_data(aw_r_data),
-        .words_written(), .words_read(), .fills_done(), .reads_done(), .reads_in_overlap()
+        .words_written(aw_words_written), .words_read(aw_words_read),
+        .fills_done(), .reads_done(), .reads_in_overlap()
     );
 
     // ---------------- attn_inner_ctl (SF 打包镜像; ys0.68 不支持数组端口) ----------------
-    wire ctl_r_take, ctl_busy, ctl_o_valid; wire [15:0] ctl_o_data, ctl_act, ctl_w;
-    wire [31:0] ctl_o_head, ctl_o_row, ctl_blk, ctl_words, ctl_rows, ctl_blocks_done;
-
+    // (ctl_* 声明已提到 sched_exec 例化之前, 见 L102)
     attn_inner_ctl_sf #(.DW(DW), .HEADS(HEADS), .HBUF(HBUF), .BUFS(BUFS), .WPR(WPR)) u_ctl(
         .clk(clk), .rst_n(rst_n), .go(ex_c_go), .busy(ctl_busy),
         .r_valid(aw_r_valid), .r_data(aw_r_data), .r_take(ctl_r_take),
@@ -183,6 +216,14 @@ module decode_auto_core #(
     assign r_stalls   = r_stalls_w;
     assign a_stalls   = a_stalls_w;
     assign a_words    = a_words_w;
+
+    // 引擎活动观测 (2026-10-21)
+    assign eng_o_valid     = ctl_o_valid;
+    assign eng_o_data      = ctl_o_data;
+    assign eng_rail_frames = rail_frames;
+    assign eng_attn_done   = ex_attn_done;
+    assign eng_gemm_done   = ex_gemm_done;
+    assign eng_layers_done = ex_layers_done;
 
     // ---------------- 状态机 (run→go→wait→done) + 自驱 LFSR ----------------
     reg go = 0;

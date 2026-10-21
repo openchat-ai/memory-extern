@@ -1,0 +1,40 @@
+// ============================================================================
+// mega138k_decode.cst — board_decode_top 专用引脚约束
+// 芯片：GW5AST-LV138FPG676AC1/I0（封装 FCPBG676A，Device Version: B）
+//
+// 与 mega138k_engine.cst 的区别（不要混用）：
+//   mega138k_engine.cst 是引擎工程共用件，含整屏 LCD 约束 (lcd_clk/lcd_en/
+//   lcd_hs/lcd_vs/lcd_r/g/b)。board_decode_top 顶层没有 LCD 端口，
+//   直接复用会报 48 条 CT1135 "Can't find object named 'lcd_*'"，
+//   且 sys_clk 也对不上（顶层端口原名 clk，2026-10-21 已统一为 sys_clk）。
+//   → 本文件只约束 board_decode_top 实际存在的 4 类端口。
+//
+// 引脚号沿用官方 09_Misc/tang_mega_138k-pro_pins.cst + key_led/src/key_led.cst
+//   sys_clk = P16 (板载 50MHz 振荡器, 单端, 非 GCLK)
+//   rst_n   = K16 (S0 复位按键)
+//   LED 共阳极 (逻辑低点亮): led[0]=J14 led[1]=R26 led[2]=L20 led[3]=M25
+// ============================================================================
+
+// ---- 时钟（P16 板载 50MHz 振荡器，单端，非 GCLK 引脚）----
+IO_LOC  "sys_clk" P16;
+IO_PORT "sys_clk" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF PULL_STRENGTH=STRONG BANK_VCCIO=3.3;
+
+// ---- 复位按键（S0）----
+IO_LOC  "rst_n" K16;
+IO_PORT "rst_n" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;
+
+// ---- LED ×4（共阳极，逻辑低点亮）----
+IO_LOC  "led[3]" M25;
+IO_PORT "led[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[2]" L20;
+IO_PORT "led[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[1]" R26;
+IO_PORT "led[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[0]" J14;
+IO_PORT "led[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+
+// ---- LED ×2 引擎判活（2026-10-21 新增；引脚号沿用 periph_smoke.cst）----
+IO_LOC  "led[4]" N21;
+IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "led[5]" N23;
+IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;

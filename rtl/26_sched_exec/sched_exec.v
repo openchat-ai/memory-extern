@@ -106,15 +106,25 @@ module sched_exec #(
     assign st_o      = st;
     assign layer_now = lay;
 
-    function automatic [15:0] se_in(input integer L, input integer blk,
-                                    input integer r, input integer j);
+    // 2026-10-21 关键路径修复: se_in/wordval 原用 32bit integer 算术 →
+    //   (L*7919 + blk*100 + r*10 + j*3 + 7) % 254 被综合成 32bit 除法器
+    //   (98 级逻辑 / 74.7ns) → board_decode_top 整包 Fmax 掉到 13.369MHz
+    //   (20ns 约束下 18 个 setup 违例端点)。
+    //   实参域: L∈[0,7] blk∈[0,15] r∈[0,63] j∈[0,3] → 和 ≤ 57579 (<2^16),
+    //   改 16bit 算术后 %254 变成常数除法 (乘法+移位) → 路径大幅缩短。
+    //   数值逐位不变 (无溢出) → M23/M24/decode 回归应无差异。
+    function automatic [15:0] se_in(input [2:0] L, input [3:0] blk,
+                                    input [5:0] r, input [1:0] j);
         begin
-            se_in = ((L * 7919 + blk * 100 + r * 10 + j * 3 + 7) % 254) + 1;
+            se_in = ((L * 16'd7919 + blk * 16'd100 + r * 16'd10 + j * 16'd3 + 16'd7)
+                     % 16'd254) + 16'd1;
         end
     endfunction
 
-    function automatic [DW-1:0] wordval(input integer L, input integer K);
-        integer blk, w, r, hlf;
+    function automatic [DW-1:0] wordval(input [2:0] L, input [8:0] K);
+        reg [3:0] blk;
+        reg [5:0] w, r;
+        reg [1:0] hlf;
         begin
             blk = K / HBUF; w = K % HBUF;
             r = w / WPR; hlf = w % WPR;
