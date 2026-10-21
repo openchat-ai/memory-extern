@@ -24,3 +24,11 @@
 |---|---|---|---|---|
 | 6 | packslim 格式未记录 scale 定义域，打包端与解码端 `LOG_HI` 不一致时静默输出垃圾 | `meta` 只有 format/bitwidth/block_elems/block_bytes/src/codebook/mixed/period，无 LOG_LO/LOG_HI/SC_STEP。实测同一 p3b3 在 LOG_HI=0 与 −4 下输出逐字节相同（`Ġ1+1=1+1=…`），无法区分「模型弱」与「定义域错配」 | 所有自定义二进制权重格式都该把量化参数写进头部；缺了它，跨版本解码只能靠猜 | 打包时把 LOG_LO/LOG_HI/SC_STEP 写入 meta；解码端启动比对，不一致即 fail-fast。改完可用「同一模型在两种 LOG_HI 下生成」作回归判据 |
 | 7 | 推理侧缺少与 `selftest.py` 对等的自检 | `selftest.py` 6 项全在训练管线（CE 梯度/词表/ckpt），推理引擎无自检。`a8b8148` 的 5 处修复因此只能靠端到端生成单道判据 | 本轮 3 处「正确性」修复里，1 处的理由最后被实测推翻（见日志 §62.3），若无自检无从发现 | 给推理侧补 selftest：rmsnorm 对拍手算、RoPE 对拍参考实现、块步长对拍 `meta.block_bytes`、scale 表对拍打包端 |
+
+## 追加（2026-10-21，13_mega138k 板级线）
+
+| # | 现象 | 证据 | 可能价值 | 待查方式 |
+|---|---|---|---|---|
+| 8 | `decode_auto_core` 的 `released` 从未被赋值 → 板级引擎只跑一层就停在 S_REL | `released` 是 `reg [31:0] released = 0;`，全文件无任何赋值；它喂 `sched_exec.layer_sync`，而 S_REL 的退出条件是 `layer_sync > lay`（恒 0 > 0 为假）→ 引擎第 1 层后永停，后续会话的 go 脉冲被忽略（探针：20000 拍内 a_go 只变化 2 次 = 只启动一次） | 引擎多层循环是"层工作集驻留"方案的上位依赖；板级判活目前只能证明"跑过 1 层" | 候选：①自释放（`layer_sync ← sched_exec.layers_done`，改 1 行，但语义从"wb_flow 释放"变成"引擎自释放"，需在文档标注）；②板级补一个 wb_flow 替身把 `released` 顶起来（更接近真实链路，但工作量大一档） |
+| 9 | 板级"引擎活动"无法用闪灯表达（会话周期 41µs） | `board_decode_top` 的 run 脉冲周期 2048 拍 @50MHz = 40.96µs；引擎只跑一次且活动窗 ~564 拍 → 任何人类可见的闪烁都要再除 10^5 | 若要"呼吸灯"证明引擎持续活着，必须先拉长帧周期（如 2048 → 2^21 拍 ≈ 42ms），代价是解码闭环变慢 | 改 `board_decode_top` 的 tick 分频（1 行），再把 LED 改成引擎事件驱动的慢闪；同时要重新对账 `core_selftest` 的 done@162 基准 |
+
