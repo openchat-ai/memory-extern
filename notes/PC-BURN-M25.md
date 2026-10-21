@@ -18,7 +18,8 @@
 2. P&R 四个 option 排列 (参考 macsplit smoke: route=2 place=3 max_fanout=100)
 3. 检查时序: Fmax 目标 ≥50MHz (逻辑深度预算见 SF12+ P8: 余量充裕; 关键链3 fk ~19级)
    - 若 >124MHz 兴趣: fk 加入两拍流水再收敛 (P8 建议)
-4. 烧录 SRAM (JTAG 8MHz; 15MHz 曾 20% 失败, 直接 8MHz 稳妥)
+4. 烧录 SRAM (JTAG 15MHz, 实测 30s 烧完; 见下方"烧录操作坑"第 1 条 —— **不要写 8MHz**,
+   那个值不存在, 传了会被忽略并实际跑 15MHz)
 5. 板验判活:
    - LED[0] 心跳 (div[22] 慢闪) ; LED[2]=done 帧内高; LED[3]=GOOD 数帧后常亮; LED[1]=busy strobe
 6. 读回/观测: out_data/out_expert 帧流 (切片词内容=预灌值, 与 core_selftest 基准可比)
@@ -28,3 +29,24 @@
   - 默认 STRESS=0 (板上无停摆) 不影响; 若上游信用波动设计, PC 侧修 assembler 层握手
     (S_TAKE 显式 in_valid 连续, 或 router layer_done 对齐) 后回归 core_stress_tb。
 - 词表预灌: slice LUT 用 wr 接口预灌 (值=序号语义已验); 真词表数据 PC 替换 wr_data。
+
+## 烧录操作坑 (2026-10-21 实机踩到, 逐条都有代价)
+1. **`--frequency` 没有 8MHz 这个值**。合法值只有:
+   `2.5MHz; 2MHz; 15MHz; 10MHz; 1.5MHz; 1.1MHz; 0.9MHz; 0.75MHz; 0.5MHz; 0.3MHz; 0.4MHz; 0.1MHz; 0.02MHz`
+   传 `8` 匹配不到 → 工具自行挑 15MHz (日志 `Frequency Updated: "15MHz"`)。
+   本文件此前记的"8MHz 稳定 / 15MHz 曾 20% 失败"**是错的**: 那些"8MHz"实际跑的是 15MHz。
+   稳妥用 **15MHz**(实测 30s 烧完) 或默认 2.5MHz; 扫链默认就是 2.5MHz。
+2. **进度条用 `\r` 不换行** → 任何截断管道 (如 `Select-Object -First N`) 会让
+   子进程 stdout 写失败**当场死亡**(2026-10-21 实测 15MHz 烧到 35% 被掐死, 退出码 -1);
+   而重定向到文件则是 **4KB 块缓冲**, 进度全憋在缓冲里 (0 字节) 看不见。
+   正确做法: `& $exe ... 2>&1 | Tee-Object -FilePath $log` (实时上屏 + 落盘, 不截断)。
+3. **15MHz 烧录中断 → 器件需断电复位**。被掐断后器件停在 JTAG 中途, 后续
+   烧录与 `--scan` 都会**满负荷空转零应答**(2026-10-21 实测: 烧录进程 660s CPU /
+   0 字节日志, 扫链 120s 无输出)。此时只能断电重上电。
+4. **板级 LED 极性 = 共阳低亮** (J14/R26/L20/M25/N21/N23, 见 periph_smoke.cst 注释
+   "共阳低亮") → **逻辑 0 才点亮**; 仓库已烧通过的 board_top.v / board_freq800_sentry.v
+   一律写 `~signal`。**极性自检口诀: 按住复位不放 → 六个信号全被清 0 → 六盏灯应全亮**;
+   若全灭则极性反了。(2026-10-21 板_decode_top 首烧就栽在这: LED 接成"1=亮",
+   导致板上"条件成立=灯灭", 读数与实际完全相反, 差点误判成"挂死")
+5. 烧录前先确认无残留 `programmer.exe` (GUI 会独占 USB 调试器);
+   烧完别断电 —— SRAM 易失, 断电即失。

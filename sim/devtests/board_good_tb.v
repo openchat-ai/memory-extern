@@ -16,15 +16,18 @@ module board_good_tb;
             @(posedge clk); cyc = cyc + 1;
             if (U.token_done) $display("  token@%0d aw=%0d hsh=%08h good=%0d", cyc, U.a_words, U.hsh, U.good);
             if (U.done_ir && !df) begin $display("  done@%0d", cyc); df = 1; end
-            if (led[3] && !donef) begin donef = 1; goodcyc = cyc; end
+            if (!led[3] && !donef) begin donef = 1; goodcyc = cyc; end   // 共阳: 0 = 亮 = GOOD
         end
         // 2026-10-21: 板级验收 = 解码 GOOD(led3) + 引擎两盏 PASS 灯(led4/led5)
-        //   led4 = attn 段出非零内积 (首会话 ~1460 拍后)
-        //   led5 = 引擎爬满 4 层 (SELFREL 自释放; 需 4 个会话 ≈ 8200 拍)
+        //   本板 LED 共阳 (逻辑 0 才点亮) → 条件成立 = 驱动 0 = TB 里读作 0
+        //   led3=0 → good[1]=1 → 连续两帧同指纹 (解码 GOOD)
+        //   led4=0 → attn 段出非零内积 (窗+读回+内积分块+乘累加链全活)
+        //   led5=0 → 引擎爬满 4 层 (SELFREL 自释放; 每层含 GEMM 段 → rail 在网表里)
         if (donef) $display("board_good GOOD(led3)@%0d", goodcyc);
-        if (donef && led[4] && led[5]) $display("board_good PASS  led=%0b (led3 GOOD + led4 attn + led5 4层)", led);
+        if (donef && !led[3] && !led[4] && !led[5])
+            $display("board_good PASS  led=%0b (led3 GOOD + led4 attn + led5 4层)", led);
         else begin
-            $display("board_good FAIL  led=%0b (need led3+led4+led5)", led);
+            $display("board_good FAIL  led=%0b (need led3=led4=led5=0, 共阳低亮)", led);
             $finish(1);
         end
         #40 $finish;

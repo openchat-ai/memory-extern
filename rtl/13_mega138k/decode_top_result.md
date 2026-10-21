@@ -1,20 +1,20 @@
 # board_decode_top — 板级整包 PnR 结果 (decode 闭环 + 引擎判活, 可上硅)
 
 > 机器读字段见同目录 `decode_top_result.txt` (纯 ASCII, 由 build_decode_top.tcl 写)。
-> 本文件是人写的叙述版 (UTF-8)。最后更新: 2026-10-21 15:20。
+> 本文件是人写的叙述版 (UTF-8)。最后更新: 2026-10-21 17:41。
 
 ```
 mode = all   route_option = 2   place_option = 3   max_fanout = 100
-elapsed_s = 809   status = DONE
+elapsed_s = 746   status = DONE
 ```
 
 ## Resources (pnr/rpt.txt)
 
 | 项 | 值 | 占器件 138,240 |
 |---|---|---|
-| LUT | 21,423 | 15.5% |
-| ALU | 461 | — |
-| LUT+ALU 合计 | **21,884** | **15.8%** |
+| LUT | 21,428 | 15.5% |
+| ALU | 460 | — |
+| LUT+ALU 合计 | **21,888** | **15.8%** |
 | Register | 4,668 | 3.4% |
 | MULTALU27X18 | 3 | — |
 | MULTADDALU12X12 | 1 | — |
@@ -40,7 +40,7 @@ elapsed_s = 809   status = DONE
 
 ```
 sys_clk 约束 = 20.000 ns (50.000 MHz, P16 板载 50M 振荡器, 无 PLL)
-sys_clk 实测 Fmax = 66.596 MHz   (logic level 19)
+sys_clk 实测 Fmax = 60.400 MHz   (logic level 11)
 Setup 违例端点 = 0    TNS = 0
 Hold  违例端点 = 0
 ```
@@ -56,33 +56,60 @@ led[0]=J14  led[1]=R26  led[2]=L20  led[3]=M25  led[4]=N21  led[5]=N23
 
 ```
 fs = F:\sram\sram\out\138k_pro\decode_top\board_decode_top_r2p3\impl\pnr\board_decode_top.fs
-     (33.3MB, 2026-10-21 15:20)
+     (33.3MB, 2026-10-21 17:41)
 ```
 
-## 烧录（PC 执行；8MHz 稳，15MHz 曾 20% 失败）
+## 烧录（PC 执行）
 
 ```powershell
 D:\Gowin\Gowin_V1.9.12.03_x64\Programmer\bin\programmer_cli.exe `
-  --cable-index 1 -d GW5AST-138B --frequency 8 -r 2 `
+  --cable-index 1 -d GW5AST-138B --frequency 15MHz -r 2 `
   --fsFile F:\sram\sram\out\138k_pro\decode_top\board_decode_top_r2p3\impl\pnr\board_decode_top.fs
 ```
 
-烧前确认没有残留 `programmer.exe` 占着 USB 调试器。SRAM 易失，断电即失。
+⚠️ `--frequency` **没有 8MHz 这个值**（合法值 2.5/2/15/10/1.5/1.1/0.9/0.75/0.5/0.3/0.4/0.1/0.02MHz）；
+传 8 会被忽略、实际跑 15MHz。**15MHz 实测 30s 烧完**（退出码 0）。
+烧录前确认无残留 `programmer.exe`（GUI 占 USB 调试器）；**烧完别断电**（SRAM 易失）。
+烧录操作坑（进度条截断/15MHz 中断需断电复位/极性自检）见 `notes/PC-BURN-M25.md`。
 
 ## 板验判活（期望）
 
-| LED | 引脚 | 期望 | 证明什么 | 何时亮 |
+> **LED 极性：本板 LED 共阳 → 逻辑 0 才点亮**（`periph_smoke.cst` 注释「共阳低亮」；
+> 仓库已烧通过的 `board_top.v` / `board_freq800_sentry.v` 一律写 `~signal`）。
+> **极性自检口诀：按住复位不放 → 六个信号全清 0 → 六盏灯应全亮**；全灭=极性反了。
+> 本文件 2026-10-21 首烧就是极性接反（"条件成立=灯灭"），读数与实际完全相反，
+> 差点误判成"引擎挂死"；复位键自检 + 仓库既有板级顶层的接法把它钉死。
+
+| LED | 引脚 | 期望（极性修正后） | 证明什么 | 何时成立 |
 |---|---|---|---|---|
-| LED0 | J14 | ~1Hz 心跳 | 独立计数器（与核心无关） | 上电即亮 |
-| LED1 | R26 | busy 频闪 | route_asm 在吐流 | 上电即动 |
-| LED2 | L20 | 帧内 done 高 | 帧节拍 | 上电即动 |
-| LED3 | M25 | 数帧后恒亮 | **解码帧闭环 GOOD**（连续两帧 +128 词且内容流活跃） | ~3200 拍 |
-| LED4 | N21 | 恒亮 | **引擎 attn 段出非零内积**（窗灌+读回+内积分块+乘累加链全活） | ~1460 拍 |
-| LED5 | N23 | 恒亮 | **引擎爬满 4 层**（SELFREL 自释放后多层循环成立；每层含 GEMM 段 → rail 链同时在网表里） | ~8200 拍 |
+| LED0 | J14 | 慢闪 | 独立计数器（与核心无关） | 上电即动 |
+| LED1 | R26 | **弱（暗闪）** | busy 高电平只占 ~8%（跑帧那几百拍 / 2048 拍周期），24Hz 重复 → 眼睛看成暗闪 | 上电即动 |
+| LED2 | L20 | **灭**（帧沿瞬亮，抓不到） | done_state 常态 0（只在 a_words==128 或 done_ir 那 1 拍为 1）→ 驱动 1 → 灭 | — |
+| LED3 | M25 | **常亮** | **解码帧闭环 GOOD**（连续两帧 +128 词且内容流活跃） | ≈3200 拍 ≈ 64ms |
+| LED4 | N21 | **常亮** | **引擎 attn 段出非零内积**（窗灌+读回+内积分块+乘累加链全活） | ≈1460 拍 ≈ 29ms |
+| LED5 | N23 | **常亮** | **引擎爬满 4 层**（SELFREL 自释放后多层循环成立；每层含 GEMM 段 → rail 链同时在网表里） | ≈8200 拍 ≈ 164ms |
+
+**2026-10-21 真机实测（极性修正版，15MHz 烧录后）**：
+`LED0 闪 / LED1 弱 / LED2 灭 / LED3 常亮 / LED4 常亮 / LED5 常亮`
+→ 与上表逐条一致，**六项全过**。注意 LED2 常态是"灭"（不是故障），LED1 常态是"弱"（不是故障）。
 
 LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话周期只有 2048 拍 = 40.96µs，
 且引擎每会话只活动几百拍 → 任何人类可见的闪烁都表达不出来，故用锁存灯。
 （想改成"呼吸灯"要先拉长帧周期，见 docs/SIDE_QUESTS.md 侧支 #9）
+
+## 板级实测记录（2026-10-21 首烧，极性未修正版）
+
+首烧（15MHz，30.7s，退出码 0）读数：**LED0 闪 / LED1 常亮 / LED2 常亮 / LED3 灭 / LED4 灭 / LED5 灭**。
+
+按错误极性（1=亮）读 → 像是"解码挂死 + 引擎没跑"；
+按正确极性（0=亮）读 → good[1]=1、eng_attn_seen=1、eng_gemm_seen&eng_layers_seen=1
+→ **三项 PASS 条件全部成立**。
+
+判决性验证（用户实做）：**按住复位不放 → 六盏灯全亮；松开 → 恢复原样**。
+复位期间 div/busy/done_state/good[1]/eng_* 全为 0 → 全亮 = 极性自检通过；
+松开后 3/4/5 仍"灭" = 三个条件随后成立（灯灭=条件真，因为极性反了）→ 板子在正常工作。
+→ 结论：**板子全过**，首烧的问题只在 LED 语义不可读，已于同版修正（`~signal`）并重烧。
+
 
 ## 这一轮修的五件事（每件都有独立证据）
 
@@ -104,7 +131,7 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
    `attn_done=4 / gemm_done=4 / layers_done=4 / ctl_blocks=160 / ctl_rows=1280 /
     aw.words_written=2560 / rail_frames=20 / arr_acc_out=ade4`（真实非零内积）。
 4. **关键路径 `sched_exec.se_in` 的 32bit `%254`** → 98 级 / 74.7ns / Fmax 13.369MHz。
-   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 66.596MHz。
+   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 60.400MHz。
    证据：穷举 32768 组合 0 差异；decode_auto 矩阵 8 行代表全绿。
 5. **侧支#8 引擎自释放**：`released`（喂 `sched_exec.layer_sync` 的 wb_flow 释放计数）
    在板级从未被赋值、恒 0 → 引擎跑完第 1 层就卡在 S_REL。

@@ -5,5 +5,5 @@ mode = all
 route_option = 2
 place_option = 3
 max_fanout = 100
-elapsed_s = 809
+elapsed_s = 746
 status = DONE

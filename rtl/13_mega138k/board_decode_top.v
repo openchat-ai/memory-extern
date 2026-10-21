@@ -75,17 +75,21 @@ module board_decode_top (
             prev_words <= a_words;
         end
 
-    assign led[0] = div[22];
-    assign led[1] = busy;
-    assign led[2] = done_state;
-    assign led[3] = good[1];          // ≥2 连续同指纹 = 自驱闭环稳定 → GOOD
+    // LED 极性: 本板 LED 共阳 (J14/R26/L20/M25/N21/N23, 见 periph_smoke.cst 注释
+    //   "共阳低亮") → **逻辑 0 才点亮**。仓库既有板级顶层 (board_top.v /
+    //   board_freq800_sentry.v) 一律写 ~signal。本文件原先直连 (未取反),
+    //   导致"条件成立 = 灯灭", 板上读数与实际相反 → 2026-10-21 全部取反。
+    assign led[0] = ~div[22];           // 心跳 (慢闪)
+    assign led[1] = ~busy;              // 忙时点亮 (帧节拍)
+    assign led[2] = ~done_state;        // 帧内 done 点亮
+    assign led[3] = ~good[1];           // ≥2 连续同指纹 = 解码 GOOD → 点亮
     reg done_state = 0;
     always @(posedge sys_clk or negedge rst_n)
         if (!rst_n) done_state <= 0; else done_state <= done_ir || a_words == 32'd128;
 
     // ---- 引擎 PASS 灯 (2026-10-21) --------------------------------------------
     // 板上引擎每会话跑一轮 (会话 2048 拍), 活动窗很短 → 闪灯看不出持续活动,
-    // 改用**板级锁存**: 见一次就常亮 = 板上真跑过。
+    // 改用**板级锁存**: 见一次就常亮 = 板上真跑过 (共阳 → 条件成立时点亮)。
     //   led[4] N21: attn 段真出非零内积 → 窗灌+读回+内积分块+乘累加链 全活
     //   led[5] N23: 引擎跑满 4 层 (SELFREL 自释放后 layers_done 能爬到 4)
     //                → 调度器多层循环成立; 每层含 GEMM 段 → rail 链同时被拉进网表
@@ -100,6 +104,6 @@ module board_decode_top (
             if (eng_rail_frames != 32'h0000) eng_gemm_seen <= 1'b1;
             if (eng_layers_done >= 32'd4) eng_layers_seen <= 1'b1;
         end
-    assign led[4] = eng_attn_seen;
-    assign led[5] = eng_gemm_seen & eng_layers_seen;
+    assign led[4] = ~eng_attn_seen;
+    assign led[5] = ~(eng_gemm_seen & eng_layers_seen);
 endmodule
