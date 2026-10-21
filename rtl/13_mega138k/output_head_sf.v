@@ -54,7 +54,10 @@ module output_head_sf #(
     integer newidx [0:K-1];          // 组合暂存新表
     integer newscr [0:K-1];
 
-    integer j_inv;
+    integer j_inv;                               
+    // j/p/ok 原声明在时序 always 块内（SV 允许，Verilog-2001 要求提到模块级）。
+    // iverilog -g2012 与 yosys 0.68 均接受，Gowin 前端 EX3620 拒绝。移到此处，语义不变。
+    integer j, p, ok;
 
     assign in_take     = (st == S_SCAN) && in_valid;
     assign token_done  = td_p;
@@ -73,7 +76,6 @@ module output_head_sf #(
     endtask
 
     always @(posedge clk or negedge rst_n) begin
-        integer j, p, ok;
         if (!rst_n) begin
             st <= S_IDLE; cnt <= 0; op <= 0;
             tok_idx <= 0; round <= 0; stalls <= 0; scanned <= 0;

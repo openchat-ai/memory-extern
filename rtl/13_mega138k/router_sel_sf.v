@@ -18,15 +18,15 @@ module router_sel_sf #(
     parameter SW  = 16,      // e_score 宽度
     parameter NL  = 3        // 座席层/会话
 )(
-    input  clk, rst_n, go,
+    input  wire clk, rst_n, go,
     output reg busy,
-    input  credit,                            // 上游信用门 (M 系列口径)
-    input  s_valid,                           // e_score 流 (1 拍/专家, 层内 0..EX-1)
-    input  [SW-1:0] s_score,
+    input  wire credit,                            // 上游信用门 (M 系列口径)
+    input  wire s_valid,                           // e_score 流 (1 拍/专家, 层内 0..EX-1)
+    input  wire [SW-1:0] s_score,
     output wire out_valid,                    // top-T 表逐条吐装配 (组合: 表序=已排好)
     output wire [($clog2(EX)-1):0] out_idx,
     output wire [SW-1:0] out_score,
-    input  out_take,
+    input  wire out_take,
     output reg layer_done, token_done,
     output reg [31:0] round,                   // M38: 8→32, 长流运行账防 256-token 回绕
     output wire [IX-1:0] cur_idx,             // 当前灌收专家号 (观测/源配对, M16 s_sel 同构)
@@ -95,16 +95,22 @@ module router_sel_sf #(
                         if (pp >= 0) begin
                             // 全槽并行 top-T 插入 (非阻塞取旧值, 段移位语义等价;
                             //   ys0.68 muxtree 对运行界段移位多驱, 改每槽独立避免)
-                            for (ii = 0; ii < RT; ii = ii + 1) begin
-                                if (ii < TOP) begin
-                                    if (ii == pp) begin
-                                        t_score[ii] <= s_score;
-                                        t_idx[ii]   <= idx;
-                                    end
-                                    else if (ii > pp) begin
-                                        t_score[ii] <= t_score[ii-1];
-                                        t_idx[ii]   <= t_idx[ii-1];
-                                    end
+                            //
+                            // 原为单个 `for (ii=0; ii<RT; ...)` + `if (ii<TOP)` + `else if (ii>pp)`。
+                            // 逻辑上 `ii>pp>=0` 保证 ii>=1, 但 pp 是运行期 integer,
+                            // Gowin 前端不做区间证明 -> EX3784 "Index -1 out of range"。
+                            // 拆成两个循环: 命中槽从 0 起, 段移位槽从 1 起,
+                            // 使 t_score[ii-1] 的下界静态可证。语义等价。
+                            for (ii = 0; ii < TOP; ii = ii + 1) begin
+                                if (ii == pp) begin
+                                    t_score[ii] <= s_score;
+                                    t_idx[ii]   <= idx;
+                                end
+                            end
+                            for (ii = 1; ii < TOP; ii = ii + 1) begin
+                                if (ii > pp) begin
+                                    t_score[ii] <= t_score[ii-1];
+                                    t_idx[ii]   <= t_idx[ii-1];
                                 end
                             end
                             if (tc < TOP) tc <= tc + 1;

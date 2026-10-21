@@ -19,8 +19,8 @@ module vocab_prune_sf #(
     parameter MAXE = 8,       // 窗口半径上限
     parameter FKXG = 0        // 远峰梯度 (M63: 默认0保持原合同; >0 线性抬升远词位, 激活 lbw 右支/远端钳) 
 )(
-    input  [BB-1:0] acc,      // 引擎累加 (logits 派生的代理输入)
-    input  [3:0] xext,        // 候选窗半径 (0..MAXE)
+    input  wire [BB-1:0] acc,      // 引擎累加 (logits 派生的代理输入)
+    input  wire [3:0] xext,        // 候选窗半径 (0..MAXE)
     output wire [$clog2(VOC/GRP)-1:0] G,     // 峰组
     output wire [31:0] ncad,  // 候选数
     output wire [CAP*$clog2(VOC)-1:0] cand_p   // SF3-P2: cand 打包 (ys0.68 无数组端口)
@@ -28,24 +28,46 @@ module vocab_prune_sf #(
     localparam NG = VOC/GRP;
     localparam CAP = (2*MAXE+1)*GRP;
 
-    function integer fk(input integer a, input integer x);
-        fk = (a*7 + x*17) % 23 + (FKXG * x);
-    endfunction
-    // 组内峰 (平局取小号先)
-    function integer gpeak(input integer g, input integer a);
-        integer b;
-        integer i;
-        b = fk(a, g*GRP);
-        for (i = 1; i < GRP; i = i + 1)
-            if (fk(a, g*GRP + i) > b) b = fk(a, g*GRP + i);
-        gpeak = b;
-    endfunction
+    // ── 假打分 fk(a,x) = (7a + 17x) mod 23 [+ FKXG*x] ─────────────────────
+    // 硬件化改写 (2026-10-21): 原写法把 fk 整个展开成 34bit 乘加 + 34bit 取模,
+    //   NG=VOC/GRP=64 时 = 1024 份取模 → Gowin 综合出 53 万 LUT,
+    //   整包 board_decode_top 撞 RP0006 (533,752 > 器件 138,240)。
+    // 改用模运算分配律 (数学恒等, 已穷举验证 a∈0..65535 × x∈0..1023 无一例外):
+    //   (7a + 17x) mod 23 = ((7a mod 23) + (17x mod 23)) mod 23
+    //   → 7a mod 23 全局只算一次 (19bit, 常量除法 → 乘法移位)
+    //   → 17x mod 23: x = g*GRP+i 是编译期常量 → 常量表, 零逻辑
+    //   → 每实例只剩 6bit 加 + 一次条件减
+    // 语义逐位不变: 同样的 fk 值、同样的组内峰(平局取小号先)、同样的 grp[]。
+    wire [18:0] acc7 = {3'b0, acc} * 19'd7;   // acc ≤ 65535 → ≤ 458745
+    wire [4:0]  p23  = acc7 % 23;             // 全局唯一取模
+
+    // 每候选 fk 值 (fv) + 组内前缀峰链 (gm), 组边界重置
+    wire [15:0] fv [0:NG*GRP-1];
+    wire [15:0] gm [0:NG*GRP-1];
+    genvar t;
+    generate
+        for (t = 0; t < NG*GRP; t = t + 1) begin: fk_all
+            localparam integer XCON = t;              // x = g*GRP + i (编译期常量)
+            localparam [5:0]   QCON = (XCON*17) % 23; // 17x mod 23 → 常量表
+            localparam [15:0]  FKG  = FKXG * XCON;    // FKXG 项 (FKXG=0 时折叠为 0)
+            wire [5:0]  s    = {1'b0, p23} + QCON;    // p23+QCON ≤ 44
+            wire [5:0]  sd   = s - 6'd23;             // s ≥ 23 时有效 (0..21)
+            wire [15:0] fmod = (s >= 6'd23) ? {10'b0, sd} : {10'b0, s};
+            assign fv[t] = fmod + FKG;
+        end
+    endgenerate
+    generate
+        for (t = 0; t < NG*GRP; t = t + 1) begin: mx_all
+            if (t % GRP == 0) assign gm[t] = fv[t];   // 组首: 峰链重置
+            else assign gm[t] = (fv[t] > gm[t-1]) ? fv[t] : gm[t-1]; // 严格 > → 平局取小号先
+        end
+    endgenerate
 
     wire [31:0] grp [0:NG-1];
     genvar g;
     generate
         for (g = 0; g < NG; g = g + 1) begin: grp_g
-            assign grp[g] = gpeak(g, acc);
+            assign grp[g] = gm[(g+1)*GRP - 1];        // 组内峰 = 组尾的峰链值
         end
     endgenerate
 
