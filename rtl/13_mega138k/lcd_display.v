@@ -265,11 +265,13 @@ module lcd_display #(
     genvar gi, gj;
     generate
         for (gi = 0; gi < 11; gi = gi + 1) begin : g_title
-            assign t0_str[gi] = TITLE[8*gi +: 8];
+            // 注意: Verilog 字符串参数的**首字符在最高位** ("ABC" → A 在 MSB),
+            //   所以解包要从高往低取 (否则整行反着画)。2026-10-22 板级实测发现。
+            assign t0_str[gi] = TITLE[8*(10-gi) +: 8];
         end
         for (gi = 0; gi < 5; gi = gi + 1) begin : g_line
             for (gj = 0; gj < 7; gj = gj + 1) begin : g_lbl
-                assign d_str[gi][gj] = lbl_bus[gi][8*gj +: 8];
+                assign d_str[gi][gj] = lbl_bus[gi][8*(6-gj) +: 8];
             end
             if (gi == 0 && L1_WORD != 0) begin : g_word
                 // Line1 文字模式: ACTIVE / IDLE 覆盖十六进制位 (引擎板原语义)
