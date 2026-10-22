@@ -1,5 +1,13 @@
-﻿# launch_dtop_synth.ps1 — 后台跑 board_decode_top 综合（不占主线）
+﻿# launch_dtop_synth.ps1 — 后台跑 board_decode_top 综合/PnR（不占主线）
 # 用法: powershell -File launch_dtop_synth.ps1 [all|synth]
+#   all   = 全量 综合+PnR   (~16 分钟)
+#   synth = 只综合           (~5 分钟)
+#
+# 注: 增量 PnR 已实测**不可用** (2026-10-22):
+#   PA2136 "placement matching 52.03% < threshold 80" → 工具拒绝复用布局,
+#   退化重跑后 3560s (59min) vs 全量 994s (16.5min) = 慢 3.7 倍, 并抛
+#   PR0004 "0 unrouted nets" 假错。根因: 本设计改动 (LCD 字库/字符串/字段)
+#   会扩散到布局, 逐单元匹配率上不去。→ 脚本已删, 勿重开。
 $ErrorActionPreference = "Stop"
 $mode = if ($args.Count -ge 1) { $args[0] } else { "synth" }
 $bin  = "D:\Gowin\Gowin_V1.9.12.03_x64\IDE\bin"

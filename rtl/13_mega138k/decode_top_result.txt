@@ -1,8 +1,13 @@
+# board_decode_top PnR result (18 files)
 # NOTE: machine-readable section only (ASCII). Chinese narrative:
 #       see rtl/13_mega138k/decode_top_result.md (hand-written, UTF-8)
+# 最后成功的一轮: 全量 (mode=all), 含 LCD 字形 P/X + 字符串宽度修正
 mode = all
 route_option = 2
 place_option = 3
 max_fanout = 100
-elapsed_s = 1164
+elapsed_s = 994
 status = DONE
+# 注: 2026-10-22 试过增量 PnR (build_decode_top_incr.tcl) → 不可用:
+#   PA2136 placement matching 52.03% < threshold 80% (设计改动扩散到布局)
+#   → 退化重跑且更慢 (3560s vs 994s), 并抛 PR0004 "0 unrouted nets" 假错。

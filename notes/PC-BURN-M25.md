@@ -72,4 +72,18 @@
    `impl/gwsynthesis/<top>.vg` 里的网名。
 10. **仿真里 Gowin 原厂 PLL 原语(PLL) iverilog 不认** → `Unknown module type: PLL`。
     写一个仿真替身 (直通时钟) 顶替, 真综合仍用原厂 PLL 模块。
+11. **增量 PnR 对本设计不可用 (2026-10-22 实测, 勿重开)**: 照 periph_smoke 的先例
+    (open_project 不 -force + `-inc_place 0` + `-inc_pnr auto`) 试了两轮:
+    - 第一轮: 少设 `-output_base_name` → 找 `project.pr` 找不到 (全量产物叫
+      `board_decode_top.pr`) → PA2135 → 静默退全量 (1098s, 与全量 994s 同速)
+    - 第二轮: 补上 output_base_name → `PA2136 placement matching(52.03) < threshold(80)`
+      → 工具**拒绝**复用布局, 退化重跑后 **3560s (59min) = 全量的 3.7 倍**, 还抛
+      `PR0004 "There are total 0 unrouted nets"` 假错
+    - 根因: 25K LUT 的设计, 改 LCD (字库/字符串/字段) 会扩散到布局, 逐单元匹配率
+      上不去 80% 门槛。**结论: 本设计改一个字也要 16 分钟全量, 没有便宜路**;
+      要快速调屏只能做"独立小位流"(只 LCD + 假计数器, 几百 LUT → PnR 1~2 分钟)。
+12. **LCD 文字层必须有仿真判据** (2026-10-22 教训): 一轮 PnR 16 分钟, 而
+    "字节序反 / 缺字形 / 字符串宽度错位"这类文字 bug 都可以在 **<1 秒**的仿真里查出来
+    (`sim/devtests/lcd_text_tb.v`: 逐字符 + 字形存在性)。当晚先后烧了 5 版才修完,
+    其中至少 3 版本该被仿真拦下。**改显示内容前先跑 lcd_text_tb**。
 
