@@ -86,6 +86,16 @@
    - 下一步：若要签核 200MHz，需试官方 demo 工程（led/ddr3_400M）验证是否工具/环境极限；或接受 124MHz 作为当前工作频率继续推进。
    - **向下游（手机端）传递时：先 `git pull`，读 HANDOFF + PNR-EXPERIENCE.md，勿重复跑 4 配置实验。**
 3. **三方汇合（13↔14）**：`pcie_dma_engine`（FPGA 权重流）↔ `nvme_bridge`（块请求）↔ `cachectl_pipeline`（wt_lba 落点）语义对上，加回归（仿真桩粒度自己定）。
+   - ✅ **2026-10-21 已完成"权重流 → 引擎"这一段**：新增 `rtl/13_mega138k/wt_axis_adapter.v`（**14 侧零改动**）把
+     `cachectl_pipeline` 的裸权重字流（32bit/字 + wt_lba 48bit 与字同拍）接成引擎的 AXI-Stream 帧：
+     造 cmd 拍(0x02=权重) + 自增 seq + rem_bytes(64) + **wt_lba 放进帧头 [127:80]**（引擎原格式未用该段），
+     32bit 字 → 128bit 拍（每拍 4 字，小端），每 16 字一帧（=引擎权重帧 4 拍 64 字节），末拍带 tlast。
+   - 回归：`sim/devtests/wt_axis_adapter_tb.v`（帧头/负载/字序/tlast/随机反压，全过）
+     + `sim/devtests/wt_engine_tb.v`（**端到端**：字流桩 → 适配器 → 真 pcie_dma_engine → 结果流 4 拍 + status_tokens=4）
+   - ⚠️ **遗留（内容格式，不是帧/握手）**：cachectl 侧现在吐的是简化单字 `{tag[7:0], weight[24:0]}`，
+     而引擎期望 "128 lane × 4bit 码"（64 字节/帧）。**帧与握手语义已对上，字节内容怎么解释是下一阶段课题。**
+   - ⚠️ `nvme_bridge` 那一段（块请求源 → 文件数据 → cachectl 的 st_in/cmd_in）**尚未并进来**：
+     本轮只做了 cachectl → 引擎这一段，nvme_bridge 的输出还没接进 cachectl。
 4. **14 PCIe 硬核真机准备**：EP(T2)/RC(T1) 适配器 = 顶层骨架 + 金手指约束 + 用户照做的 Gowin IDE 清单（`lspci -vv` 目标 Gen3 x4）。Termux 无 Gowin IP，只能到"bitstream 就绪度"。
 5. 新代码沿用各支线回归；14 追加 `sim.sh run`；12/13 按各自 tb 单跑。
 6. 调试临时文件一律 `/data/data/com.termux/files/usr/tmp/opencode/`。
