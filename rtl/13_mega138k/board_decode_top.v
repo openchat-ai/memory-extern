@@ -283,12 +283,24 @@ module board_decode_top #(
         .clkin   (sys_clk)
     );
 
-    lcd_display u_lcd (
+    lcd_display #(
+        .TITLE   ("DECODE STATUS"),
+        .LBL1    ("FPS:  "),
+        .LBL2    ("W:    "),
+        .LBL3    ("HASH: "),
+        .LBL4    ("FRM:  "),
+        .LBL5    ("L:    "),
+        .L1_WORD (1'b0),        // Line1 用十六进制 (FPS), 不用 ACTIVE/IDLE 文字
+        .NLINES  (6)
+    ) u_lcd (
         .lcd_clk     (lcd_clk_35),
         .rst_n       (pll_lock),
-        .act_cnt     (rep_f[23:0]),
-        .sum_out     (rep_h),
-        .engine_busy (eng_o_valid),
+        .act_cnt     (rep_f[23:0]),   // 活动源: 帧号在变 → MODE 判定为 ACTIVE
+        .cnt1        (a_words[23:0]), // Line2 每帧词量
+        .cnt2        (fps_val),       // Line1 上一秒实测帧数 (速度)
+        .val8        (rep_h),         // Line3 帧哈希
+        .cnt4        (rep_f[23:0]),   // Line4 帧计数
+        .cnt5        (eng_layers_done[23:0]), // Line5 引擎层数
         .lcd_clk_o   (lcd_clk),
         .lcd_en      (lcd_en),
         .lcd_hs      (lcd_hs),
@@ -297,4 +309,25 @@ module board_decode_top #(
         .lcd_g       (lcd_g),
         .lcd_b       (lcd_b)
     );
+
+    // ---- 1Hz 窗口: 统计"上一秒实测帧数" → 屏上 FPS 字段 ------------------------
+    //   帧周期 = 2048 拍 @50MHz = 40.96us → 理论 24,414 帧/秒; 这个数是**实测**
+    //   (若引擎背压或状态机卡住, 它会掉下来), 不是设计常量。
+    reg [25:0] sec_cnt = 0;
+    reg [23:0] fps_win = 0;
+    reg [23:0] fps_val = 0;
+    always @(posedge sys_clk or negedge rst_n)
+        if (!rst_n) begin
+            sec_cnt <= 26'd0; fps_win <= 24'd0; fps_val <= 24'd0;
+        end else begin
+            if (sec_cnt == 26'd49999999) begin
+                sec_cnt <= 26'd0;
+                fps_val <= fps_win;
+                if (token_done) fps_win <= 24'd1;
+                else fps_win <= 24'd0;
+            end else begin
+                sec_cnt <= sec_cnt + 26'd1;
+                if (token_done) fps_win <= fps_win + 24'd1;
+            end
+        end
 endmodule

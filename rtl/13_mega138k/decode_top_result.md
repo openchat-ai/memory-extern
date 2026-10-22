@@ -12,9 +12,9 @@ elapsed_s = 746   status = DONE
 
 | 项 | 值 | 占器件 138,240 |
 |---|---|---|
-| LUT | 22,918 | 16.6% |
+| LUT | 27,627 | 20.0% |
 | ALU | 508 | — |
-| LUT+ALU 合计 | **23,451** | **17.0%** |
+| LUT+ALU 合计 | **28,135** | **20.4%** |
 | PLL | 1 / 12 | 8% |
 | Register | 4,668 | 3.4% |
 | MULTALU27X18 | 3 | — |
@@ -41,8 +41,8 @@ elapsed_s = 746   status = DONE
 
 ```
 sys_clk 约束 = 20.000 ns (50.000 MHz, P16 板载 50M 振荡器, 无 PLL)
-sys_clk 实测 Fmax = 55.063 MHz   (logic level 21)
-lcd_clk_35 约束 35.000 MHz → 实测 Fmax = 111.194 MHz   (logic level 4)
+sys_clk 实测 Fmax = 57.540 MHz   (logic level 21)
+lcd_clk_35 约束 35.000 MHz → 实测 Fmax = 170.652 MHz   (logic level 4)
 Setup 违例端点 = 0    TNS = 0
 Hold  违例端点 = 0
 ```
@@ -129,7 +129,7 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
 | LED5 N23 | 常亮 | 引擎爬满 4 层 ✓ |
 
 **六项全过**。加 UART 后灯态与上一版一致 → UART 没破坏解码/引擎链路
-（PnR 侧印证：23,451 LUT+ALU = 17.0%，Fmax 55.063MHz 仍比 50MHz 约束高 10%）。
+（PnR 侧印证：28,135 LUT+ALU = 20.4%，Fmax 57.540MHz 仍比 50MHz 约束高 15%）。
 
 
 
@@ -153,7 +153,7 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
    `attn_done=4 / gemm_done=4 / layers_done=4 / ctl_blocks=160 / ctl_rows=1280 /
     aw.words_written=2560 / rail_frames=20 / arr_acc_out=ade4`（真实非零内积）。
 4. **关键路径 `sched_exec.se_in` 的 32bit `%254`** → 98 级 / 74.7ns / Fmax 13.369MHz。
-   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 13.369→55.063MHz（当前构建）。
+   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 13.369→57.540MHz（当前构建）。
    证据：穷举 32768 组合 0 差异；decode_auto 矩阵 8 行代表全绿。
 5. **侧支#8 引擎自释放**：`released`（喂 `sched_exec.layer_sync` 的 wb_flow 释放计数）
    在板级从未被赋值、恒 0 → 引擎跑完第 1 层就卡在 S_REL。
@@ -239,6 +239,30 @@ powershell -File tools\board_uart_read.ps1 -Send 0x12   # 发命令: 低4位=2(x
 6. 仿真里 slice LUT 未预灌 → 帧哈希整条是 X → 报告器加 `===` 自比较把 X 归零
    （硅上无 X，此分支恒不生效）
 
+
+## LCD 显示内容（2026-10-22 加固版，6 行）
+
+```
+DECODE STATUS
+FPS:  00005F6E      上一秒实测帧数 (1Hz 窗口统计, 实测非设计常量: 理论 24,414 帧/秒)
+W:    00000080      每帧词量 (板上恒 128)
+HASH: ADE40FB3      帧哈希 (解码路径内容指纹, 每帧变)
+FRM:  0001F4A0      帧计数 (自上电累计)
+L:    00000003      引擎本轮层数 (0..4 循环)
+[底部活动条随帧号滚动]
+```
+
+字模 5×7 → **放大 6 倍**（每字 30×42 像素，数据行 15 字符 = 630 像素，屏宽 800 内）。
+首烧时字"小到看不见"，就是这个放大缺失 —— 仓库里 LCD 路径**从没在真屏上验证过**（`periph_smoke_result.txt`
+只记到 `status = PNR-DONE`），所以这个坑是第一次真机看屏才暴露。
+
+**驱动改成通用渲染器**（`lcd_display.v`）：字样（TITLE / LBL1..LBL5）、行数（NLINES）、放大倍数
+（SCALE）、Line1 是文字还是十六进制（L1_WORD）全做成参数 → **引擎板与 decode 板各传各的**，
+不再在共用文件里写死语义（此前把 `GEMV STATUS` 改成 `DECODE STATUS` 会把引擎板屏幕改错，
+已通过参数化消除）。引擎板显示保持原样：`GEMV STATUS / MODE: ACTIVE / COUNT: / SUM:`。
+
+**FPS 是实测值**：1Hz 窗口内统计帧数。引擎背压或状态机一卡，它立刻掉下来 → 这才是能读的速度
+（`COUNT` 只是累加器，24.4 kHz 的跳变肉眼看着是抖的）。
 
 ## 已知编码坑（本轮踩到）
 

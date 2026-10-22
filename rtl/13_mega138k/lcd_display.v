@@ -18,13 +18,27 @@
 
 `timescale 1ns/1ps
 
-module lcd_display (
+module lcd_display #(
+    // ---- 字样与布局（两块板各传各的，避免共用文件里写死语义）----
+    parameter [8*11-1:0] TITLE = "GEMV STATUS",   // Line0 标题 (11 字符)
+    parameter [8*7-1:0]  LBL1  = "MODE: ",        // Line1 标签 (7 字符)
+    parameter [8*7-1:0]  LBL2  = "COUNT: ",      // Line2 标签
+    parameter [8*7-1:0]  LBL3  = "SUM: ",        // Line3 标签
+    parameter [8*7-1:0]  LBL4  = "       ",      // Line4 标签
+    parameter [8*7-1:0]  LBL5  = "       ",      // Line5 标签
+    parameter L1_WORD = 1,        // 1=Line1 显示 ACTIVE/IDLE 文字, 0=显示 hex8(cnt2)
+    parameter NLINES  = 4,        // 有效行数 (引擎板 4, decode 板 6)
+    parameter integer SCALE = 6   // 字模放大倍数 (5x7 字模画成 SCALE x SCALE 块)
+) (
     input  wire        lcd_clk,        // 35MHz
     input  wire        rst_n,          // LCD 域异步复位（PLL lock 派生）
     // ---- 显示数据（50MHz engine 域，本模块内做两级同步）----
-    input  wire [23:0] act_cnt,        // 已完成 MAC 次数
-    input  wire [31:0] sum_out,        // 最近一次归约结果
-    input  wire        engine_busy,    // busy 指示
+    input  wire [23:0] act_cnt,        // 活动源 (近期变化过 → MODE: ACTIVE)
+    input  wire [23:0] cnt1,           // Line2 显示值 (8 位十六进制)
+    input  wire [23:0] cnt2,           // Line1 显示值 (L1_WORD=0 时)
+    input  wire [31:0] val8,           // Line3 显示值 (8 位十六进制)
+    input  wire [23:0] cnt4,           // Line4 显示值
+    input  wire [23:0] cnt5,           // Line5 显示值
     // ---- 输出到屏幕 ----
     output wire        lcd_clk_o,
     output wire        lcd_en,
@@ -170,18 +184,27 @@ module lcd_display (
     // 跨时钟域：engine 50M 域 → LCD 35M 域，两级同步
     // ------------------------------------------------------------------
     reg [23:0] act_s1, act_s2;
-    reg [31:0] sum_s1, sum_s2;
-    reg        busy_s1, busy_s2;
+    reg [23:0] c1_s1, c1_s2;
+    reg [23:0] c2_s1, c2_s2;
+    reg [31:0] v8_s1, v8_s2;
+    reg [23:0] c4_s1, c4_s2;
+    reg [23:0] c5_s1, c5_s2;
 
     always @(posedge lcd_clk or negedge rst_n) begin
         if (!rst_n) begin
             act_s1  <= 24'b0; act_s2  <= 24'b0;
-            sum_s1  <= 32'b0; sum_s2  <= 32'b0;
-            busy_s1 <= 1'b0;  busy_s2 <= 1'b0;
+            c1_s1   <= 24'b0; c1_s2   <= 24'b0;
+            c2_s1   <= 24'b0; c2_s2   <= 24'b0;
+            v8_s1   <= 32'b0; v8_s2   <= 32'b0;
+            c4_s1   <= 24'b0; c4_s2   <= 24'b0;
+            c5_s1   <= 24'b0; c5_s2   <= 24'b0;
         end else begin
-            act_s1  <= act_cnt;   act_s2  <= act_s1;
-            sum_s1  <= sum_out;   sum_s2  <= sum_s1;
-            busy_s1 <= engine_busy; busy_s2 <= busy_s1;
+            act_s1  <= act_cnt;   act_s2 <= act_s1;
+            c1_s1   <= cnt1;      c1_s2  <= c1_s1;
+            c2_s1   <= cnt2;      c2_s2  <= c2_s1;
+            v8_s1   <= val8;      v8_s2  <= v8_s1;
+            c4_s1   <= cnt4;      c4_s2  <= c4_s1;
+            c5_s1   <= cnt5;      c5_s2  <= c5_s1;
         end
     end
 
@@ -210,56 +233,74 @@ module lcd_display (
     end
 
     // ------------------------------------------------------------------
-    // 显示文本组装
-    //   Line0 "GEMV STATUS"   11 字符
-    //   Line1 "MODE: xxxx"    10 字符（ACTIVE/IDLE）
-    //   Line2 "COUNT: xxxxxx" 13 字符（6 hex）
-    //   Line3 "SUM: xxxxxxxx" 13 字符（8 hex）
+    // 显示文本组装 (2026-10-21 改成通用渲染器)
+    //   原实现把 "GEMV STATUS"/"MODE:"/"COUNT:"/"SUM:" 写死在这一个**两块板共用**
+    //   的文件里 → decode 板要用别的字样就只能改共用文件 (会把引擎板显示改错)。
+    //   现在字样/行数/放大都是参数, 各板各传各的:
+    //     Line0 = TITLE (11 字符)
+    //     Line1 = LBL1 + (L1_WORD ? "ACTIVE"/"IDLE" : hex8(cnt2))
+    //     Line2 = LBL2 + hex8(cnt1)
+    //     Line3 = LBL3 + hex8(val8)
+    //     Line4 = LBL4 + hex8(cnt4)
+    //     Line5 = LBL5 + hex8(cnt5)
+    //   数据行统一 15 字符 (7 标签 + 8 hex)
     // ------------------------------------------------------------------
-    wire [7:0] line0_str [0:10];
-    wire [7:0] line1_str [0:9];
-    wire [7:0] line2_str [0:12];
-    wire [7:0] line3_str [0:12];
+    wire [7:0] t0_str [0:10];        // 标题 11 字符
+    wire [7:0] d_str [0:4][0:14];     // 5 条数据行 × 15 字符
 
-    assign line0_str[0]="D"; assign line0_str[1]="E"; assign line0_str[2]="C"; assign line0_str[3]="O";
-    assign line0_str[4]=" "; assign line0_str[5]="S"; assign line0_str[6]="T"; assign line0_str[7]="A";
-    assign line0_str[8]="T"; assign line0_str[9]="U"; assign line0_str[10]="S";
+    wire [8*7-1:0] lbl_bus [0:4];
+    assign lbl_bus[0] = LBL1;
+    assign lbl_bus[1] = LBL2;
+    assign lbl_bus[2] = LBL3;
+    assign lbl_bus[3] = LBL4;
+    assign lbl_bus[4] = LBL5;
 
-    assign line1_str[0]="M"; assign line1_str[1]="O"; assign line1_str[2]="D"; assign line1_str[3]="E";
-    assign line1_str[4]=":"; assign line1_str[5]=" ";
-    assign line1_str[6]= disp_active ? "A":"I";
-    assign line1_str[7]= disp_active ? "C":"D";
-    assign line1_str[8]= disp_active ? "T":"L";
-    assign line1_str[9]= disp_active ? "I":"E";
+    wire [31:0] hex_val [0:4];
+    assign hex_val[0] = {8'h00, c2_s2};
+    assign hex_val[1] = {8'h00, c1_s2};
+    assign hex_val[2] = v8_s2;
+    assign hex_val[3] = {8'h00, c4_s2};
+    assign hex_val[4] = {8'h00, c5_s2};
 
-    assign line2_str[0]="C"; assign line2_str[1]="O"; assign line2_str[2]="U"; assign line2_str[3]="N";
-    assign line2_str[4]="T"; assign line2_str[5]=":";
-    assign line2_str[6] = hex_to_ascii(act_s2[23:20]);
-    assign line2_str[7] = hex_to_ascii(act_s2[19:16]);
-    assign line2_str[8] = hex_to_ascii(act_s2[15:12]);
-    assign line2_str[9] = hex_to_ascii(act_s2[11:8]);
-    assign line2_str[10]= hex_to_ascii(act_s2[7:4]);
-    assign line2_str[11]= hex_to_ascii(act_s2[3:0]);
-    assign line2_str[12]=" ";
-
-    assign line3_str[0]="H"; assign line3_str[1]="A"; assign line3_str[2]="S"; assign line3_str[3]=":";
-    assign line3_str[4]=" ";
-    assign line3_str[5] = hex_to_ascii(sum_s2[31:28]);
-    assign line3_str[6] = hex_to_ascii(sum_s2[27:24]);
-    assign line3_str[7] = hex_to_ascii(sum_s2[23:20]);
-    assign line3_str[8] = hex_to_ascii(sum_s2[19:16]);
-    assign line3_str[9] = hex_to_ascii(sum_s2[15:12]);
-    assign line3_str[10]= hex_to_ascii(sum_s2[11:8]);
-    assign line3_str[11]= hex_to_ascii(sum_s2[7:4]);
-    assign line3_str[12]= hex_to_ascii(sum_s2[3:0]);
+    genvar gi, gj;
+    generate
+        for (gi = 0; gi < 11; gi = gi + 1) begin : g_title
+            assign t0_str[gi] = TITLE[8*gi +: 8];
+        end
+        for (gi = 0; gi < 5; gi = gi + 1) begin : g_line
+            for (gj = 0; gj < 7; gj = gj + 1) begin : g_lbl
+                assign d_str[gi][gj] = lbl_bus[gi][8*gj +: 8];
+            end
+            if (gi == 0 && L1_WORD != 0) begin : g_word
+                // Line1 文字模式: ACTIVE / IDLE 覆盖十六进制位 (引擎板原语义)
+                assign d_str[0][7]  = disp_active ? "A" : "I";
+                assign d_str[0][8]  = disp_active ? "C" : "D";
+                assign d_str[0][9]  = disp_active ? "T" : "L";
+                assign d_str[0][10] = disp_active ? "I" : "E";
+                assign d_str[0][11] = " ";
+                assign d_str[0][12] = " ";
+                assign d_str[0][13] = " ";
+                assign d_str[0][14] = " ";
+            end
+            else begin : g_hex
+                for (gj = 0; gj < 8; gj = gj + 1) begin : g_hx
+                    assign d_str[gi][7+gj] = hex_to_ascii(hex_val[gi][31-4*gj -: 4]);
+                end
+            end
+        end
+    endgenerate
 
     // ------------------------------------------------------------------
     // 像素着色：逐行逐字符查字模
     // ------------------------------------------------------------------
-    wire [9:0] l0_x = 10'd361;  // (800 - 11*7)/2
-    wire [9:0] l1_x = 10'd280;
-    wire [9:0] l2_x = 10'd300;
-    wire [9:0] l3_x = 10'd310;
+    // 2026-10-21: SCALE 放大 (原来 5x7 字模直接画在 800x480 上, 字小到看不见,
+    //   板级实测反馈"字都快看不见了")。SCALE=6 → 每个字模像素画成 6x6 块,
+    //   即字符 30x42 像素; 数据行 15 字符 = 630 像素 (屏宽 800 内)。
+    //   行位: 标题 11 字符居中, 数据行 15 字符居中; 6 行 y=40/110/180/250/320/390
+    //   (字高 42 → 行距 70 不重叠; 底部活动条 440~460)
+    localparam integer CW = 7 * SCALE;      // 字符步进 (5 宽 + 2 空, 再放大)
+    wire [9:0] t0_x = (800 - 11*CW)/2;     // 标题行起点
+    wire [9:0] dx_x = (800 - 15*CW)/2;     // 数据行起点
 
     function glyph_on;
         input [9:0] px;
@@ -269,8 +310,8 @@ module lcd_display (
         input [7:0] ch;
         begin
             glyph_on = 1'b0;
-            if (px >= x0 && px < x0 + 5 && py >= y0 && py < y0 + 7)
-                glyph_on = |(font5x7(char_idx(ch), py - y0) & (5'b10000 >> (px - x0)));
+            if (px >= x0 && px < x0 + 5*SCALE && py >= y0 && py < y0 + 7*SCALE)
+                glyph_on = |(font5x7(char_idx(ch), (py - y0)/SCALE) & (5'b10000 >> ((px - x0)/SCALE)));
         end
     endfunction
 
@@ -283,22 +324,31 @@ module lcd_display (
             if (py >= 440 && py < 460) begin
                 pixel_on = ((px >> 4) & 10'd1);
             end
-            // ---- Line0 标题 ----
+            // ---- Line0 标题 (11 字符) ----
             for (k = 0; k < 11; k = k + 1)
-                if (glyph_on(px, py, l0_x + k*10'd7, 10'd60, line0_str[k]))
+                if (glyph_on(px, py, t0_x + k*CW, 10'd40, t0_str[k]))
                     pixel_on = 1'b1;
-            // ---- Line1 MODE ----
-            for (k = 0; k < 10; k = k + 1)
-                if (glyph_on(px, py, l1_x + k*10'd7, 10'd150, line1_str[k]))
-                    pixel_on = 1'b1;
-            // ---- Line2 COUNT ----
-            for (k = 0; k < 13; k = k + 1)
-                if (glyph_on(px, py, l2_x + k*10'd7, 10'd240, line2_str[k]))
-                    pixel_on = 1'b1;
-            // ---- Line3 SUM ----
-            for (k = 0; k < 13; k = k + 1)
-                if (glyph_on(px, py, l3_x + k*10'd7, 10'd330, line3_str[k]))
-                    pixel_on = 1'b1;
+            // ---- Line1..Line5 (各 15 字符) ----
+            if (NLINES >= 2)
+                for (k = 0; k < 15; k = k + 1)
+                    if (glyph_on(px, py, dx_x + k*CW, 10'd110, d_str[0][k]))
+                        pixel_on = 1'b1;
+            if (NLINES >= 3)
+                for (k = 0; k < 15; k = k + 1)
+                    if (glyph_on(px, py, dx_x + k*CW, 10'd180, d_str[1][k]))
+                        pixel_on = 1'b1;
+            if (NLINES >= 4)
+                for (k = 0; k < 15; k = k + 1)
+                    if (glyph_on(px, py, dx_x + k*CW, 10'd250, d_str[2][k]))
+                        pixel_on = 1'b1;
+            if (NLINES >= 5)
+                for (k = 0; k < 15; k = k + 1)
+                    if (glyph_on(px, py, dx_x + k*CW, 10'd320, d_str[3][k]))
+                        pixel_on = 1'b1;
+            if (NLINES >= 6)
+                for (k = 0; k < 15; k = k + 1)
+                    if (glyph_on(px, py, dx_x + k*CW, 10'd390, d_str[4][k]))
+                        pixel_on = 1'b1;
         end
     end
 

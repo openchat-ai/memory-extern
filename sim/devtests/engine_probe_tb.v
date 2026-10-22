@@ -5,6 +5,7 @@
 // 判据: 打印每个探针的 变化次数 与 末值; 变化次数=0 的不能拿来做判活。
 module engine_probe_tb;
     reg clk = 0, rst_n = 0;
+    integer cyc = 0;
     wire [5:0] led;
     integer i;
     integer c_go, c_a_go, c_a_s_valid, c_aw_busy, c_ctl_busy, c_ctl_o_valid;
@@ -18,6 +19,7 @@ module engine_probe_tb;
 
     board_decode_top U(.sys_clk(clk), .rst_n(rst_n), .led(led));
     always #5 clk = ~clk;
+    always @(posedge clk) cyc = cyc + 1;
 
     // 引擎内部探针 (层级引用)
     wire        e_a_go    = U.U.ex_a_go;
@@ -148,6 +150,8 @@ module engine_probe_tb;
         $display("layers_done 峰值 = %0d  (NL=4, 期望 4)", peak_layers);
         $display("a_go 变化次数 = %0d (每 2 次 = 1 个 go 脉冲)", c_a_go);
         $display("板级 LED[5:0] = %b  (bit4=attn PASS, bit5=GEMM&4层 PASS)", led);
+        $display("FPS 统计: fps_win=%0d  (仿真 100MHz, 帧周期 2048 拍 → 期望 ≈ cyc/2048 = %0d)  fps_val=%0d",
+                 U.fps_win, cyc/2048, U.fps_val);
         $finish;
     end
 endmodule

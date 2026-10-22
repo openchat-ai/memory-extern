@@ -167,8 +167,11 @@ module board_top (
         .lcd_clk     (lcd_clk_35),
         .rst_n       (pll_lock),
         .act_cnt     (act_cnt),
-        .sum_out     (sum_out),
-        .engine_busy (engine_busy),
+        .cnt1        (act_cnt),      // Line2 "COUNT: " + 8 hex (原 6 hex, 值相同)
+        .cnt2        (24'd0),        // Line1 文字模式, 未用
+        .val8        (sum_out),      // Line3 "SUM: " + 8 hex
+        .cnt4        (24'd0),
+        .cnt5        (24'd0),
         .lcd_clk_o   (lcd_clk),
         .lcd_en      (lcd_en),
         .lcd_hs      (lcd_hs),

@@ -1,9 +1,8 @@
-# board_decode_top PnR result (14 files)
 # NOTE: machine-readable section only (ASCII). Chinese narrative:
 #       see rtl/13_mega138k/decode_top_result.md (hand-written, UTF-8)
 mode = all
 route_option = 2
 place_option = 3
 max_fanout = 100
-elapsed_s = 794
+elapsed_s = 1164
 status = DONE
