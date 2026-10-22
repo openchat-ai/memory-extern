@@ -286,21 +286,21 @@ module board_decode_top #(
     lcd_display #(
         .TITLE   ("DECODE STATUS"),
         .LBL1    ("FPS:  "),
-        .LBL2    ("W:    "),
+        .LBL2    ("XEXT: "),
         .LBL3    ("HASH: "),
         .LBL4    ("FRM:  "),
-        .LBL5    ("L:    "),
+        .LBL5    ("PASS: "),
         .L1_WORD (1'b0),        // Line1 用十六进制 (FPS), 不用 ACTIVE/IDLE 文字
         .NLINES  (6)
     ) u_lcd (
         .lcd_clk     (lcd_clk_35),
         .rst_n       (pll_lock),
         .act_cnt     (rep_f[23:0]),   // 活动源: 帧号在变 → MODE 判定为 ACTIVE
-        .cnt1        (a_words[23:0]), // Line2 每帧词量
+        .cnt1        (xext_reg),      // Line2 当前参数 xext (候选窗半径, 串口可改)
         .cnt2        (fps_val),       // Line1 上一秒实测帧数 (速度)
-        .val8        (rep_h),         // Line3 帧哈希
-        .cnt4        (rep_f[23:0]),   // Line4 帧计数
-        .cnt5        (eng_layers_done[23:0]), // Line5 引擎层数
+        .val8        (snap_hash),     // Line3 帧哈希 (1Hz 采样)
+        .cnt4        (snap_frm),      // Line4 累计帧数 (1Hz 采样)
+        .cnt5        (snap_pass),     // Line5 判活位图
         .lcd_clk_o   (lcd_clk),
         .lcd_en      (lcd_en),
         .lcd_hs      (lcd_hs),
@@ -313,16 +313,25 @@ module board_decode_top #(
     // ---- 1Hz 窗口: 统计"上一秒实测帧数" → 屏上 FPS 字段 ------------------------
     //   帧周期 = 2048 拍 @50MHz = 40.96us → 理论 24,414 帧/秒; 这个数是**实测**
     //   (若引擎背压或状态机卡住, 它会掉下来), 不是设计常量。
+    //   同时在 1Hz 点做**快照**: 屏上只放慢变量 —— 每帧都变的计数器 (帧计数/帧哈希/
+    //   引擎层数) 人眼根本读不了 (帧计数每秒跳 24430 次), 快照后每秒变一次才有意义。
     reg [25:0] sec_cnt = 0;
     reg [23:0] fps_win = 0;
     reg [23:0] fps_val = 0;
+    reg [31:0] snap_hash = 0;
+    reg [23:0] snap_frm  = 0;
+    reg [23:0] snap_pass = 0;
     always @(posedge sys_clk or negedge rst_n)
         if (!rst_n) begin
             sec_cnt <= 26'd0; fps_win <= 24'd0; fps_val <= 24'd0;
+            snap_hash <= 32'd0; snap_frm <= 24'd0; snap_pass <= 24'd0;
         end else begin
             if (sec_cnt == 26'd49999999) begin
                 sec_cnt <= 26'd0;
                 fps_val <= fps_win;
+                snap_hash <= rep_h;                        // 该秒内的帧哈希
+                snap_frm  <= rep_f[23:0];                 // 该秒结束时的累计帧数
+                snap_pass <= {21'd0, eng_layers_seen, eng_attn_seen, good[1]};
                 if (token_done) fps_win <= 24'd1;
                 else fps_win <= 24'd0;
             end else begin
