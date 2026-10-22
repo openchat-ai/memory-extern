@@ -65,4 +65,11 @@
    - 输入脚的 `IO_PORT` 不能给 `DRIVE=8` → `CT1108 Illegal port attribute value` → 改 DRIVE=OFF
    - `reg` 不能同时被 `assign` 驱动 → `EX3805 Concurrent assignment to a non-net` → 改 wire
    - iverilog 收这些写法, 只有 Gowin 前端拒 → **新模块必须用 Gowin 综合实跑一遍才算过**
+9. **Gowin 综合会截断重命名长网名**: 顶层 wire `lcd_clk_35` → 网表里变成 **`lcd_clk_d`**
+   → SDC 里 `create_clock ... [get_nets {lcd_clk_35}]` 报
+   `TA2003 Can't set timing constraint to object` → **约束要写综合后的名字**(引擎板
+   mega138k_engine.sdc 写的就是 `lcd_clk_d`)。查真名的办法: 综合完 grep
+   `impl/gwsynthesis/<top>.vg` 里的网名。
+10. **仿真里 Gowin 原厂 PLL 原语(PLL) iverilog 不认** → `Unknown module type: PLL`。
+    写一个仿真替身 (直通时钟) 顶替, 真综合仍用原厂 PLL 模块。
 

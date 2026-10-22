@@ -17,7 +17,15 @@ module board_decode_top #(
     input  wire rst_n,
     input  wire uart_rx,
     output wire uart_tx,
-    output wire [5:0] led
+    output wire [5:0] led,
+    // ---- LCD (800x480 RGB666, 复用引擎板同一驱动/时序) ----
+    output wire       lcd_clk,
+    output wire       lcd_en,
+    output wire       lcd_hs,
+    output wire       lcd_vs,
+    output wire [5:0] lcd_r,
+    output wire [5:0] lcd_g,
+    output wire [5:0] lcd_b
 );
     reg [22:0] div;
     reg run = 0;
@@ -258,5 +266,35 @@ module board_decode_top #(
     uart_rx #(.CLK_HZ(50000000), .BAUD(BAUD)) U_RX (
         .clk(sys_clk), .rst_n(rst_n), .rx(uart_rx),
         .rd_ready(1'b1), .rd_valid(cmd_valid), .rd_data(cmd_data)
+    );
+
+    // ---- LCD 显示 (2026-10-21) ------------------------------------------------
+    // 复用引擎板同款: PLL 50M→35M 像素钟 (50×21/1/30) + lcd_display (800x480 RGB666,
+    // 无帧缓冲, 组合逻辑查 5x7 点阵字模)。
+    //   act_cnt ← 帧号 (每帧 +1, 24.4 次/秒) → 屏幕 COUNT 在跳 = 速度直接可见
+    //   sum_out ← 帧哈希 (解码路径的内容指纹)
+    //   engine_busy ← 引擎活动 (attn 内积输出有效)
+    wire        lcd_clk_35;
+    wire        pll_lock;
+
+    Gowin_PLL u_pll (
+        .clkout0 (lcd_clk_35),
+        .lock    (pll_lock),
+        .clkin   (sys_clk)
+    );
+
+    lcd_display u_lcd (
+        .lcd_clk     (lcd_clk_35),
+        .rst_n       (pll_lock),
+        .act_cnt     (rep_f[23:0]),
+        .sum_out     (rep_h),
+        .engine_busy (eng_o_valid),
+        .lcd_clk_o   (lcd_clk),
+        .lcd_en      (lcd_en),
+        .lcd_hs      (lcd_hs),
+        .lcd_vs      (lcd_vs),
+        .lcd_r       (lcd_r),
+        .lcd_g       (lcd_g),
+        .lcd_b       (lcd_b)
     );
 endmodule

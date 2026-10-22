@@ -9,10 +9,10 @@
 //
 // 渲染：无帧缓冲，纯组合逻辑按 (px,py) 坐标查 5x7 点阵字模。
 // 显示内容：
-//   Line0  GEMV STATUS
+//   Line0  DECODE STATUS
 //   Line1  MODE: ACTIVE/IDLE
 //   Line2  COUNT: <act_cnt hex6>
-//   Line3  SUM:   <sum_out hex8>
+//   Line3  HASH:  <sum_out hex8>
 //   引擎近期活动时底部显示滚动活动条
 // ============================================================================
 
@@ -221,7 +221,7 @@ module lcd_display (
     wire [7:0] line2_str [0:12];
     wire [7:0] line3_str [0:12];
 
-    assign line0_str[0]="G"; assign line0_str[1]="E"; assign line0_str[2]="M"; assign line0_str[3]="V";
+    assign line0_str[0]="D"; assign line0_str[1]="E"; assign line0_str[2]="C"; assign line0_str[3]="O";
     assign line0_str[4]=" "; assign line0_str[5]="S"; assign line0_str[6]="T"; assign line0_str[7]="A";
     assign line0_str[8]="T"; assign line0_str[9]="U"; assign line0_str[10]="S";
 
@@ -242,7 +242,7 @@ module lcd_display (
     assign line2_str[11]= hex_to_ascii(act_s2[3:0]);
     assign line2_str[12]=" ";
 
-    assign line3_str[0]="S"; assign line3_str[1]="U"; assign line3_str[2]="M"; assign line3_str[3]=":";
+    assign line3_str[0]="H"; assign line3_str[1]="A"; assign line3_str[2]="S"; assign line3_str[3]=":";
     assign line3_str[4]=" ";
     assign line3_str[5] = hex_to_ascii(sum_s2[31:28]);
     assign line3_str[6] = hex_to_ascii(sum_s2[27:24]);
