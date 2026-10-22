@@ -284,12 +284,16 @@ module board_decode_top #(
     );
 
     lcd_display #(
+        // 注意: Verilog 字符串赋给更宽的 parameter 时**靠低位对齐、左边补零**,
+        //   而驱动从高位解包 → 字符串必须与参数等宽 (TITLE 13 字符 / LBL 7 字符),
+        //   否则整行错位 (2026-10-22 板级实测: "DECODE STATUS" 被截成 "CODE STATUS",
+        //   "FPS:  " 前面多一个 NUL → 屏上有位是空的)。
         .TITLE   ("DECODE STATUS"),
-        .LBL1    ("FPS:  "),
-        .LBL2    ("XEXT: "),
-        .LBL3    ("HASH: "),
-        .LBL4    ("FRM:  "),
-        .LBL5    ("PASS: "),
+        .LBL1    ("FPS:   "),
+        .LBL2    ("XEXT:  "),
+        .LBL3    ("HASH:  "),
+        .LBL4    ("FRM:   "),
+        .LBL5    ("PASS:  "),
         .L1_WORD (1'b0),        // Line1 用十六进制 (FPS), 不用 ACTIVE/IDLE 文字
         .NLINES  (6)
     ) u_lcd (

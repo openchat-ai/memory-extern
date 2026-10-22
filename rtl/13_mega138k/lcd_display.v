@@ -20,10 +20,10 @@
 
 module lcd_display #(
     // ---- 字样与布局（两块板各传各的，避免共用文件里写死语义）----
-    parameter [8*11-1:0] TITLE = "GEMV STATUS",   // Line0 标题 (11 字符)
-    parameter [8*7-1:0]  LBL1  = "MODE: ",        // Line1 标签 (7 字符)
+    parameter [8*13-1:0] TITLE = "GEMV STATUS  ", // Line0 标题 (13 字符, 必须与实际字符串等宽)
+    parameter [8*7-1:0]  LBL1  = "MODE:  ",       // Line1 标签 (7 字符, 必须等宽)
     parameter [8*7-1:0]  LBL2  = "COUNT: ",      // Line2 标签
-    parameter [8*7-1:0]  LBL3  = "SUM: ",        // Line3 标签
+    parameter [8*7-1:0]  LBL3  = "SUM:   ",      // Line3 标签
     parameter [8*7-1:0]  LBL4  = "       ",      // Line4 标签
     parameter [8*7-1:0]  LBL5  = "       ",      // Line5 标签
     parameter L1_WORD = 1,        // 1=Line1 显示 ACTIVE/IDLE 文字, 0=显示 hex8(cnt2)
@@ -147,6 +147,8 @@ module lcd_display #(
                28: case (row) 0: font5x7=5'b11111; 1: font5x7=5'b00100; 2: font5x7=5'b00100; 3: font5x7=5'b00100; 4: font5x7=5'b00100; 5: font5x7=5'b00100; 6: font5x7=5'b00100; default: font5x7=5'b0; endcase  // T
                29: case (row) 0: font5x7=5'b10001; 1: font5x7=5'b10001; 2: font5x7=5'b10001; 3: font5x7=5'b10001; 4: font5x7=5'b10001; 5: font5x7=5'b10001; 6: font5x7=5'b01110; default: font5x7=5'b0; endcase  // U
                30: case (row) 0: font5x7=5'b10001; 1: font5x7=5'b10001; 2: font5x7=5'b10001; 3: font5x7=5'b10001; 4: font5x7=5'b10001; 5: font5x7=5'b01010; 6: font5x7=5'b00100; default: font5x7=5'b0; endcase  // V
+               31: case (row) 0: font5x7=5'b11110; 1: font5x7=5'b10001; 2: font5x7=5'b10001; 3: font5x7=5'b11110; 4: font5x7=5'b10000; 5: font5x7=5'b10000; 6: font5x7=5'b10000; default: font5x7=5'b0; endcase  // P
+               32: case (row) 0: font5x7=5'b10001; 1: font5x7=5'b10001; 2: font5x7=5'b01010; 3: font5x7=5'b00100; 4: font5x7=5'b01010; 5: font5x7=5'b10001; 6: font5x7=5'b10001; default: font5x7=5'b0; endcase  // X
                default: font5x7 = 5'b00000;
             endcase
         end
@@ -165,6 +167,7 @@ module lcd_display #(
                 "I": char_idx = 20; "K": char_idx = 21; "L": char_idx = 22; "M": char_idx = 23;
                 "N": char_idx = 24; "O": char_idx = 25; "R": char_idx = 26; "S": char_idx = 27;
                 "T": char_idx = 28; "U": char_idx = 29; "V": char_idx = 30;
+                "P": char_idx = 31; "X": char_idx = 32;
                 ":": char_idx = 16;
                 default: char_idx = 17;   // 空格兜底
             endcase
@@ -245,7 +248,7 @@ module lcd_display #(
     //     Line5 = LBL5 + hex8(cnt5)
     //   数据行统一 15 字符 (7 标签 + 8 hex)
     // ------------------------------------------------------------------
-    wire [7:0] t0_str [0:10];        // 标题 11 字符
+    wire [7:0] t0_str [0:12];        // 标题 13 字符
     wire [7:0] d_str [0:4][0:14];     // 5 条数据行 × 15 字符
 
     wire [8*7-1:0] lbl_bus [0:4];
@@ -264,10 +267,10 @@ module lcd_display #(
 
     genvar gi, gj;
     generate
-        for (gi = 0; gi < 11; gi = gi + 1) begin : g_title
+        for (gi = 0; gi < 13; gi = gi + 1) begin : g_title
             // 注意: Verilog 字符串参数的**首字符在最高位** ("ABC" → A 在 MSB),
             //   所以解包要从高往低取 (否则整行反着画)。2026-10-22 板级实测发现。
-            assign t0_str[gi] = TITLE[8*(10-gi) +: 8];
+            assign t0_str[gi] = TITLE[8*(12-gi) +: 8];
         end
         for (gi = 0; gi < 5; gi = gi + 1) begin : g_line
             for (gj = 0; gj < 7; gj = gj + 1) begin : g_lbl
@@ -301,7 +304,7 @@ module lcd_display #(
     //   行位: 标题 11 字符居中, 数据行 15 字符居中; 6 行 y=40/110/180/250/320/390
     //   (字高 42 → 行距 70 不重叠; 底部活动条 440~460)
     localparam integer CW = 7 * SCALE;      // 字符步进 (5 宽 + 2 空, 再放大)
-    wire [9:0] t0_x = (800 - 11*CW)/2;     // 标题行起点
+    wire [9:0] t0_x = (800 - 13*CW)/2;     // 标题行起点
     wire [9:0] dx_x = (800 - 15*CW)/2;     // 数据行起点
 
     function glyph_on;
@@ -327,7 +330,7 @@ module lcd_display #(
                 pixel_on = ((px >> 4) & 10'd1);
             end
             // ---- Line0 标题 (11 字符) ----
-            for (k = 0; k < 11; k = k + 1)
+            for (k = 0; k < 13; k = k + 1)
                 if (glyph_on(px, py, t0_x + k*CW, 10'd40, t0_str[k]))
                     pixel_on = 1'b1;
             // ---- Line1..Line5 (各 15 字符) ----
