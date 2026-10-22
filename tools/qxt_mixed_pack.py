@@ -63,6 +63,7 @@ def kind_of(name):
 def parse_args(argv):
     base, budget, top, promotes, tag = 2, 4, 0, {}, "mix"
     period = 0
+    promote_names = {}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -77,13 +78,19 @@ def parse_args(argv):
                 k, v = kv.split("=")
                 promotes[k] = int(v)
             i += 2
+        elif a == "--promote-name":
+            # 精确张量名提升: --promote-name blk.27.ffn_down.weight=4,...
+            for kv in argv[i + 1].split(","):
+                k, v = kv.rsplit("=", 1)
+                promote_names[k] = int(v)
+            i += 2
         elif a == "--period":
             period = int(argv[i + 1]); i += 2
         elif a == "--tag":
             tag = argv[i + 1]; i += 2
         else:
             raise SystemExit(f"未知参数 {a}")
-    return base, budget, top, promotes, tag, period
+    return base, budget, top, promotes, tag, period, promote_names
 
 
 def layer_of(name):
@@ -94,8 +101,10 @@ def layer_of(name):
     return -1
 
 
-def decide_bits(base, budget, top, promotes, period):
+def decide_bits(base, budget, top, promotes, period, promote_names=None):
     """返回 name -> bit 的决策函数 (逐张量)."""
+    if promote_names:
+        return lambda name: promote_names.get(name, base)
     if period > 0:
         # 每 period 层放一个 budget-bit 修复层, 其余 base-bit.
         return lambda name: (budget if (layer_of(name) % period == period - 1)
@@ -111,8 +120,8 @@ def decide_bits(base, budget, top, promotes, period):
 
 
 def main():
-    base, budget, top, promotes, tag, period = parse_args(sys.argv[1:])
-    bitof = decide_bits(base, budget, top, promotes, period)
+    base, budget, top, promotes, tag, period, promote_names = parse_args(sys.argv[1:])
+    bitof = decide_bits(base, budget, top, promotes, period, promote_names)
 
     base_name = os.path.splitext(os.path.basename(SRC))[0]
     dst = os.path.join(OUTDIR, f"{base_name}-{tag}_packslim.gguf")
