@@ -12,8 +12,8 @@ elapsed_s = 746   status = DONE
 
 | 项 | 值 | 占器件 138,240 |
 |---|---|---|
-| LUT | 21,428 | 15.5% |
-| ALU | 460 | — |
+| LUT | 21,260 | 15.4% |
+| ALU | 508 | — |
 | LUT+ALU 合计 | **21,888** | **15.8%** |
 | Register | 4,668 | 3.4% |
 | MULTALU27X18 | 3 | — |
@@ -40,7 +40,7 @@ elapsed_s = 746   status = DONE
 
 ```
 sys_clk 约束 = 20.000 ns (50.000 MHz, P16 板载 50M 振荡器, 无 PLL)
-sys_clk 实测 Fmax = 60.400 MHz   (logic level 11)
+sys_clk 实测 Fmax = 57.736 MHz   (logic level 21)
 Setup 违例端点 = 0    TNS = 0
 Hold  违例端点 = 0
 ```
@@ -49,14 +49,15 @@ Hold  违例端点 = 0
 
 ```
 sys_clk = P16   rst_n = K16
-led[0]=J14  led[1]=R26  led[2]=L20  led[3]=M25  led[4]=N21  led[5]=N23
+led[0]=J14 led[1]=R26 led[2]=L20 led[3]=M25 led[4]=N21 led[5]=N23
+uart_rx = U16 (40P pin_header[0])   uart_tx = V16 (40P pin_header[1])
 ```
 
 ## Bitstream
 
 ```
 fs = F:\sram\sram\out\138k_pro\decode_top\board_decode_top_r2p3\impl\pnr\board_decode_top.fs
-     (33.3MB, 2026-10-21 17:41)
+     (33.3MB, 2026-10-22 09:51; PnR elapsed 794s)
 ```
 
 ## 烧录（PC 执行）
@@ -119,7 +120,7 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
    修法：`fk` 的 1024 份 34bit 乘加+取模 → 代数等价改写
    `((7a+17x) mod 23) == (((7a mod 23)+(17x mod 23)) mod 23)` → 1 份 19bit 取模 + 常量表。
    证据：穷举 a∈0..65535 × x∈0..1023（6710 万组）0 差异；iverilog lockstep A/B 4/4 IDENTICAL。
-   效果：533,752 → 21,884 LUT+ALU（整包）。
+   效果：533,752 → 21,768 LUT+ALU（整包）。
 2. **顶层端口 `clk` → `sys_clk`**：全仓三个板级顶层都用 `sys_clk`，只有这个例外 →
    CST/SDC 找不到对象（`CT1135` ×50 条），PnR 根本跑不起来。
 3. **`decode_auto_core` 三根悬空线**（Gowin `EX2565` 早就在报，之前被 sweep 掩盖）：
@@ -131,7 +132,7 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
    `attn_done=4 / gemm_done=4 / layers_done=4 / ctl_blocks=160 / ctl_rows=1280 /
     aw.words_written=2560 / rail_frames=20 / arr_acc_out=ade4`（真实非零内积）。
 4. **关键路径 `sched_exec.se_in` 的 32bit `%254`** → 98 级 / 74.7ns / Fmax 13.369MHz。
-   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 60.400MHz。
+   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 57.736MHz。
    证据：穷举 32768 组合 0 差异；decode_auto 矩阵 8 行代表全绿。
 5. **侧支#8 引擎自释放**：`released`（喂 `sched_exec.layer_sync` 的 wb_flow 释放计数）
    在板级从未被赋值、恒 0 → 引擎跑完第 1 层就卡在 S_REL。
@@ -166,6 +167,57 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
    "No timing paths to get frequency"，该域到 sys_clk 的采样路径无完整 STA。
    实际 `gclk0 = sys_clk & latch`（同沿），采样边沿对齐，风险低但报告上无覆盖。
 5. **DC01**（见上，既有缺陷，板级 `STRESS=0` 不触发）。
+
+## UART 通道（2026-10-21 新增，可与 PC 对话）
+
+板载那根 "USB JTAG&UART" 线的 **UART 侧接的是 AE350 RISC-V 硬核自己的 UART**
+（SOM 引脚 N16/P15，网名 FPGA_TXD/RXD）—— 那是 **CPU 专用脚**（Gowin 报
+`PR2017: the location is a dedicated pin (CPU)`），所以 **FPGA 用户逻辑接不进那个 COM 口**。
+
+→ 用户逻辑的 UART 走 **40P 排针**（引脚源：`D:\gowin\TANG_MEGA-138K-Pro-Dock\09_Misc\
+tang_mega_138k-pro_pins.cst` 的 `pin_header[0..37]`）：
+
+| 信号 | FPGA 封装脚 | 40P 排针 | 接线 |
+|---|---|---|---|
+| `uart_tx` | **V16** | pin_header[1] | → USB-TTL 转接头的 **RX** |
+| `uart_rx` | **U16** | pin_header[0] | ← USB-TTL 转接头的 **TX** |
+| GND | — | 排针 GND | ↔ 转接头 GND |
+
+（两颗相邻、3.3V、无其它功能占用；同表 JTAG 专用脚 H12/H10/J10/H11 本设计不占用。）
+
+**115200 8N1**，每帧吐一行：
+
+```
+F=<帧号> W=<词量> H=<帧哈希> A=<attn内积> L=<引擎层数> R=<rail帧> C=<末次命令>\n
+```
+
+**命令**（PC → 板子，1 字节 = 1 条）：
+- 低 4 位 → 覆盖 `xext`（候选窗半径 0..15）→ 立刻改变 head 路径的候选窗 → 下一行的
+  `H`（帧哈希）与 `L` 会跟着变 → **能亲眼看到"改一个参数 → 引擎行为改变"**
+- bit4 → 立刻手动触发一帧（不等 2048 拍的节拍）
+- 收到命令后 `C` 字段回显该字节
+
+**PC 侧工具**（不依赖 pyserial，用 .NET 自带串口）：
+```powershell
+powershell -File tools\board_uart_read.ps1              # 自动扫 COM 口并打印行
+powershell -File tools\board_uart_read.ps1 -Send 0x12   # 发命令: 低4位=2(xext), bit4=手动触发一帧
+```
+（另有 `tools/board_uart_cli.py`，需 pyserial。）
+
+**验证**（两个 TB，均 PASS）：
+- `sim/devtests/uart_loop_tb.v`：TX→RX 直接环回，8 字节全对
+- `sim/devtests/board_uart_tb.v`：整板行格式 + 命令通路（xext 被命令覆盖 ✓、C 字段回显 ✓）
+
+**UART 实现里踩过的坑（均已修）**：
+1. TX 少发一位（`bidx==7` 直接发停止位 → bit7 从未发出）
+2. 字节间无空隙 → 接收端还蹲在 S_STOP 时下一个起始沿就到了 → **整字节错一位**
+   → 加 `S_END` 空闲位（字节间高电平 ≥2 位时间）
+3. LSB-first 装配方向搞反（应右移、新位进最高位）
+4. 十六进制位序反了（应高位在前）→ 改用 4bit 轮转
+5. 字段末值算错（把"字段数 7"当"末位下标 7"→ 多发一个野字段）
+6. 仿真里 slice LUT 未预灌 → 帧哈希整条是 X → 报告器加 `===` 自比较把 X 归零
+   （硅上无 X，此分支恒不生效）
+
 
 ## 已知编码坑（本轮踩到）
 

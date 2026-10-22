@@ -50,3 +50,19 @@
    导致板上"条件成立=灯灭", 读数与实际完全相反, 差点误判成"挂死")
 5. 烧录前先确认无残留 `programmer.exe` (GUI 会独占 USB 调试器);
    烧完别断电 —— SRAM 易失, 断电即失。
+6. **"USB JTAG&UART" 那根线的 UART 侧不是 FPGA 用户 IO**: 它接的是 **AE350 RISC-V
+   硬核自己的 UART** (SOM 引脚 N16/P15, 网名 FPGA_TXD/RXD)。N16 是 CPU 专用脚
+   (Gowin 报 `PR2017: the location is a dedicated pin (CPU)`), 所以 FPGA 用户逻辑
+   **接不进那个 COM 口**。要让用户逻辑跟 PC 说话, 走 **40P 排针**
+   (pin_header[0]=U16 接 uart_rx / pin_header[1]=V16 接 uart_tx) + 一个 **USB-TTL
+   转接头**: 转接头 RX←V16, TX→U16, GND↔GND。
+   另一条路是给 AE350 跑固件当转发器 (工程量大得多, 以后再说)。
+7. **烧录中途失败 → 器件可能不接 JTAG 了** (扫链报 "No Gowin devices found!",
+   换 1/2.5/10/15MHz 全一样) → **只能断电重上电**。2026-10-21 撞过两次。
+8. **Gowin 前端的语法限制** (写新模块必踩, 2026-10-21 一次全撞完):
+   - `end else <裸语句>` → `EX2656 'else' used in incorrect context` → else 单独成行 + begin/end
+   - SV 转换 `N'(x)` → `EX3863 Syntax error near '''` → 改用 localparam
+   - 输入脚的 `IO_PORT` 不能给 `DRIVE=8` → `CT1108 Illegal port attribute value` → 改 DRIVE=OFF
+   - `reg` 不能同时被 `assign` 驱动 → `EX3805 Concurrent assignment to a non-net` → 改 wire
+   - iverilog 收这些写法, 只有 Gowin 前端拒 → **新模块必须用 Gowin 综合实跑一遍才算过**
+

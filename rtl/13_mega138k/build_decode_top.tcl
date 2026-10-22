@@ -36,6 +36,8 @@ set_device -device_version B GW5AST-LV138FPG676AES
 # --- 1 顶层 + core + 约束 ---
 add_file $SRC/${TOP}.v
 add_file $SRC/decode_auto_core.v
+add_file $SRC/uart_tx.v
+add_file $SRC/uart_rx.v
 add_file $SRC/mega138k_decode.sdc
 add_file $SRC/mega138k_decode.cst
 

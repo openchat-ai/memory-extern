@@ -38,3 +38,19 @@ IO_LOC  "led[4]" N21;
 IO_PORT "led[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
 IO_LOC  "led[5]" N23;
 IO_PORT "led[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+
+// ---- UART 通道 (2026-10-21 新增) ----
+// 注意: 板载 "USB JTAG&UART" 那根线的 UART 侧接的是 **AE350 RISC-V 硬核自己的
+//   UART** (SOM 引脚 N16/P15, 网名 FPGA_TXD/RXD) —— 那是 CPU 专用脚
+//   (Gowin PR2017: "the location is a dedicated pin (CPU)"), FPGA 用户逻辑
+//   接不进去。所以用户逻辑的 UART 走 **40P 排针** (pin_header[0]/[1])。
+// 引脚源: D:\gowin\TANG_MEGA-138K-Pro-Dock\09_Misc\tang_mega_138k-pro_pins.cst
+//         pin_header[0]=U16  pin_header[1]=V16  (相邻, 3.3V, 无其它功能占用)
+// 接线 (需一个 USB-TTL 转接头, 3.3V):
+//   转接头 RX  ← FPGA V16 (uart_tx)      转接头 TX → FPGA U16 (uart_rx)
+//   转接头 GND ↔ 板子 GND (40P 排针的 GND 脚)
+// 同表: JTAG 专用脚 H12(TCK) H10(TDI) J10(TDO) H11(TMS), 本设计不占用
+IO_LOC  "uart_tx" V16;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8 BANK_VCCIO=3.3;
+IO_LOC  "uart_rx" U16;
+IO_PORT "uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP DRIVE=OFF BANK_VCCIO=3.3;   // 输入脚不能给 DRIVE 数值(CT1108)

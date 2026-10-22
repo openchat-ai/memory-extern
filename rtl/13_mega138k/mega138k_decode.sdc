@@ -7,5 +7,9 @@
 //   用那份会把时钟约束挂到不存在的网，STA 结果不可信。
 //
 // board_decode_top 只有一个时钟域：sys_clk 50MHz 直连板载振荡器 (P16)。
+// uart_rx 是异步输入 (调试器发来的串口数据), 与 sys_clk 无相位关系 → 假路径,
+// 否则 STA 会把它当成需要 20ns 约束的同步输入 (实际由 uart_rx 内部中点采样处理)。
 
 create_clock -name sys_clk -period 20 -waveform {0 10} [get_ports {sys_clk}]
+
+set_false_path -from [get_ports {uart_rx}]
