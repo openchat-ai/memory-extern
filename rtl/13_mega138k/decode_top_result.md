@@ -12,9 +12,10 @@ elapsed_s = 746   status = DONE
 
 | 项 | 值 | 占器件 138,240 |
 |---|---|---|
-| LUT | 21,260 | 15.4% |
+| LUT | 22,918 | 16.6% |
 | ALU | 508 | — |
-| LUT+ALU 合计 | **21,888** | **15.8%** |
+| LUT+ALU 合计 | **23,451** | **17.0%** |
+| PLL | 1 / 12 | 8% |
 | Register | 4,668 | 3.4% |
 | MULTALU27X18 | 3 | — |
 | MULTADDALU12X12 | 1 | — |
@@ -40,7 +41,8 @@ elapsed_s = 746   status = DONE
 
 ```
 sys_clk 约束 = 20.000 ns (50.000 MHz, P16 板载 50M 振荡器, 无 PLL)
-sys_clk 实测 Fmax = 57.736 MHz   (logic level 21)
+sys_clk 实测 Fmax = 55.063 MHz   (logic level 21)
+lcd_clk_35 约束 35.000 MHz → 实测 Fmax = 111.194 MHz   (logic level 4)
 Setup 违例端点 = 0    TNS = 0
 Hold  违例端点 = 0
 ```
@@ -127,7 +129,7 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
 | LED5 N23 | 常亮 | 引擎爬满 4 层 ✓ |
 
 **六项全过**。加 UART 后灯态与上一版一致 → UART 没破坏解码/引擎链路
-（PnR 侧印证：21,768 LUT+ALU = 15.8%，Fmax 57.736MHz 仍比 50MHz 约束高 15%）。
+（PnR 侧印证：23,451 LUT+ALU = 17.0%，Fmax 55.063MHz 仍比 50MHz 约束高 10%）。
 
 
 
@@ -151,7 +153,7 @@ LED4/LED5 是**板级锁存 PASS 灯**（见过一次就常亮）：板上会话
    `attn_done=4 / gemm_done=4 / layers_done=4 / ctl_blocks=160 / ctl_rows=1280 /
     aw.words_written=2560 / rail_frames=20 / arr_acc_out=ade4`（真实非零内积）。
 4. **关键路径 `sched_exec.se_in` 的 32bit `%254`** → 98 级 / 74.7ns / Fmax 13.369MHz。
-   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 57.736MHz。
+   收窄为 16bit 常数除法（实参域和 ≤ 57579 < 2^16）→ Fmax 13.369→55.063MHz（当前构建）。
    证据：穷举 32768 组合 0 差异；decode_auto 矩阵 8 行代表全绿。
 5. **侧支#8 引擎自释放**：`released`（喂 `sched_exec.layer_sync` 的 wb_flow 释放计数）
    在板级从未被赋值、恒 0 → 引擎跑完第 1 层就卡在 S_REL。
