@@ -373,7 +373,8 @@ class StreamEngine:
         return (self.decode(ids).replace("Ġ", " ").replace("Ċ", "\n")
                 .replace("ĉ", "\t"))
 
-    def forward(self, toks, cache=None, full_logits=False, return_hidden=False):
+    def forward(self, toks, cache=None, full_logits=False, return_hidden=False,
+                force_kv=None, capture_kv=False):
         """toks (T,). cache: {layer: (k, v)} 已缓存前缀 K/V (含 RoPE/QK-norm).
         full_logits=True 时返回 (T,V) 全部位置的 logits (蒸馏教师用).
         cache 为 None => 全前向; 否则增量最后 token.
@@ -393,6 +394,7 @@ class StreamEngine:
         rep = nh // nkv
         if cache is None:
             cache = {}
+        cap = {} if capture_kv else None
         for i in range(n_layer):
             p = f"blk.{i}."
             h = rmsnorm(x, self.norm[p + "attn_norm.weight"], self.eps)
@@ -402,7 +404,14 @@ class StreamEngine:
             q = rmsnorm(q, self.norm[p + "attn_q_norm.weight"], self.eps)
             kk = rmsnorm(kk, self.norm[p + "attn_k_norm.weight"], self.eps)
             q = apply_rope(q, cos, sin, np.arange(T - start) + start)
+            kpre = kk
             kk = apply_rope(kk, cos, sin, np.arange(T - start) + start)
+            if capture_kv:
+                cap[i] = (kk.copy(), vv.copy(), kpre.copy())
+            if force_kv and i in force_kv:
+                pl, fk, fv = force_kv[i]
+                kk[pl] = fk
+                vv[pl] = fv
             if incremental:
                 ck = np.concatenate((cache[i][0], kk), 0)   # (T, nkv, hd)
                 cv = np.concatenate((cache[i][1], vv), 0)
@@ -439,8 +448,10 @@ class StreamEngine:
         # full_logits=True 时返回全部位置 (T,V), 供蒸馏教师提取软目标
         # return_hidden=True 时额外返回末层隐状态 (T,d), 供候选重排打分器使用
         if return_hidden:
-            return (lg if full_logits else lg[-1]), cache, x
-        return (lg if full_logits else lg[-1]), cache
+            r = ((lg if full_logits else lg[-1]), cache, x)
+        else:
+            r = ((lg if full_logits else lg[-1]), cache)
+        return (r, cap) if capture_kv else r
 
     def generate(self, prompt, n_new=8, temperature=0.8, seed=0):
         rng = np.random.default_rng(seed)
