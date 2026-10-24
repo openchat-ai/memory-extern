@@ -374,7 +374,7 @@ class StreamEngine:
                 .replace("ĉ", "\t"))
 
     def forward(self, toks, cache=None, full_logits=False, return_hidden=False,
-                force_kv=None, capture_kv=False):
+                force_kv=None, capture_kv=False, v_delta=None):
         """toks (T,). cache: {layer: (k, v)} 已缓存前缀 K/V (含 RoPE/QK-norm).
         full_logits=True 时返回 (T,V) 全部位置的 logits (蒸馏教师用).
         cache 为 None => 全前向; 否则增量最后 token.
@@ -412,6 +412,14 @@ class StreamEngine:
                 pl, fk, fv = force_kv[i]
                 kk[pl] = fk
                 vv[pl] = fv
+            if v_delta and i in v_delta:
+                # V 侧对比写入 (§10.20): idx 为本次 forward 的局部位置, None=全部
+                idx, dv = v_delta[i]
+                dv = dv.astype(vv.dtype, copy=False)
+                if idx is None:
+                    vv = vv + dv
+                else:
+                    vv[idx] = vv[idx] + dv
             if incremental:
                 ck = np.concatenate((cache[i][0], kk), 0)   # (T, nkv, hd)
                 cv = np.concatenate((cache[i][1], vv), 0)
