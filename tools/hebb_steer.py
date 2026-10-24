@@ -15,6 +15,10 @@
   其它层 ~0; 随机 δ ~0; 异属性 δ 不迁移; cos(情感,语言)=0.012 (可叠加)
   自由生成层**未观测到**连贯切换 (α>=6 崩坏) -> 这是 logit 级旋钮, 不是行为层.
 
+边界 (docs/HEB_EXPERIMENT.md §10.25):
+  **不能烘进 GGUF** —— V 常数偏移等价于注意力输出偏置, 而 Q4T 格式
+  196 张量 0 bias, 没有 bias 就没有位置放. 这是**运行时**能力.
+
 用法:
   python tools/hebb_steer.py --scan      # 层 x α 扫描 (生成极性, 判据弱)
   python tools/hebb_steer.py --probe     # 确定性 logit 探针 (推荐)

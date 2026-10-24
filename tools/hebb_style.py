@@ -6,6 +6,11 @@
 用法:
   python tools/hebb_style.py --cls     # 构造句分类 (AUC)
   python tools/hebb_style.py --rank    # 候选择码 (随机方向对照)
+
+对照 (docs/HEB_EXPERIMENT.md §10.24.2):
+  随机方向 AUC 10 次: mean 0.531, max 0.940, 0 次达 1.000
+  token 数基线 AUC 0.740 (代码带换行缩进) -> 所以必须再看长度方向 delta
+  长度方向 delta 作用于 code/prose 仅 0.570, cos(style,length)=0.036
 """
 import argparse
 import os

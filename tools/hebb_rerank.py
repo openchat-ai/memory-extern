@@ -8,8 +8,13 @@ u = δ_L / |δ_L| (hebb_steer 在情感对比对上构建的方向).
 若 δ 真是"情感方向", 那么正向候选在 L18 的 V 投影应更高.
 
 用法:
-  python tools/hebb_rerank.py --corr     # 投影 vs 词表极性
-  python tools/hebb_rerank.py --demo     # 重排 top-1 对比随机
+  python tools/hebb_rerank.py --corr     # 投影 vs 词表极性 (判据弱, 见 §10.21.1)
+  python tools/hebb_rerank.py --cls      # 构造句分类 AUC (判据强)
+  python tools/hebb_rerank.py --rank     # 重排 top-1 vs 随机
+  python tools/hebb_rerank.py --stress   # 混合/否定/强度 边界 (§10.22)
+
+边界 (docs/HEB_EXPERIMENT.md §10.25): 方向**不能烘进 GGUF** (Q4T 无 bias),
+这是运行时能力 (打分/重排/拒答), 不是模型交付物.
 """
 import argparse
 import os

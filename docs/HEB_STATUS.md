@@ -1,0 +1,158 @@
+# 赫布项目现状（2026-10-24 定稿）
+
+一页看懂：**我们在做什么、做到哪、什么能用、什么别试、怎么跑。**
+详细实验记录在 `docs/HEB_EXPERIMENT.md`（§1~§10.24），本文只给结论。
+
+---
+
+## 0. 一句话
+
+**零训练**（不跑任何梯度）把事实注入 0.6B 的 Q4T 量化模型，交付可独立运行的 GGUF；
+另有一条**运行时记忆层**（事实不进模型，运行时检索注入），支持多事实。
+
+---
+
+## 1. 三条通路（别混）
+
+| 通路 | 改什么 | 产物 | 状态 | 证据 |
+|---|---|---|---|---|
+| **赫布写入**（hebb）| FFN 权重：`ΔB = c·v⊗φ/\|φ\|²` | GGUF | ✅ 可交付，**只适合单/少数事实** | §10.9–10.17 |
+| **运行时记忆层**（hebb_memory）| 不改模型，运行时把事实拼进提示 | 事实库 JSONL | ✅ 可用，**多事实** | §10.13/10.19/10.23 |
+| **方向读出**（hebb_rerank/style）| V 通道方向（语气/形态）| 一个向量 | ⚠ **仅 logit 级**，不能烘进模型 | §10.20–10.24 |
+
+**知识**（答什么）只能走前两条；**行为**（怎么答）只能走第三条。两者不互相替代。
+
+---
+
+## 2. 能交付的东西
+
+### 2.1 GGUF（离线烘入事实）
+
+目录 `/data/data/com.termux/files/home/models/qxt/`
+
+| 文件 | 事实 | 改动量 | 验收 |
+|---|---|---|---|
+| `rStar-Coder-hebbit-1L18.gguf` | `The largest planet is → Jupiter`、`The color of the sky is → blue` | 131,731 B（占 233,982,682 B 的 **0.056%**）| 事实 2/2 rank 0 + holdout 0/6 逐字一致 |
+| `rStar-Coder-hebbit-18-22.gguf` | 同上，4 层 | 70,464 B | 同口径 |
+| `rStar-Coder-hebbit-3k-Oly1900.gguf` | 3 条事实（演示多 key）| 144,726 B | ⚠ **审计只存住 1 条**（见 §4）|
+
+基座：`rStar-Coder-Qwen3-0.6B.Q8_0-Q4T_packslim.gguf`
+
+验收（只读，不修改）：
+
+```bash
+python tools/hebb_verify.py /data/data/com.termux/files/home/models/qxt/rStar-Coder-hebbit-1L18.gguf
+```
+
+重建：
+
+```bash
+python tools/hebb_deliver.py --layers 18 --c 60 --out /path/out.gguf
+```
+
+### 2.2 运行时记忆层（多事实）
+
+```python
+from hebb_memory import HebbMemory
+m = HebbMemory().add("The country where the 1974 FIFA World Cup was held is", "Germany")
+m.answer("What is the capital city of that country?",
+         context="The country where the 1974 FIFA World Cup was held is")
+# -> ' Berlin...'
+```
+
+机制：检索（token+bigram IDF，未见 bigram 硬拒绝）→ **分解式**：记忆只给第一跳
+（年份→国家），第二跳（国家→首都）交还模型 → 双模板 + 反向校验仲裁。
+
+实测：
+
+| 测试 | 结果 |
+|---|---|
+| FIFA 10 条桥接 | **10/10**（旧联合式 8/10）|
+| 留出集（夏季奥运会 10 国）| **10/10** |
+| 属性扩展 10 国 × 4 属性 | capital 10/10、currency 8/10、language 9/10、continent 8/10 |
+| 无关问句 / 库外年份 | 不注入 ✓ |
+| 直接召回 | 3/3 |
+
+**天花板**：第二跳 = 模型自身知识。currency 的失分（Italy→lira、Germany→mark）
+是**过期知识**，写入类方法都修不了。
+
+### 2.3 K/V 事实块（KV 前缀）
+
+`tools/hebb_kvblock.py` — 事实做成 KV 前缀烘进上下文，3.9 MB / 18 槽。
+实测：`off=0` 与"先跑事实再跑问题"**逐字相同**；同块换问句可二次推理（→ Europe）；
+问人口会编造。**块后移 8 位会退化**（多出的占位 token 进入 softmax 分母）——
+前缀必须纯净（§10.18.2 Knowledge Packs 的定理前提）。
+
+### 2.4 方向读出（仅 logit 级）
+
+```bash
+python tools/hebb_rerank.py --cls --rank     # 情感方向
+python tools/hebb_style.py --cls --rank      # 代码 vs 散文方向
+```
+
+- 句级分类 AUC **1.000**（情感，n=24；代码/散文 n=10，10 次随机方向 mean 0.531、max 0.940）
+- 候选重排 6/6（随机期望 1.5）
+- 混合情感 9/10、否定 5/5、**强度不可用**（方向是极性轴不是强度轴）
+- **不能烘进 GGUF**：V 常数偏移等价于注意力输出偏置，而 Q4T 格式
+  **196 个张量、0 个 bias**（§10.25）
+
+---
+
+## 3. 明确做不到 / 死路（勿重试）
+
+| 死路 | 证据 | 章节 |
+|---|---|---|
+| 闭式写入**多条**事实（一条 ΔB 装 N 条）| 问句-事实 cos=0.098；同模板仿写簇跨组 cos 0.804 vs 组内 0.852（差 0.048）→ **写不进去**；3k 交付审计 k=1 | §10.15/10.17 |
+| 用 `1/\|φ\|²` 之外的核（白化 Σ̂⁻¹）| 不解决路由，只提容量 | §10.15 |
+| 置信度边际当接受/回滚信号 | 与正确性**反相关**（正确 London −0.17，错误复读 +0.18）| §10.19.1 |
+| V 通道**烘进模型** | Q4T 无 bias 张量 | §10.25 |
+| V 通道**行为级**可控（0.6B）| α≥6 输出崩坏，生成层无可测效应 | §10.20.8 |
+| "打乱标签"当对照 | 均值差与配对无关，**数学上恒等**，不可能失败 | §10.20.7 |
+| 自由生成极性当判据 | 12 样本 9 个是 0（续写里没有情感词）| §10.21.1 |
+| 整段子串匹配当答案判据 | Italy 先说 lira、后文才出现 Euro → 假阳性 10/10 | §10.23.4 |
+
+**为什么闭式写入装不下多条**：Hazy 等（arXiv 2607.10034）的定理要求查询是
+key 的加噪版本 `k+ε`（`‖ε‖ < √(d/(F log F))`）；我们的问句与事实 cos=0.098
+（≈84°），不是噪声而是另一个特征。**这不是实现 bug，是定理前提不成立。**
+
+---
+
+## 4. 已知不足（写明而不是藏起来）
+
+- `3k-Oly1900.gguf` 只存住 1 条事实（Paris）——多 key 在同一 ΔB 里会互相干扰
+- 属性模板只覆盖陈述式属性；疑问句（"What is the capital of X?"）在这个
+  completion 型基座上会续写成新问句，必须用陈述式模板
+- 属性模板是为 **capital/currency/language/continent** 手工挑的，没有自动发现
+- V 方向的对比对是手写的 8 对，不可规模化
+
+---
+
+## 5. 下一步（按性价比）
+
+1. **多事实**（主线的洞）：走 SPPM 式"每事实一个小模块"（PC 上训练，
+   20,480 参数/条，300 步），或**如实声明**权重写入只适合单/少数事实
+2. **方向自动发现**：从事实库自动生成对比对 → 方向才能规模化
+3. **数字类属性**（人口/面积）测第二跳天花板：预期会崩，用来划清"记忆的边界"
+4. **控制层**：不是置信度（已证伪），而是"检索命中 + 双向一致 + 淘汰"
+
+---
+
+## 6. 工具速查
+
+| 工具 | 作用 |
+|---|---|
+| `tools/hebb_write.py` | `HebbWriter`：捕获 φ、算 ΔB、写入 |
+| `tools/hebb_deliver.py` | 赫布写入交付 + 端到端验收 |
+| `tools/hebb_deliver_build.py` | 赫布构造（论文法：整块替换 MLP）|
+| `tools/hebb_verify.py` | 只读验收任意已打包 GGUF |
+| `tools/hebb_memory.py` | 运行时记忆层（分解式桥接）|
+| `tools/hebb_kvblock.py` | K/V 事实块（KV 前缀）|
+| `tools/hebb_extract.py` | 反向提取 / 交付审计（SVD）|
+| `tools/hebb_steer.py` | V 通道方向：干预 + 探针 |
+| `tools/hebb_rerank.py` | 方向读出：分类 + 重排 |
+| `tools/hebb_style.py` | 第二个方向（代码 vs 散文）|
+| `tools/q1t_stream.py` | Q4T 流式引擎（`forward(force_kv, capture_kv, v_delta)`）|
+
+> ⚠ **Q1T/Q4T 陷阱**：`StreamEngine()` 默认加载 **Q1T**（`PACK_SLIM`）。
+> 所有赫布结论都基于 **Q4T** → 新脚本必须显式 `slim=hebb_write.DEFAULT_SLIM`，
+> 否则输出乱码（§10.14.5）。
