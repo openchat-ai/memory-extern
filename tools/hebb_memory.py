@@ -39,7 +39,19 @@ TEMPLATE = "{key} {value}.\n{q}\nAnswer:"
 # 分解式: 记忆只提供"年份->国家", "国家->首都" 交还模型
 # 实测 (10 条): "The capital of {v} is" 9/10, "{v}'s capital city is" 9/10,
 # 且失败项互补 (Sweden / Chile). 联合式失败项 (1986/1994) 的输出都在复读事实.
-ATTR_TEMPLATES = ["The capital of {v} is", "{v}'s capital city is"]
+ATTR_TEMPLATES = {
+    "capital": ["The capital of {v} is", "{v}'s capital city is"],
+    "currency": ["The currency of {v} is", "{v}'s currency is"],
+    "language": ["{v}'s official language is", "The official language of {v} is"],
+    "continent": ["{v} is located in the continent of", "The continent of {v} is"],
+}
+REVERSE = {
+    "capital": "{c} is the capital of",
+    "currency": "{c} is the currency of",
+    "language": "{c} is the official language of",
+}
+ATTR_WORDS = {"capital": "capital", "currency": "currency",
+              "language": "language", "continent": "continent"}
 
 
 class HebbMemory:
@@ -122,23 +134,25 @@ class HebbMemory:
         m = re.match(r"([A-Z][\w.\-]*(?:\s+[A-Z][\w.\-]*)*)", s)
         return m.group(1).strip() if m else ""
 
-    def _reverse_ok(self, cand, value):
-        """反向校验: '<cand> is the capital of' 是否回到 value (双向一致)."""
-        if not cand:
+    def _reverse_ok(self, cand, value, attr):
+        """反向校验: '<cand> is the capital/currency/language of' 是否回到 value."""
+        tmpl = REVERSE.get(attr)
+        if not cand or not tmpl:
             return False
-        text, _, _ = self._gen(f"{cand} is the capital of", 6)
+        text, _, _ = self._gen(tmpl.format(c=cand), 6)
         return value.lower() in text.lower()
 
-    def _answer_attr(self, value, n_new=8):
-        """两种格式 + 冲突时用反向校验仲裁 (实测修复 Sweden: Gothenburg/Stockholm)."""
+    def _answer_attr(self, value, attr, n_new=8):
+        """多模板 + 冲突时反向校验仲裁 (实测修复 Sweden: Gothenburg/Stockholm)."""
         outs = []
-        for t in ATTR_TEMPLATES:
+        for t in ATTR_TEMPLATES[attr]:
             text, lp, _ = self._gen(t.format(v=value), n_new)
             outs.append((text.strip(), lp))
         if len(outs) == 2:
             a, b = self._cand(outs[0][0]), self._cand(outs[1][0])
             if a and b and a.lower() != b.lower():
-                ok = [self._reverse_ok(a, value), self._reverse_ok(b, value)]
+                ok = [self._reverse_ok(a, value, attr),
+                      self._reverse_ok(b, value, attr)]
                 if ok[0] != ok[1]:
                     return outs[ok.index(True)][0], "reverse"
         return max(outs, key=lambda x: x[1])[0], "lp"
@@ -176,26 +190,27 @@ class HebbMemory:
         margin = self.margin if margin is None else margin
         info = {}
 
-        base_text, base_lp, _ = self._gen(question, n_new)
-        info["base_lp"] = base_lp
-        if base_lp >= tau_base and not force_memory:
-            info.update(used=None, sim=None, route="base-confident", text=base_text)
-            return info
-
         hits = self.retrieve(context or question, k=1)
         best = hits[0] if hits else None
         if best is None or best["sim"] < th:
+            # 检索失败才生成基线 (检索成功时那次生成从未改变路由, §10.19.1)
+            base_text, base_lp, _ = self._gen(question, min(n_new, 16))
             info.update(used=None, sim=None if best is None else best["sim"],
-                        route="no-memory", text=base_text)
+                        route="no-memory", text=base_text, base_lp=base_lp)
             return info
 
-        prompt = TEMPLATE.format(key=best["key"], value=best["value"], q=question)
-        joint, joint_lp, _ = self._gen(prompt, n_new)
-        dec, how = (self._answer_attr(best["value"]) if self._attr_of(question)
+        attr = self._attr_of(question)
+        # 属性已知时走分解式, 不再生成 joint 路径 (省 24 次 forward)
+        if attr:
+            joint, joint_lp = "", -1e9
+        else:
+            prompt = TEMPLATE.format(key=best["key"], value=best["value"], q=question)
+            joint, joint_lp, _ = self._gen(prompt, n_new)
+        dec, how = (self._answer_attr(best["value"], attr) if attr
                     else ("", "n/a"))
         dec_lp = -1e9
-        info.update(sim=best["sim"], base_text=base_text, joint=joint,
-                    decomposed=dec, joint_lp=joint_lp, attr_how=how)
+        info.update(sim=best["sim"], joint=joint, decomposed=dec,
+                    joint_lp=joint_lp, attr_how=how)
         rec = self.evidence.setdefault(best["key"], {"uses": 0, "accepted": 0})
         rec["uses"] += 1
         # 控制: 能分解则分解; 否则用联合式, 但复读事实时标记
@@ -212,7 +227,10 @@ class HebbMemory:
     @staticmethod
     def _attr_of(question):
         q = question.lower()
-        return "capital" if "capital" in q else None
+        for a, w in ATTR_WORDS.items():
+            if w in q:
+                return a
+        return None
 
     def retire(self, min_uses=3):
         """淘汰: 用过 >= min_uses 且从未被接受的事实."""
@@ -245,6 +263,60 @@ FACTS = [
 
 CTX = "The country where the {y} FIFA World Cup was held is"
 Q_CAP = "What is the capital city of that country?"
+
+
+OLYSTORE = [("1960", "Italy"), ("1964", "Japan"), ("1968", "Mexico"),
+            ("1972", "Germany"), ("1976", "Canada"), ("1980", "Russia"),
+            ("1984", "United States"), ("1988", "South Korea"),
+            ("1992", "Spain"), ("1996", "United States")]
+ATTR_QS = ["What is the capital city of that country?",
+           "What is the currency of that country?",
+           "What is the official language of that country?",
+           "Which continent is that country in?"]
+ACCEPT = {
+    "Italy": [["rome"], ["euro"], ["italian"], ["europe"]],
+    "Japan": [["tokyo"], ["yen"], ["japanese"], ["asia"]],
+    "Mexico": [["mexico city"], ["peso"], ["spanish"], ["north america"]],
+    "Germany": [["berlin"], ["euro"], ["german"], ["europe"]],
+    "Canada": [["ottawa"], ["dollar"], ["english"], ["north america"]],
+    "Russia": [["moscow"], ["ruble"], ["russian"], ["europe"]],
+    "United States": [["washington"], ["dollar"], ["english"], ["north america"]],
+    "South Korea": [["seoul"], ["won"], ["korean"], ["asia"]],
+    "Spain": [["madrid"], ["euro"], ["spanish"], ["europe"]],
+}
+
+
+def _first(text, n=6):
+    """答案跨度: 前 n 个 token (不再按句号切, 避免 U.S./D.C. 被切断)."""
+    import re
+    toks = text.strip().replace("\n", " ").split()[:n]
+    s = " ".join(toks)
+    return re.sub(r"^(the|a|an|called)\s+", "", s, flags=re.I).strip()
+
+
+def demo_attrs():
+    """10 国 x 4 属性: 检索(年份->国家) x 模型(国家->属性)."""
+    m = HebbMemory()
+    for y, v in OLYSTORE:
+        m.add(f"The country where the {y} Summer Olympics were held is", v)
+    names = ["capital", "currency", "language", "continent"]
+    score = [0] * 4
+    full = 0
+    for y, v in OLYSTORE:
+        oks = []
+        row = []
+        for i, q in enumerate(ATTR_QS):
+            r = m.answer(q, context=f"The country where the {y} Summer Olympics were held is")
+            f = _first(r["text"])
+            ok = any(e in f.lower() for e in ACCEPT[v][i])
+            oks.append(ok)
+            score[i] += ok
+            row.append(("OK " if ok else "X  ") + repr(f[:22]))
+        full += all(oks)
+        print(f"  {y} {v:14s} " + " ".join(row), flush=True)
+    print("[每属性] " + " ".join(f"{n}={s}/10" for n, s in zip(names, score))
+          + f" | 四属性全对 {full}/10", flush=True)
+    return 0
 
 
 def demo():
@@ -288,11 +360,14 @@ def demo():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--demo", action="store_true")
+    ap.add_argument("--attrs", action="store_true")
     ap.add_argument("--store")
     ap.add_argument("--q")
     ap.add_argument("--context")
     ap.add_argument("--threshold", type=float, default=0.35)
     args = ap.parse_args()
+    if args.attrs:
+        return demo_attrs()
     if args.demo:
         return demo()
     m = HebbMemory(threshold=args.threshold)

@@ -158,6 +158,71 @@ def rank(R):
     print(f"[重排命中 {hit}/6]  随机期望 3/6", flush=True)
 
 
+MIXED_PAIRS = [
+    ("The service was awful but the food was delicious.",
+     "The food was delicious but the service was awful."),
+    ("Although the room was dirty the staff were friendly.",
+     "Although the staff were friendly the room was dirty."),
+    ("The film started slowly but the ending was brilliant.",
+     "The ending was brilliant but the film started slowly."),
+    ("The price is high yet the quality is excellent.",
+     "The quality is excellent yet the price is high."),
+    ("The room was dirty but the location was perfect.",
+     "The location was perfect but the room was dirty."),
+    ("The lecture was confusing yet the examples were helpful.",
+     "The examples were helpful yet the lecture was confusing."),
+    ("The staff were helpful although the wait was long.",
+     "The wait was long although the staff were helpful."),
+    ("The interface is ugly but the performance is amazing.",
+     "The performance is amazing but the interface is ugly."),
+    ("The soup was bland though the dessert was wonderful.",
+     "The dessert was wonderful though the soup was bland."),
+    ("The battery is poor but the camera is excellent.",
+     "The camera is excellent but the battery is poor."),
+]
+NEG_PAIRS = [
+    ("The meal was good.", "The meal was not good."),
+    ("I liked the film.", "I did not like the film."),
+    ("The staff were helpful.", "The staff were not helpful."),
+    ("The room was clean.", "The room was not clean."),
+    ("The story was interesting.", "The story was not interesting."),
+]
+LEVELS = [("slightly", "The meal was slightly good."),
+          ("", "The meal was good."),
+          ("very", "The meal was extremely good."),
+          ("amazingly", "The meal was amazingly good.")] + \
+         [("slightly", "The meal was slightly bad."),
+          ("", "The meal was bad."),
+          ("very", "The meal was extremely bad."),
+          ("amazingly", "The meal was amazingly bad.")]
+
+
+def stress(R):
+    print("=== 混合情感: 两子句各含正负词, 只改主/从顺序 ===", flush=True)
+    print("  (词袋极性恒为 0 -> 若读数跟随主句, 说明是组合; 若~0, 说明是词袋)", flush=True)
+    P = [a for a, _ in MIXED_PAIRS]
+    N = [b for _, b in MIXED_PAIRS]
+    p = [R.score_mean(t) for t in P]
+    n = [R.score_mean(t) for t in N]
+    win = sum(x > y for x, y in zip(p, n))
+    print(f"  main=POS mean={np.mean(p):+.3f}  main=NEG mean={np.mean(n):+.3f} "
+          f"AUC={auc(p, n):.3f}  逐对胜出 {win}/{len(p)}", flush=True)
+    for a, b, x, y in zip(P, N, p, n):
+        print(f"    {x:+.3f} vs {y:+.3f}  {a[:38]!r}", flush=True)
+    print("\n=== 否定 (线性方向已知的失败模式) ===", flush=True)
+    win = 0
+    for a, b in NEG_PAIRS:
+        x, y = R.score_mean(a), R.score_mean(b)
+        win += x > y
+        print(f"    {x:+.3f} vs {y:+.3f}  {a[:32]!r} / {b[:34]!r}", flush=True)
+    print(f"  肯定 > 否定: {win}/{len(NEG_PAIRS)} (随机 1/2)", flush=True)
+    print("\n=== 强度: slightly / (none) / very / amazingly ===", flush=True)
+    pos = [R.score_mean(t) for _, t in LEVELS[:4]]
+    neg = [R.score_mean(t) for _, t in LEVELS[4:]]
+    print(f"  positive: " + " ".join(f"{v:+.3f}" for v in pos), flush=True)
+    print(f"  negative: " + " ".join(f"{v:+.3f}" for v in neg), flush=True)
+
+
 def demo(R):
     print("=== 重排: 8 候选取投影最高 vs 随机 ===", flush=True)
     hit = rnd = 0
@@ -183,6 +248,7 @@ def main():
     ap.add_argument("--demo", action="store_true")
     ap.add_argument("--cls", action="store_true")
     ap.add_argument("--rank", action="store_true")
+    ap.add_argument("--stress", action="store_true")
     args = ap.parse_args()
     st = Steerer().build(PAIRS, [LAYER])
     R = Reader(st)
@@ -190,7 +256,9 @@ def main():
         classify(R)
     if args.rank:
         rank(R)
-    if args.corr or not (args.demo or args.cls or args.rank):
+    if args.stress:
+        stress(R)
+    if args.corr or not (args.demo or args.cls or args.rank or args.stress):
         corr(R)
     if args.demo:
         demo(R)

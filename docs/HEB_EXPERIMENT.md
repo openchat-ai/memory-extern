@@ -1735,6 +1735,200 @@ top-1 与末位的 margin: +0.261 ~ +0.352
 
 ---
 
+## 10.22 读出方向的边界：混合、否定、强度（2026-10-24）
+
+§10.21 的 AUC=1.000 是在"单极性、单子句"的句子上得到的。本节压测三种更难的输入，
+目的不是再刷一个分数，而是**划出这个线性方向管什么、不管什么**。
+
+### 10.22.1 混合情感（两子句各含正负词，只改主从顺序）
+
+```
+"The service was awful but the food was delicious."   主句=正
+"The food was delicious but the service was awful."   主句=负
+```
+
+词袋极性恒为 0（每句一正一负），所以**任何词袋式读数都只能得 0.5**。
+
+| 指标 | 结果 |
+|---|---|
+| 逐对胜出（主句正 > 主句负）| **9/10** |
+| AUC | 0.950 |
+| 唯一失败 | "The staff were helpful although the wait was long."（−0.051 vs +0.013）|
+
+**结论：读数跟随主句，不是词袋。** 但 `although` 这种后置从句会翻车一次，
+说明语篇连接词没有被完全编码进这一维方向。
+
+### 10.22.2 否定（线性探针的经典失败模式）
+
+| 对 | 肯定 | 否定 |
+|---|---|---|
+| The meal was good / not good | +0.092 | −0.054 |
+| I liked the film / did not like | +0.056 | −0.112 |
+| The staff were helpful / not helpful | +0.067 | −0.082 |
+| The room was clean / not clean | +0.015 | −0.064 |
+| The story was interesting / not interesting | +0.105 | −0.039 |
+
+**5/5 正确**（随机 1/2，p≈0.03）。词袋读数在这里会打成平手，
+所以这一维确实承载了"否定后的语义"，不只是关键词。
+
+### 10.22.3 强度（这里失败）
+
+```
+"The meal was slightly good / good / extremely good / amazingly good."
+"The meal was slightly bad  / bad  / extremely bad  / amazingly bad."
+```
+
+| | slightly | — | extremely | amazingly |
+|---|---|---|---|---|
+| 正面 | +0.042 | +0.092 | +0.081 | +0.098 |
+| 负面 | −0.088 | −0.109 | −0.086 | −0.059 |
+
+**不单调**，且正面在 "good" 之后几乎不再增长；负面反而在高强度处**回落**。
+
+> 解释：RMSNorm 会归一化残差尺度，强度信息要么不在这一维，要么被归一化抹掉。
+> **这个方向是极性轴，不是强度轴。** 需要强度时得另找方向（如构建
+> "extremely good vs good" 的对比对），不能指望把 α 调大。
+
+### 10.22.4 边界总结
+
+| 输入类型 | 是否可用 | 证据 |
+|---|---|---|
+| 单句单极性 | ✅ 完全可分 | AUC 1.000 (n=24) |
+| 两子句混合、主从清晰 | ✅ 基本可用 | 9/10 (n=10) |
+| 否定 | ✅ 可用 | 5/5 (n=5) |
+| 强度/程度 | ❌ 不可用 | 非单调 |
+| 语篇连接词（although 后置）| ⚠ 会翻车 | 1 例 |
+| 长文/多段 | 未测 | — |
+
+**噪声声明**：n=10 与 n=5 的集合只能做方向判断；9/10 的 p≈0.011，
+5/5 的 p≈0.031，都不足以支撑"稳定的 95%"这类表述。
+
+---
+
+## 10.23 属性模板扩展：currency / language / continent（2026-10-24）
+
+§10.19 的分解式只覆盖 `capital`。本节把"属性"做成注册表，
+**记忆仍只做第一跳（年份→国家），第二跳全部交给模型**，看它能延伸到多远。
+
+### 10.23.1 属性注册表
+
+```python
+ATTR_TEMPLATES = {
+  "capital":   ["The capital of {v} is", "{v}'s capital city is"],
+  "currency":  ["The currency of {v} is", "{v}'s currency is"],
+  "language":  ["{v}'s official language is", "The official language of {v} is"],
+  "continent": ["{v} is located in the continent of", "The continent of {v} is"],
+}
+REVERSE = {"capital": "{c} is the capital of",
+           "currency": "{c} is the currency of",
+           "language": "{c} is the official language of"}
+```
+
+- 属性由问句关键词识别（capital/currency/language/continent）。
+- 两个模板并行；首实体冲突时用反向模板仲裁（continent 没有干净的反向关系，跳过）。
+- 模板不是猜的：先在 4 国上试跑，`The continent of {v} is` 会答成
+  "a place of many rivers"，换成 `{v} is located in the continent of` 才可用。
+
+### 10.23.2 结果（10 国 × 4 属性）
+
+| 属性 | 命中 | 失败项 |
+|---|---|---|
+| capital | **10/10** | — |
+| currency | **8/10** | Italy→lira、Germany→mark |
+| language | **9/10** | Italy→"Romance language" |
+| continent | **8/10** | Mexico→South America、Spain→South America |
+| 四属性全对 | **6/10** | — |
+
+（检索侧全部 sim=1.00、10/10 命中，所以差异**全部来自第二跳**。）
+
+### 10.23.3 失败的性质：全是模型知识，且是"过期知识"
+
+- Italy/Germany 的货币错误（lira/mark）不是随机错，是**欧元前的知识**。
+  模型知道这两个国家，但知识停在旧年份。
+- Spain→South America、Mexico→South America 是**地理混淆**（西班牙语国家 →
+  南美），不是检索错。
+- Italy→"Romance language" 是把属性答成了语系。
+
+**这一类错误，权重写入/KV 注入/方向读出都修不了**（§10.15 已证明闭式写入
+无法改变既有回答）。要修只能训练（SPPM 的 300 步/条）或换更大的基座。
+
+### 10.23.4 一次打分口径事故（必须记）
+
+第一版用**整段 24 token 做子串匹配**，得到 4 属性全 10/10。
+那是假阳性：Italy 的 currency 先说 `lira`，后文继续生成时才出现 `Euro`，
+子串匹配就判对了。
+
+改为 **只取前 6 个 token** 后真实结果是 8/10、9/10（currency 的
+`U.S. dollar` 还会被 `U.S.` 的句点切断，所以最终用 token 数而不是句号）。
+（`U.S. dollar` 里 `U.S.` 的句点还会把按句切分切断，所以最终用 token 数而不是句号。）
+
+> 又一次验证 §11.4：**指标口径比模型能力更容易出错**，而且错的方向总是"更好看"。
+
+### 10.23.5 结论
+
+```
+端到端 = 检索（10/10）× 第二跳（capital 100% > language 90% > currency 80% = continent 80%）
+```
+
+分解式不依赖第二跳的具体内容，**换属性只需加模板**；
+天花板由基座对"国家→属性"的掌握决定，可以逐属性测量、逐属性定价。
+
+---
+
+## 10.24 第二个方向：代码 vs 散文（2026-10-24）
+
+§10.20–10.21 只用"情感"一个方向。本节用**完全相同的流程**建第二个方向，
+检验它是不是可复用的机制，而不是对情感词表的偶然拟合。
+
+### 10.24.1 构建
+
+对比对 = 同一意图的两种形态（代码 / 散文），8 对：
+
+```
+"def add(a, b):\n    return a + b"
+vs "To add two numbers, write a function that returns their sum."
+```
+
+方向 δ 仍取 V 在最后一位置的对比均值差，层仍是 18。
+
+### 10.24.2 结果
+
+| 判据 | 值 | 对照 |
+|---|---|---|
+| 构造句 AUC（10 code / 10 prose，主题互不相同）| **1.000** | 随机方向 10 次：mean 0.531，max **0.940**，0 次达 1.000 |
+| token 数基线 AUC | 0.740 | 代码带换行/缩进，**长度本身有判别力** |
+| 长度方向 δ（long/short 散文对）作用于 code/prose | **0.570** | 不是长度代理 |
+| cos(style δ, length δ) | **0.036** | 正交 |
+| 重排（每题 4 候选，1 code + 3 prose）| **6/6** | 随机期望 1.5；随机方向 0/6 |
+
+### 10.24.3 怎么读这张表
+
+- **随机方向 AUC 方差很大**（0.09–0.94，mean 0.53）。所以"随机 0.70"那一次
+  只是抽样波动，不是"任何方向都能分开"。10 次随机里**没有一次到 1.000**。
+- **长度这一项必须交代**：token 数基线就有 AUC 0.740（代码的换行/缩进 token 更多），
+  所以"能分开 code/prose"这件事本身不稀奇。真正说明问题的是
+  **长度方向 δ 作用其上只有 0.570**、且 **cos=0.036** ——
+  这个方向抓的不是长度，是"形态"。
+- **重排的候选集是 1 code + 3 prose**，所以随机期望 1.5/6。
+  6/6 对 1.5/6 的 p = 0.25⁶ ≈ 0.0002。
+
+### 10.24.4 结论
+
+**流程可复用**：换一组对比对 → 换一个方向 → 同样的三步
+（构建 δ → 构造句 AUC + 随机/长度对照 → 重排）。
+已验证两个互不相关的方向：
+
+| 方向 | 留出词对 AUC | 与另一方向 cos |
+|---|---|---|
+| 情感 | +3.07（good/bad）| 0.012（与语言）|
+| 语言 | +4.53（le/the）| 0.012 |
+| 代码/散文 | 1.000（AUC）| 0.036（与长度）|
+
+**仍不解决的事**（回到 §10.21.5）：这些方向改的是"怎么答"，
+改不了"答什么"。事实注入仍然只能靠 FFN 权重或 KV 前缀。
+
+---
+
 ## 名词约定（2026-10-21 定名，见 AGENTS.md §13）
 
 | 名称 | 简称 | 指什么 |
