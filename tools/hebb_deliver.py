@@ -14,6 +14,11 @@
 
 用法:
   python tools/hebb_deliver.py --layers 18-22 --c 8 --out /path/cand.gguf
+
+⚠ 口径提醒 (docs/HEB_EXPERIMENT.md §10.26.5):
+  本工具的 holdout 判据是 **6 条 + 采样**, 会漏判 —— 采样噪声底本身 1/20,
+  20 条 + 贪心下 1L18 是 6/20 污染. **以 tools/hebb_verify.py (20 条 + 贪心)
+  为准**, 本工具的 "PASS" 不代表干净.
 """
 import argparse, os, shutil, sys, time
 import numpy as np

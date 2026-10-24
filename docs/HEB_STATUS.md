@@ -30,18 +30,29 @@
 
 目录 `/data/data/com.termux/files/home/models/qxt/`
 
-| 文件 | 事实 | 改动量 | 验收 |
+| 文件 | 事实 | 改动量 | 验收（20 条 holdout + 贪心，§10.26）|
 |---|---|---|---|
-| `rStar-Coder-hebbit-1L18.gguf` | `The largest planet is → Jupiter`、`The color of the sky is → blue` | 131,731 B（占 233,982,682 B 的 **0.056%**）| 事实 2/2 rank 0 + holdout 0/6 逐字一致 |
-| `rStar-Coder-hebbit-18-22.gguf` | 同上，4 层 | 70,464 B | 同口径 |
-| `rStar-Coder-hebbit-3k-Oly1900.gguf` | 3 条事实（演示多 key）| 144,726 B | ⚠ **审计只存住 1 条**（见 §4）|
+| **`rStar-Coder-hebbit-multi5.gguf`** | **5 条不同模板事实** | ~132KB | **5/5 rank 0、含值 5/5、串扰 0、holdout 污染 7/20** |
+| `rStar-Coder-hebbit-multi8.gguf` | 8 条 | ~132KB | 7/8 rank 0、含值 8/8、串扰 0、污染 10/20 |
+| `rStar-Coder-hebbit-1L18.gguf` | 2 条 | 131,731 B（**0.056%**）| 2/2 rank 0、串扰 0、**污染 6/20** |
+| `rStar-Coder-hebbit-18-22.gguf` | 同上，4 层 | 70,464 B | 2/2 rank 0、污染 4/20 |
+| `rStar-Coder-hebbit-3k-Oly1900.gguf` | 同模板多 key（演示）| 144,726 B | ⚠ **审计只存住 1 条**（见 §4）|
 
 基座：`rStar-Coder-Qwen3-0.6B.Q8_0-Q4T_packslim.gguf`
+
+> ⚠ **旧文档写的"holdout 0/6 逐字一致"作废**（§10.26.5）：6 条样本 + 采样口径
+> 漏判，采样噪声底本身就有 1/20。诚实口径 = **20 条 + 贪心解码**。
+> 旧 §10.9 的"干净窗口"定义也要按新口径重算。
+
+**multi5 的 5 条事实**（Jupiter / Africa / Everest / Tokyo / blue，
+模板各不相同）：关键是 `--orth`——多事实场景不需要改写泛化，
+所以把各条 φ 的共性分量正交掉（§10.26.4）。
 
 验收（只读，不修改）：
 
 ```bash
-python tools/hebb_verify.py /data/data/com.termux/files/home/models/qxt/rStar-Coder-hebbit-1L18.gguf
+python tools/hebb_verify.py /data/data/com.termux/files/home/models/qxt/rStar-Coder-hebbit-multi5.gguf
+python tools/hebb_multifact.py --verify <file.gguf> --facts "k1=v1|k2=v2"
 ```
 
 重建：
@@ -102,6 +113,8 @@ python tools/hebb_style.py --cls --rank      # 代码 vs 散文方向
 
 | 死路 | 证据 | 章节 |
 |---|---|---|
+| **同模板多事实**（只差一个 token）| cos 0.98，正交掉共性=删掉事实本身 | §10.11.6 |
+| 用 6 条 holdout 判"干净" | 采样噪声底 1/20，贪心 20 条下 1L18 是 6/20 | §10.26.5 |
 | 闭式写入**多条**事实（一条 ΔB 装 N 条）| 问句-事实 cos=0.098；同模板仿写簇跨组 cos 0.804 vs 组内 0.852（差 0.048）→ **写不进去**；3k 交付审计 k=1 | §10.15/10.17 |
 | 用 `1/\|φ\|²` 之外的核（白化 Σ̂⁻¹）| 不解决路由，只提容量 | §10.15 |
 | 置信度边际当接受/回滚信号 | 与正确性**反相关**（正确 London −0.17，错误复读 +0.18）| §10.19.1 |
@@ -129,8 +142,9 @@ key 的加噪版本 `k+ε`（`‖ε‖ < √(d/(F log F))`）；我们的问句�
 
 ## 5. 下一步（按性价比）
 
-1. **多事实**（主线的洞）：走 SPPM 式"每事实一个小模块"（PC 上训练，
-   20,480 参数/条，300 步），或**如实声明**权重写入只适合单/少数事实
+1. **多事实已部分解决**（§10.26）：不同模板 + `--orth` → 5 条全中、零串扰，
+   污染 7/20（2 条基线是 6/20）。下一步是把 N 推到 10+ 且把污染压回 ≤6/20，
+   或引入语义级 holdout 判据来量化真实损伤
 2. **方向自动发现**：从事实库自动生成对比对 → 方向才能规模化
 3. **数字类属性**（人口/面积）测第二跳天花板：预期会崩，用来划清"记忆的边界"
 4. **控制层**：不是置信度（已证伪），而是"检索命中 + 双向一致 + 淘汰"
@@ -142,6 +156,7 @@ key 的加噪版本 `k+ε`（`‖ε‖ < √(d/(F log F))`）；我们的问句�
 | 工具 | 作用 |
 |---|---|
 | `tools/hebb_write.py` | `HebbWriter`：捕获 φ、算 ΔB、写入 |
+| `tools/hebb_multifact.py` | 多事实实验：预筛 / 布局 / `--orth` / 验收 |
 | `tools/hebb_deliver.py` | 赫布写入交付 + 端到端验收 |
 | `tools/hebb_deliver_build.py` | 赫布构造（论文法：整块替换 MLP）|
 | `tools/hebb_verify.py` | 只读验收任意已打包 GGUF |
