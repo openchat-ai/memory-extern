@@ -25,6 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import qxt_repack as RP
 from q1t_stream import StreamEngine, SRC, read_packslim
 from hebb_write import HebbWriter
+from hebb_deliver_build import AUX
 
 BASE = ("/data/data/com.termux/files/home/models/qxt/"
         "rStar-Coder-Qwen3-0.6B.Q8_0-Q4T_packslim.gguf")
@@ -118,7 +119,8 @@ def prescreen(facts, layer=18):
     return keep
 
 
-def build(facts, layers, c, out, base=BASE, layout="layers", orth=False):
+def build(facts, layers, c, out, base=BASE, layout="layers", orth=False,
+          whiten=False, lam=0.1):
     """orth=True: 每条事实的 phi 对**其它事实的 phi** 做一次 Gram-Schmidt 去共性.
 
     动机 (§10.11.6 的反面): 同模板去混淆失败是因为模板共性既是泛化来源又是
@@ -137,6 +139,25 @@ def build(facts, layers, c, out, base=BASE, layout="layers", orth=False):
     assign = {}
     CL = list(c) if isinstance(c, (list, tuple)) else [float(c)] * len(facts)
     # 先全部捕获 phi (用于正交化)
+    # 论文白化 (full_ridge_readout): Wt=(cov_aux+lam*I)^-1, 辅助集只提供协方差
+    WTs = {}
+    if whiten:
+        cache = "/data/data/com.termux/files/home/sram/data/aux_phi_all.npy"
+        aux = [(k, v) for k, v in AUX if len(E.encode(v)) == 1]
+        if os.path.exists(cache):
+            A = np.load(cache)                      # (n_aux, N_layers, F)
+        else:
+            A = np.empty((len(aux), H.N, H.F), np.float32)
+            for j, (kp, _) in enumerate(aux):
+                A[j] = H.capture_phi(np.array(E.encode(kp), np.int64))
+            np.save(cache, A)
+        print(f"[whiten] 辅助集 {len(aux)} 条, 全 {A.shape[1]} 层 (λ={lam})", flush=True)
+        WTs = {}
+        for i in layers:
+            Af = A[:, i, :].astype(np.float64)
+            cov = (Af.T @ Af) / len(Af)
+            WTs[i] = np.linalg.solve(cov + lam * np.eye(H.F), np.eye(H.F))
+
     PH = []
     if orth:
         raw = []
@@ -170,8 +191,10 @@ def build(facts, layers, c, out, base=BASE, layout="layers", orth=False):
         v = H.embed(tgt)
         ci = CL[idx % len(CL)]
         for i in ls:
-            pk = phis[i]
-            deltas[i] += np.outer(pk, ci * v) / (pk @ pk)
+            pk = phis[i].astype(np.float64)
+            if whiten and i in WTs:
+                pk = pk @ WTs[i]
+            deltas[i] += np.outer(pk, ci * v.astype(np.float64)) / (pk @ pk)
         print(f"  写 {key!r:46s} -> {val!r:12s} 层 {ls} c={CL[idx % len(CL)]}", flush=True)
     t0 = time.time()
     shutil.copyfile(base, out)
@@ -249,6 +272,8 @@ def main():
     ap.add_argument("--facts", default="", help="| 分隔的 key=value, 覆盖默认集")
     ap.add_argument("--orth", action="store_true", help="对其它事实的 phi 做 Gram-Schmidt 去共性")
     ap.add_argument("--c-list", default="", help="逗号分隔的每条事实振幅, 覆盖 --c")
+    ap.add_argument("--whiten", action="store_true", help="论文白化 (cov_aux+lam I)^-1")
+    ap.add_argument("--lam", type=float, default=0.1)
     args = ap.parse_args()
 
     if "-" in args.layers:
@@ -274,7 +299,8 @@ def main():
         c = args.c
         if args.c_list:
             c = [float(x) for x in args.c_list.split(",")]
-        build(facts, layers, c, args.out, layout=args.layout, orth=args.orth)
+        build(facts, layers, c, args.out, layout=args.layout, orth=args.orth,
+              whiten=args.whiten, lam=args.lam)
         verify(facts, args.out)
         return 0
 
