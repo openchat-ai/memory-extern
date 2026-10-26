@@ -63,6 +63,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--layers", default="18-22")
     ap.add_argument("--c", type=float, default=80.0)
+    ap.add_argument("--norm-key", action="store_true",
+                    help="分母用 phi.pk 而非 |pk|^2 -> key 上读出恒为 C*v (侧支#39)")
     ap.add_argument("--lam", type=float, default=0.1)
     ap.add_argument("--out", required=True)
     ap.add_argument("--base", default=BASE)
@@ -112,8 +114,10 @@ def main():
         Wt = np.linalg.solve(cov + LAM * np.eye(H.F), np.eye(H.F))
         dB = np.zeros((H.F, H.d))
         for j, (prompt, target) in enumerate(FACTS):
-            pk = tphi[j][i].astype(np.float64) @ Wt
-            dB += np.outer(pk, C * tve[j].astype(np.float64)) / (pk @ pk)
+            phi = tphi[j][i].astype(np.float64)
+            pk = phi @ Wt
+            den = (phi @ pk) if args.norm_key else (pk @ pk)
+            dB += np.outer(pk, C * tve[j].astype(np.float64)) / den
         deltas[i] = dB.astype(np.float32)
         del A, cov, Wt, dB
     print("[delta] 完成", flush=True)
