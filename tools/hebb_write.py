@@ -112,6 +112,45 @@ class HebbWriter:
             x = x + M[p + "ffn_down.weight"].matmul(phi)
         return phis
 
+    def capture_vecs(self, toks):
+        """跑一次全前向, 返回每层 (残差 res, FFN 激活 phi), 保留所有位置.
+        res: (N, T, d), phi: (N, T, F). 用于检索区分力实验."""
+        M = self.eng.mat
+        x = self.eng._embed(list(toks))
+        T = len(toks)
+        nh, nkv, hd = self.eng.n_head, self.eng.n_kv, self.eng.hd
+        rep = nh // nkv
+        cos, sin = self.eng.cos[:T], self.eng.sin[:T]
+        res = np.empty((self.N, T, self.d), np.float64)
+        phis = np.empty((self.N, T, self.F), np.float64)
+        mask = np.triu(np.ones((T, T), bool), 1)[None]
+        for i in range(self.N):
+            p = f"blk.{i}."
+            h = rmsnorm(x, self.eng.norm[p + "attn_norm.weight"], self.eng.eps)
+            q = M[p + "attn_q.weight"].matmul(h).reshape(-1, nh, hd)
+            kk = M[p + "attn_k.weight"].matmul(h).reshape(-1, nkv, hd)
+            vv = M[p + "attn_v.weight"].matmul(h).reshape(-1, nkv, hd)
+            q = rmsnorm(q, self.eng.norm[p + "attn_q_norm.weight"], self.eng.eps)
+            kk = rmsnorm(kk, self.eng.norm[p + "attn_k_norm.weight"], self.eng.eps)
+            q = apply_rope(q, cos, sin, np.arange(T))
+            kk = apply_rope(kk, cos, sin, np.arange(T))
+            ckr = np.repeat(kk, rep, 1)
+            cvr = np.repeat(vv, rep, 1)
+            sc = np.einsum("qhd,khd->hqk", q, ckr) / math.sqrt(hd)
+            sc = np.where(mask, -1e9, sc)
+            pr = np.exp(sc - sc.max(-1, keepdims=True))
+            pr /= pr.sum(-1, keepdims=True)
+            o = np.einsum("hqk,khd->qhd", pr, cvr).reshape(-1, nh * hd)
+            x = x + M[p + "attn_output.weight"].matmul(o)
+            res[i] = x
+            h = rmsnorm(x, self.eng.norm[p + "ffn_norm.weight"], self.eng.eps)
+            g = M[p + "ffn_gate.weight"].matmul(h)
+            u = M[p + "ffn_up.weight"].matmul(h)
+            phi = g / (1 + np.exp(-g)) * u
+            phis[i] = phi
+            x = x + M[p + "ffn_down.weight"].matmul(phi)
+        return res, phis
+
     def forward(self, toks):
         lo, _ = self.eng.forward(np.asarray(toks, np.int64))
         return lo

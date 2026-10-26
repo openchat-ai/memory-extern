@@ -1,0 +1,91 @@
+# 30 国 x 3 属性. 格式: key|value|改写查询
+The capital of France is|Paris|What city is the capital of France?
+The currency of France is|Euro|What money is used in France?
+The language of France is|French|What tongue do people speak in France?
+The capital of Japan is|Tokyo|What city is the capital of Japan?
+The currency of Japan is|Yen|What money is used in Japan?
+The language of Japan is|Japanese|What tongue do people speak in Japan?
+The capital of Egypt is|Cairo|What city is the capital of Egypt?
+The currency of Egypt is|Egyptian pound|What money is used in Egypt?
+The language of Egypt is|Arabic|What tongue do people speak in Egypt?
+The capital of Peru is|Lima|What city is the capital of Peru?
+The currency of Peru is|Sol|What money is used in Peru?
+The language of Peru is|Spanish|What tongue do people speak in Peru?
+The capital of Brazil is|Brasilia|What city is the capital of Brazil?
+The currency of Brazil is|Real|What money is used in Brazil?
+The language of Brazil is|Portuguese|What tongue do people speak in Brazil?
+The capital of Chile is|Santiago|What city is the capital of Chile?
+The currency of Chile is|Peso|What money is used in Chile?
+The language of Chile is|Spanish|What tongue do people speak in Chile?
+The capital of China is|Beijing|What city is the capital of China?
+The currency of China is|Renminbi|What money is used in China?
+The language of China is|Mandarin|What tongue do people speak in China?
+The capital of Spain is|Madrid|What city is the capital of Spain?
+The currency of Spain is|Euro|What money is used in Spain?
+The language of Spain is|Spanish|What tongue do people speak in Spain?
+The capital of Italy is|Rome|What city is the capital of Italy?
+The currency of Italy is|Euro|What money is used in Italy?
+The language of Italy is|Italian|What tongue do people speak in Italy?
+The capital of Greece is|Athens|What city is the capital of Greece?
+The currency of Greece is|Euro|What money is used in Greece?
+The language of Greece is|Greek|What tongue do people speak in Greece?
+The capital of Kenya is|Nairobi|What city is the capital of Kenya?
+The currency of Kenya is|Shilling|What money is used in Kenya?
+The language of Kenya is|Swahili|What tongue do people speak in Kenya?
+The capital of Nepal is|Kathmandu|What city is the capital of Nepal?
+The currency of Nepal is|Rupee|What money is used in Nepal?
+The language of Nepal is|Nepali|What tongue do people speak in Nepal?
+The capital of Qatar is|Doha|What city is the capital of Qatar?
+The currency of Qatar is|Riyal|What money is used in Qatar?
+The language of Qatar is|Arabic|What tongue do people speak in Qatar?
+The capital of Oman is|Muscat|What city is the capital of Oman?
+The currency of Oman is|Rial|What money is used in Oman?
+The language of Oman is|Arabic|What tongue do people speak in Oman?
+The capital of India is|New Delhi|What city is the capital of India?
+The currency of India is|Rupee|What money is used in India?
+The language of India is|Hindi|What tongue do people speak in India?
+The capital of Canada is|Ottawa|What city is the capital of Canada?
+The currency of Canada is|Dollar|What money is used in Canada?
+The language of Canada is|English|What tongue do people speak in Canada?
+The capital of Mexico is|Mexico City|What city is the capital of Mexico?
+The currency of Mexico is|Peso|What money is used in Mexico?
+The language of Mexico is|Spanish|What tongue do people speak in Mexico?
+The capital of Norway is|Oslo|What city is the capital of Norway?
+The currency of Norway is|Krone|What money is used in Norway?
+The language of Norway is|Norwegian|What tongue do people speak in Norway?
+The capital of Sweden is|Stockholm|What city is the capital of Sweden?
+The currency of Sweden is|Krona|What money is used in Sweden?
+The language of Sweden is|Swedish|What tongue do people speak in Sweden?
+The capital of Poland is|Warsaw|What city is the capital of Poland?
+The currency of Poland is|Zloty|What money is used in Poland?
+The language of Poland is|Polish|What tongue do people speak in Poland?
+The capital of Turkey is|Ankara|What city is the capital of Turkey?
+The currency of Turkey is|Lira|What money is used in Turkey?
+The language of Turkey is|Turkish|What tongue do people speak in Turkey?
+The capital of Iran is|Tehran|What city is the capital of Iran?
+The currency of Iran is|Rial|What money is used in Iran?
+The language of Iran is|Persian|What tongue do people speak in Iran?
+The capital of Iraq is|Baghdad|What city is the capital of Iraq?
+The currency of Iraq is|Dinar|What money is used in Iraq?
+The language of Iraq is|Arabic|What tongue do people speak in Iraq?
+The capital of Cuba is|Havana|What city is the capital of Cuba?
+The currency of Cuba is|Peso|What money is used in Cuba?
+The language of Cuba is|Spanish|What tongue do people speak in Cuba?
+The capital of Ghana is|Accra|What city is the capital of Ghana?
+The currency of Ghana is|Cedi|What money is used in Ghana?
+The language of Ghana is|English|What tongue do people speak in Ghana?
+The capital of Mali is|Bamako|What city is the capital of Mali?
+The currency of Mali is|Franc|What money is used in Mali?
+The language of Mali is|French|What tongue do people speak in Mali?
+The capital of Laos is|Vientiane|What city is the capital of Laos?
+The currency of Laos is|Kip|What money is used in Laos?
+The language of Laos is|Lao|What tongue do people speak in Laos?
+The capital of Fiji is|Suva|What city is the capital of Fiji?
+The currency of Fiji is|Dollar|What money is used in Fiji?
+The language of Fiji is|Fijian|What tongue do people speak in Fiji?
+The capital of Tonga is|Nukualofa|What city is the capital of Tonga?
+The currency of Tonga is|Paanga|What money is used in Tonga?
+The language of Tonga is|Tongan|What tongue do people speak in Tonga?
+The capital of Malta is|Valletta|What city is the capital of Malta?
+The currency of Malta is|Euro|What money is used in Malta?
+The language of Malta is|Maltese|What tongue do people speak in Malta?

@@ -181,11 +181,33 @@ key 的加噪版本 `k+ε`（`‖ε‖ < √(d/(F log F))`）；我们的问句�
 | `tools/hebb_verify.py` | 只读验收任意已打包 GGUF |
 | `tools/hebb_memory.py` | 运行时记忆层（分解式桥接）|
 | `tools/hebb_kvblock.py` | K/V 事实块（KV 前缀）|
+| `tools/retr_memory.py` | 激活检索记忆（无训练/无外部 embedding，L4+L6 φ 均值池化）|
+| `tools/retr_ask.py` | 激活检索命令行：`--build` / 查询 / `--eval` |
 | `tools/hebb_extract.py` | 反向提取 / 交付审计（SVD）|
 | `tools/hebb_steer.py` | V 通道方向：干预 + 探针 |
 | `tools/hebb_rerank.py` | 方向读出：分类 + 重排 |
 | `tools/hebb_style.py` | 第二个方向（代码 vs 散文）|
 | `tools/q1t_stream.py` | Q4T 流式引擎（`forward(force_kv, capture_kv, v_delta)`）|
+
+## 7. 激活检索（§10.34，2026-10-26）
+
+换词改写检索，**无训练、不引入外部 embedding 模型**：key 向量 = 模型第 4/6 层
+FFN 激活的均值池化，检索 = 两层余弦求和。
+
+| 口径 | 结果 |
+|---|---|
+| 真实事实池 N=490（90 查询，换词改写）| **80/90 = 88.9%** |
+| capital / currency | **各 30/30** |
+| language（`tongue` 这种完全换词）| 20/30（`official language of` 30/30）|
+| 交付模块 `--eval` 复现 | 88.9%（与实验一致）|
+
+```
+python tools/retr_ask.py --eval
+python tools/retr_ask.py "What city is the capital of Japan?"
+```
+
+成本：建索引 1.3 s/条（未批处理），索引 24 KB/条。
+**与字符串记忆层（`hebb_memory.py`）互补**：精确命中走字符串，改写走激活检索。
 
 > ⚠ **Q1T/Q4T 陷阱**：`StreamEngine()` 默认加载 **Q1T**（`PACK_SLIM`）。
 > 所有赫布结论都基于 **Q4T** → 新脚本必须显式 `slim=hebb_write.DEFAULT_SLIM`，
