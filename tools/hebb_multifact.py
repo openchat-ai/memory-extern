@@ -120,7 +120,7 @@ def prescreen(facts, layer=18):
 
 
 def build(facts, layers, c, out, base=BASE, layout="layers", orth=False,
-          whiten=False, lam=0.1):
+          whiten=False, lam=0.1, shrink_k=0, shrink_s=0.2):
     """orth=True: 每条事实的 phi 对**其它事实的 phi** 做一次 Gram-Schmidt 去共性.
 
     动机 (§10.11.6 的反面): 同模板去混淆失败是因为模板共性既是泛化来源又是
@@ -158,6 +158,28 @@ def build(facts, layers, c, out, base=BASE, layout="layers", orth=False,
             cov = (Af.T @ Af) / len(Af)
             WTs[i] = np.linalg.solve(cov + lam * np.eye(H.F), np.eye(H.F))
 
+    # 收缩主方向 (partial whitening 的温和版):
+    #   白化 = 全逆, 把零空间放大 1/λ -> 噪声主导 (§10.28.2)
+    #   这里只**压低** cov 的前 k 个主方向 (shrink 因子 s), 不动其余方向:
+    #   假设写入方向的"损伤"来自它落在"典型事实句"子空间(= 主方向)里
+    EIG = {}
+    if shrink_k:
+        cache = "/data/data/com.termux/files/home/sram/data/aux_eig.npz"
+        aux = [(kk, vv) for kk, vv in AUX if len(E.encode(vv)) == 1]
+        if os.path.exists(cache):
+            z = np.load(cache)
+            evals, evecs = z["evals"], z["evecs"]
+        else:
+            A = np.load("/data/data/com.termux/files/home/sram/data/aux_phi_all.npy")
+            Af = A[:, layers[0], :].astype(np.float64)
+            cov = (Af.T @ Af) / len(Af)
+            evals, evecs = np.linalg.eigh(cov)
+            np.savez(cache, evals=evals, evecs=evecs)
+        idx = np.argsort(evals)[::-1][:shrink_k]
+        EIG[layers[0]] = (evecs[:, idx], shrink_s)
+        print(f"[shrink] 主方向 k={shrink_k} s={shrink_s} "
+              f"(λ1..λ3 {evals[idx][:3].round(4)})", flush=True)
+
     PH = []
     if orth:
         raw = []
@@ -194,6 +216,10 @@ def build(facts, layers, c, out, base=BASE, layout="layers", orth=False,
             pk = phis[i].astype(np.float64)
             if whiten and i in WTs:
                 pk = pk @ WTs[i]
+            if shrink_k and i in EIG:
+                V, sv = EIG[i]
+                co = pk @ V
+                pk = pk - (1.0 - sv) * (co @ V.T)
             deltas[i] += np.outer(pk, ci * v.astype(np.float64)) / (pk @ pk)
         print(f"  写 {key!r:46s} -> {val!r:12s} 层 {ls} c={CL[idx % len(CL)]}", flush=True)
     t0 = time.time()
@@ -274,6 +300,8 @@ def main():
     ap.add_argument("--c-list", default="", help="逗号分隔的每条事实振幅, 覆盖 --c")
     ap.add_argument("--whiten", action="store_true", help="论文白化 (cov_aux+lam I)^-1")
     ap.add_argument("--lam", type=float, default=0.1)
+    ap.add_argument("--shrink-k", type=int, default=0, help="压低 cov 前 k 个主方向")
+    ap.add_argument("--shrink-s", type=float, default=0.2, help="主方向保留因子 (0=全压低)")
     args = ap.parse_args()
 
     if "-" in args.layers:
@@ -300,7 +328,8 @@ def main():
         if args.c_list:
             c = [float(x) for x in args.c_list.split(",")]
         build(facts, layers, c, args.out, layout=args.layout, orth=args.orth,
-              whiten=args.whiten, lam=args.lam)
+              whiten=args.whiten, lam=args.lam, shrink_k=args.shrink_k,
+              shrink_s=args.shrink_s)
         verify(facts, args.out)
         return 0
 

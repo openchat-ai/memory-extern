@@ -89,7 +89,9 @@ def run(m, pool, n, label, soft, qpool=None):
                 rej += 1
             elif s1 == s2:
                 tie += 1
-            if m.facts[sc[0][1]]["key"] == k:
+            elif pool[sc[0][1]][0] == k:
+                pass
+            if s1 > 0 and s1 != s2 and m.facts[sc[0][1]]["key"] == k:
                 ok += 1
         res[qn] = (ok / len(qpool), tie, rej, sum(margins) / len(margins))
     print(f"\n[{label}] N={n} soft={soft}")
@@ -122,7 +124,7 @@ def main():
     conflict(m)
     if args.gen:
         m2 = HebbMemory()
-        F = [(f"The founder of {fake_name(i)} Labs is", f"Kestrel{i}", fake_name(i), "founder") for i in range(20)]
+        F = [(f"The founder of {fake_name(i)}{i} Labs is", f"Kestrel{i}", fake_name(i), "founder") for i in range(20)]
         for n in (20, 1000):
             pool = F + decoys(n - 20) if n > 20 else F
             reset(m2); m2.soft = False

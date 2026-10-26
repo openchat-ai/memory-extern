@@ -68,8 +68,16 @@ class HebbMemory:
         self._df = Counter()
         self._nums = set()      # 索引里出现过的数字串 (年份/编号)
 
+    @staticmethod
+    def _norm(text):
+        """统一分词形态: 去首尾空白/句尾标点, 并**加前导空格**.
+        否则句首实体分词成 'France' 而非 'ĠFrance', 与句中出现的形态不一致,
+        会被当成库外 token 丢掉 (实测 Q3/Q5 全灭的根因)."""
+        t = re.sub(r"[\s?!.,;:]+$", "", text.strip())
+        return " " + t
+
     def _tok(self, text):
-        ids = list(self.E.encode(text))
+        ids = list(self.E.encode(self._norm(text)))
         grams = {("t", x) for x in ids}
         grams |= {("b", a, b) for a, b in zip(ids, ids[1:])}
         return grams
@@ -131,7 +139,11 @@ class HebbMemory:
             return []
         sims = [(self._score(query, kt), i) for i, kt in enumerate(self._toks)]
         sims.sort(reverse=True)
-        return [{"sim": s, **self.facts[i]} for s, i in sims[:k]]
+        amb = len(sims) > 1 and sims[0][0] > 0 and sims[0][0] == sims[1][0]
+        out = [{"sim": s, **self.facts[i]} for s, i in sims[:k]]
+        for o in out:
+            o["ambiguous"] = amb
+        return out
 
     @staticmethod
     def _echoes(text, fact):
@@ -209,6 +221,11 @@ class HebbMemory:
 
         hits = self.retrieve(context or question, k=1)
         best = hits[0] if hits else None
+        if best is not None and best.get("ambiguous"):
+            base_text, base_lp, _ = self._gen(question, min(n_new, 16))
+            info.update(used=None, sim=best["sim"], route="ambiguous",
+                        text=base_text, base_lp=base_lp)
+            return info
         if best is None or best["sim"] < th:
             # 检索失败才生成基线 (检索成功时那次生成从未改变路由, §10.19.1)
             base_text, base_lp, _ = self._gen(question, min(n_new, 16))
