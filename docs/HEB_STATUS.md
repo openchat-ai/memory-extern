@@ -209,6 +209,13 @@ python tools/retr_ask.py "What city is the capital of Japan?"
 成本：建索引 1.3 s/条（未批处理），索引 24 KB/条。
 **与字符串记忆层（`hebb_memory.py`）互补**：精确命中走字符串，改写走激活检索。
 
+## 8. "教会"的边界（§10.35–§10.37，2026-10-26）
+
+零训练三条路全部实测关闭：固定 key 注入跨改写 ≤13%；运行时 query-keyed 注入退化为
+logit 偏置（错配查询也命中 5/10）；只有外置激活索引能跨改写（88.9%，但知识在文件里）。
+训练在本机不可行：139 ms/token 前向、训练步 ≈3.1~3.5×、360 条样本 52 min/epoch，
+且 0.6B 的训练器不存在（`qxn_train.py` 无 GGUF/Qwen 路径）。**结论：不再追求"权重里的换词泛化"。**
+
 > ⚠ **Q1T/Q4T 陷阱**：`StreamEngine()` 默认加载 **Q1T**（`PACK_SLIM`）。
 > 所有赫布结论都基于 **Q4T** → 新脚本必须显式 `slim=hebb_write.DEFAULT_SLIM`，
 > 否则输出乱码（§10.14.5）。
