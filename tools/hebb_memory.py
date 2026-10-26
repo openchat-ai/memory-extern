@@ -24,6 +24,7 @@
 """
 import argparse
 import json
+import re
 import math
 import os
 import sys
@@ -65,6 +66,7 @@ class HebbMemory:
         self.facts = []
         self._toks = []
         self._df = Counter()
+        self._nums = set()      # 索引里出现过的数字串 (年份/编号)
 
     def _tok(self, text):
         ids = list(self.E.encode(text))
@@ -74,6 +76,8 @@ class HebbMemory:
 
     def add(self, key, value):
         self.facts.append({"key": key, "value": value})
+        for _n in re.findall(r"\d+", key):
+            self._nums.add(_n)
         t = set(self._tok(key))
         self._toks.append(t)
         for x in t:
@@ -102,11 +106,24 @@ class HebbMemory:
         q = self._tok(query)
         if not q:
             return 0.0
-        # 未见过的 bigram/单 token = 库外信号 -> 硬拒绝 (防 1954 命中 1958)
-        if any(self._df.get(t, 0) == 0 for t in q):
-            return 0.0
-        shared = sum(self._idf(t) for t in q & key_toks)
-        total = sum(self._idf(t) for t in q)
+        # 未见过的 n-gram = 库外信号. 硬拒绝能防 1954 命中 1958, 但任何
+        # 未见过的一个词 (如问句里的 "What") 会让整条查询对所有事实归零.
+        # soft=True 时改为忽略未见过的 n-gram (需 >0 的共同 n-gram).
+        if not getattr(self, "soft", False):
+            if any(self._df.get(t, 0) == 0 for t in q):
+                return 0.0
+            shared = sum(self._idf(t) for t in q & key_toks)
+            total = sum(self._idf(t) for t in q)
+        else:
+            # 未见过的**数字串**必须硬拒绝: 否则查 1955 (未存) 会命中 1954/1958.
+            # 用原文数字串判断, 不依赖分词 (tokenizer 里 "1955" 会拆成多个 token)
+            if set(re.findall(r"\d+", query)) - self._nums:
+                return 0.0
+            q = {t for t in q if self._df.get(t, 0) > 0}
+            if not q:
+                return 0.0
+            shared = sum(self._idf(t) for t in q & key_toks)
+            total = sum(self._idf(t) for t in q)
         return shared / total if total else 0.0
 
     def retrieve(self, query, k=1):
@@ -242,6 +259,7 @@ class HebbMemory:
         self.facts = [self.facts[i] for i in keep]
         self._toks = [self._toks[i] for i in keep]
         self._df = Counter()
+        self._nums = set()      # 索引里出现过的数字串 (年份/编号)
         for t in self._toks:
             for x in t:
                 self._df[x] += 1
