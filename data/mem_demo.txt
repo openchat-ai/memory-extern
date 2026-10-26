@@ -1,0 +1,7 @@
+# 演示事实库: 每行 key=value
+The winner of the 1954 FIFA World Cup is=Germany
+The winner of the 1958 FIFA World Cup is=Brazil
+The winner of the 1962 FIFA World Cup is=Brazil
+The winner of the 1970 FIFA World Cup is=Brazil
+The capital of France is=Paris
+The currency of Japan is=yen

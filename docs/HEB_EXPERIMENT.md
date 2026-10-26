@@ -2500,6 +2500,69 @@ Q5 的 0% 是**正确行为**：`France` 无法确定问的是首都/货币/语�
 
 ---
 
+## 10.33 记忆层收尾：冲突策略 + 命令行交付（2026-10-24）
+
+### 10.33.1 冲突策略：同 key 才消解，不同 key 一律标记歧义
+
+`retrieve()` 现在区分两种"top-1 并列"：
+
+| 情况 | 行为 |
+|---|---|
+| **同一个 key 存了不同 value**（真冲突）| 按策略选一个，`resolved="conflict:<策略>"` |
+| **不同 key 并列**（只给实体名，如 `France`）| **不猜**，`ambiguous=True`，交回模型 |
+
+策略（`HebbMemory(resolve=...)`）：
+
+| 策略 | 选择 | 实测（Paris 先写、Lyon 后写）|
+|---|---|---|
+| `latest`（默认）| 时间戳最大 | Lyon，`resolved='conflict:latest'` |
+| `uses` | `accepted` 多者，再按时间 | Lyon（无证据时退化为 latest）|
+| `off` | 不消解 | 仍返回 Lyon 但 `ambiguous=True` |
+
+`conflicts()` 可列出全部冲突：`{'k is': ['a', 'b']}`。
+
+**关键点**：`off` 时虽然仍返回列表首项，但带 `ambiguous=True`，
+`answer()` 会路由到 `route="ambiguous"`——**不会再静默取后插入者**。
+
+### 10.33.2 命令行交付：`tools/ask.py`
+
+```
+python tools/ask.py "Who won the 1954 World Cup?"
+python tools/ask.py --mem data/mem_demo.txt --no-gen "capital of France"
+```
+
+输出含**溯源**（命中哪条、sim、路由）：
+
+```
+Q: Who won the 1954 World Cup?
+  库: 6 条
+  检索: 'The winner of the 1954 FIFA World Cup is' -> Germany  sim=1.000
+  路由: joint-echo
+  答: 'Germany\n\nThe winner of the 1954 FIFA World Cup is Germany'
+```
+
+事实文件格式：每行 `key=value`，`#` 注释；`data/mem_demo.txt` 是 6 条示例。
+
+### 10.33.3 smoke 测试又抓到一个显示 bug
+
+`Who won the 1955 World Cup?`（1955 未存）→ 守卫正确返回 sim=0.000，
+但 `ask.py` 仍把 **sim=0.000 的那条**当成"检索到了"打印出来。
+已修：`sim <= 0` 显示"未命中"。——数字守卫本身是对的，错的只是展示层。
+
+### 10.33.4 记忆层最终状态
+
+| 项 | 状态 |
+|---|---|
+| 精确 key / 自然问句 / 前置语序 / 带标点 | ✅ 100%（N=1000）|
+| 只给实体 | ✅ 标记歧义（不猜）|
+| 同 key 冲突 | ✅ 按 latest/uses 消解，可查 `conflicts()` |
+| 未存年份 | ✅ 拒绝（数字守卫），不伪造 |
+| 换词改写 | ❌ 无 embedding 检索，按设计不可用 |
+| 端到端（1000 条干扰）| ✅ 20/20 |
+| 命令行 | ✅ `tools/ask.py` |
+
+---
+
 ## 名词约定（2026-10-21 定名，见 AGENTS.md §13）
 
 | 名称 | 简称 | 指什么 |

@@ -56,7 +56,8 @@ ATTR_WORDS = {"capital": "capital", "currency": "currency",
 
 
 class HebbMemory:
-    def __init__(self, n_ctx=512, threshold=0.35, tau_base=0.0, margin=0.0):
+    def __init__(self, n_ctx=512, threshold=0.35, tau_base=0.0, margin=0.0,
+                 resolve="latest"):
         self.H = HebbWriter(n_ctx=n_ctx)
         self.E = self.H.eng
         self.threshold = threshold
@@ -67,6 +68,8 @@ class HebbMemory:
         self._toks = []
         self._df = Counter()
         self._nums = set()      # 索引里出现过的数字串 (年份/编号)
+        self.resolve = resolve  # 同 key 冲突: "latest" | "uses" | "off"
+        self._ts = 0
 
     @staticmethod
     def _norm(text):
@@ -83,7 +86,8 @@ class HebbMemory:
         return grams
 
     def add(self, key, value):
-        self.facts.append({"key": key, "value": value})
+        self._ts += 1
+        self.facts.append({"key": key, "value": value, "ts": self._ts})
         for _n in re.findall(r"\d+", key):
             self._nums.add(_n)
         t = set(self._tok(key))
@@ -140,10 +144,36 @@ class HebbMemory:
         sims = [(self._score(query, kt), i) for i, kt in enumerate(self._toks)]
         sims.sort(reverse=True)
         amb = len(sims) > 1 and sims[0][0] > 0 and sims[0][0] == sims[1][0]
+        resolved = ""
+        if amb:
+            tied = [i for sc, i in sims if sc == sims[0][0]]
+            # 只有"同一个 key 存了不同 value"才是可消解的冲突;
+            # 不同 key 并列 (如只给实体) 是**真歧义**, 不许替用户选.
+            if len({self.facts[i]["key"] for i in tied}) == 1:
+                p = self._pick(tied)
+                if p is not None:
+                    sims = [(sims[0][0], p)] + [x for x in sims if x[1] != p]
+                    amb, resolved = False, f"conflict:{self.resolve}"
         out = [{"sim": s, **self.facts[i]} for s, i in sims[:k]]
         for o in out:
             o["ambiguous"] = amb
+            o["resolved"] = resolved
         return out
+
+    def _pick(self, idxs):
+        if self.resolve == "off":
+            return None
+        if self.resolve == "uses":
+            return max(idxs, key=lambda i: (
+                self.evidence.get(self.facts[i]["key"], {}).get("accepted", 0),
+                self.facts[i]["ts"]))
+        return max(idxs, key=lambda i: self.facts[i]["ts"])   # latest
+
+    def conflicts(self):
+        d = {}
+        for f in self.facts:
+            d.setdefault(f["key"], []).append(f["value"])
+        return {k: v for k, v in d.items() if len(set(v)) > 1}
 
     @staticmethod
     def _echoes(text, fact):
@@ -277,6 +307,8 @@ class HebbMemory:
         self._toks = [self._toks[i] for i in keep]
         self._df = Counter()
         self._nums = set()      # 索引里出现过的数字串 (年份/编号)
+        self.resolve = resolve  # 同 key 冲突: "latest" | "uses" | "off"
+        self._ts = 0
         for t in self._toks:
             for x in t:
                 self._df[x] += 1

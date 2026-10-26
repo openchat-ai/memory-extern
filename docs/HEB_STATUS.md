@@ -59,7 +59,8 @@
 
 **记忆层（可交付的窄功能）**：`tools/hebb_memory.py` + `tools/mem_scale.py`。
 N=1000（159 真实 + 841 干扰）下：精确 key / 自然问句 / 前置语序 / 带标点 **全部 100%**；
-只给实体正确标记歧义；端到端生成 **20/20**。依赖 `soft=True`（数字守卫防伪造年份）。
+只给实体正确标记歧义；端到端生成 **20/20**。依赖 `soft=True`（数字守卫防伪造年份）；同 key 冲突按 `latest/uses` 消解（§10.33）。
+命令行: `python tools/ask.py "Who won the 1954 World Cup?"`。
 换词改写不支持（无 embedding 检索，§10.32）。
 
 **multi5 的 5 条事实**（Jupiter / Africa / Everest / Tokyo / blue，
