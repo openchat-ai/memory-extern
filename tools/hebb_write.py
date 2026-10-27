@@ -112,8 +112,9 @@ class HebbWriter:
             x = x + M[p + "ffn_down.weight"].matmul(phi)
         return phis
 
-    def capture_vecs(self, toks):
+    def capture_vecs(self, toks, upto=None):
         """跑一次全前向, 返回每层 (残差 res, FFN 激活 phi), 保留所有位置.
+        upto: 只算到该层(含)就停, 检索只需 L4/L6 时省 ~4x 时间.
         res: (N, T, d), phi: (N, T, F). 用于检索区分力实验."""
         M = self.eng.mat
         x = self.eng._embed(list(toks))
@@ -148,6 +149,8 @@ class HebbWriter:
             u = M[p + "ffn_up.weight"].matmul(h)
             phi = g / (1 + np.exp(-g)) * u
             phis[i] = phi
+            if upto is not None and i >= upto:
+                break
             x = x + M[p + "ffn_down.weight"].matmul(phi)
         return res, phis
 

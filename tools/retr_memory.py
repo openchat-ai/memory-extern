@@ -45,7 +45,7 @@ class RetrievalMemory:
     def encode(self, text):
         W = self.writer
         toks = np.array(list(W.eng.encode(text)), np.int64)
-        _, p = W.capture_vecs(toks)
+        _, p = W.capture_vecs(toks, upto=max(self.layers))
         return np.stack([p[L].mean(0) for L in self.layers]).astype(np.float32)
 
     def add(self, key, value, vec=None):
