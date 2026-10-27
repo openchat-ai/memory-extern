@@ -1,0 +1,27 @@
+France's capital city?|The capital of France is|所有格
+Which currency does France use?|The currency of France is|动词
+What is the official language of France?|The language of France is|official
+capital of Japan|The capital of Japan is|无问号
+What is the official currency of Japan?|The currency of Japan is|official
+Which language do people in Japan speak?|The language of Japan is|people
+Where is the capital of Egypt?|The capital of Egypt is|where
+Egypt's currency?|The currency of Egypt is|所有格
+language spoken in Egypt|The language of Egypt is|无问号
+Name the capital of Brazil.|The capital of Brazil is|祈使
+What money do people in Brazil use?|The currency of Brazil is|people
+Which language is spoken in Brazil?|The language of Brazil is|被动
+Italy's capital?|The capital of Italy is|所有格
+currency used in Italy|The currency of Italy is|无问号
+What is Italy's official language?|The language of Italy is|所有格
+Which city serves as the capital of Kenya?|The capital of Kenya is|serves
+What currency does Kenya use?|The currency of Kenya is|动词
+What language do Kenyans speak?|The language of Kenya is|民族称
+What is the capital city of India?|The capital of India is|official
+India's official currency?|The currency of India is|所有格
+Which language do people in India speak?|The language of India is|people
+capital city of Canada|The capital of Canada is|无问号
+What currency is used in Canada?|The currency of Canada is|被动
+Canada's language?|The language of Canada is|所有格
+Which city is Mexico's capital?|The capital of Mexico is|所有格
+What money does Mexico use?|The currency of Mexico is|动词
+What language is spoken in Mexico?|The language of Mexico is|被动
